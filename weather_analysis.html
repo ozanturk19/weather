@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Polymarket Hava Analizi</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f0; color: #1a1a1a; padding: 20px; max-width: 1100px; margin: 0 auto; }
+
+h1 { font-size: 18px; font-weight: 500; margin-bottom: 4px; }
+.subtitle { font-size: 13px; color: #888; margin-bottom: 20px; }
+
+.top-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
+.date-input { padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; background: #fff; }
+.btn { padding: 9px 20px; font-size: 14px; border: 1px solid #ccc; border-radius: 8px; background: #fff; cursor: pointer; white-space: nowrap; }
+.btn:hover { background: #f0f0f0; }
+.btn-primary { background: #1a1a1a; color: #fff; border-color: #1a1a1a; }
+.btn-primary:hover { background: #333; }
+
+.status { font-size: 13px; color: #666; margin-bottom: 16px; min-height: 18px; }
+
+.grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 14px; margin-bottom: 20px; }
+
+.card { background: #fff; border: 1px solid #e0e0e0; border-radius: 12px; padding: 16px; }
+.card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; }
+.station-name { font-size: 15px; font-weight: 500; }
+.station-sub { font-size: 11px; color: #888; margin-top: 2px; }
+.max-badge { font-size: 24px; font-weight: 500; color: #1a1a1a; }
+.max-label { font-size: 11px; color: #888; }
+
+.section-label { font-size: 11px; font-weight: 500; color: #aaa; text-transform: uppercase; letter-spacing: 0.5px; margin: 12px 0 6px; }
+
+.hourly-row { display: flex; justify-content: space-between; font-size: 12px; padding: 3px 0; border-top: 1px solid #f5f5f5; color: #555; }
+.hourly-row span:last-child { font-weight: 500; color: #1a1a1a; }
+
+.taf-box { background: #f8f8f8; border-radius: 6px; padding: 8px; font-size: 11px; font-family: monospace; color: #444; line-height: 1.5; word-break: break-all; max-height: 80px; overflow-y: auto; margin-top: 4px; }
+
+.loading { color: #aaa; font-style: italic; font-size: 12px; }
+.err { color: #c0392b; font-size: 12px; }
+
+.analysis-box { background: #fff; border: 1px solid #e0e0e0; border-radius: 12px; padding: 20px; margin-top: 4px; }
+.analysis-box h2 { font-size: 15px; font-weight: 500; margin-bottom: 12px; }
+.analysis-content { font-size: 14px; line-height: 1.7; color: #333; white-space: pre-wrap; min-height: 60px; }
+
+.pm-section { margin-bottom: 16px; }
+.pm-label { font-size: 13px; color: #555; margin-bottom: 8px; }
+.pm-inputs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.pm-group { display: flex; flex-direction: column; gap: 4px; }
+.pm-group label { font-size: 11px; color: #888; }
+.pm-group input { padding: 7px 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 13px; width: 100%; }
+
+.divider { border: none; border-top: 1px solid #eee; margin: 16px 0; }
+
+@media (max-width: 700px) {
+  .grid { grid-template-columns: 1fr; }
+  .pm-inputs { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<h1>Polymarket Hava Analizi</h1>
+<div class="subtitle">Open-Meteo model verisi + resmi TAF + Claude AI analizi</div>
+
+<div class="top-bar">
+  <input type="date" id="dateInput" class="date-input" value="2026-03-23">
+  <button class="btn btn-primary" onclick="loadAll()">↻ Veri Çek</button>
+</div>
+
+<div class="status" id="status">Tarihi seçip "Veri Çek" butonuna bas.</div>
+
+<div class="grid" id="stationGrid">
+  <div class="card" id="card-eglc">
+    <div class="card-header">
+      <div><div class="station-name">🇬🇧 EGLC</div><div class="station-sub">Londra City Airport</div></div>
+      <div style="text-align:right"><div class="max-badge" id="max-eglc">—</div><div class="max-label">maks °C</div></div>
+    </div>
+    <div class="section-label">Saatlik Profil</div>
+    <div id="h-eglc"><span class="loading">bekliyor...</span></div>
+    <div class="section-label">TAF</div>
+    <div class="taf-box" id="taf-eglc"><span class="loading">bekliyor...</span></div>
+  </div>
+
+  <div class="card" id="card-ltac">
+    <div class="card-header">
+      <div><div class="station-name">🇹🇷 LTAC</div><div class="station-sub">Ankara Esenboğa</div></div>
+      <div style="text-align:right"><div class="max-badge" id="max-ltac">—</div><div class="max-label">maks °C</div></div>
+    </div>
+    <div class="section-label">Saatlik Profil</div>
+    <div id="h-ltac"><span class="loading">bekliyor...</span></div>
+    <div class="section-label">TAF</div>
+    <div class="taf-box" id="taf-ltac"><span class="loading">bekliyor...</span></div>
+  </div>
+
+  <div class="card" id="card-limc">
+    <div class="card-header">
+      <div><div class="station-name">🇮🇹 LIMC</div><div class="station-sub">Milano Malpensa</div></div>
+      <div style="text-align:right"><div class="max-badge" id="max-limc">—</div><div class="max-label">maks °C</div></div>
+    </div>
+    <div class="section-label">Saatlik Profil</div>
+    <div id="h-limc"><span class="loading">bekliyor...</span></div>
+    <div class="section-label">TAF</div>
+    <div class="taf-box" id="taf-limc"><span class="loading">bekliyor...</span></div>
+  </div>
+</div>
+
+<div class="analysis-box">
+  <h2>Polymarket Pozisyon Analizi</h2>
+
+  <div class="pm-section">
+    <div class="pm-label">PM fiyatlarını gir (opsiyonel — analizi daha iyi yapar):</div>
+    <div class="pm-inputs">
+      <div class="pm-group"><label>EGLC — hangi eşik / fiyat</label><input type="text" id="pm-eglc" placeholder="örn: 13°C YES @ 0.35"></div>
+      <div class="pm-group"><label>LTAC — hangi eşik / fiyat</label><input type="text" id="pm-ltac" placeholder="örn: 12°C NO @ 0.75"></div>
+      <div class="pm-group"><label>LIMC — hangi eşik / fiyat</label><input type="text" id="pm-limc" placeholder="örn: 14°C NO @ 0.80"></div>
+    </div>
+  </div>
+
+  <hr class="divider">
+  <button class="btn btn-primary" onclick="runAnalysis()" id="analyzeBtn">Claude ile Analiz Et ↗</button>
+  <div style="margin-top: 16px;" id="analysisPending" style="display:none"></div>
+  <div class="analysis-content" id="analysisResult" style="margin-top: 12px;"></div>
+</div>
+
+<script>
+const stations = [
+  { id: 'eglc', label: 'EGLC (Londra City)', lat: 51.505, lon: 0.055, tz: 'Europe%2FLondon' },
+  { id: 'ltac', label: 'LTAC (Ankara Esenboğa)', lat: 40.128, lon: 32.995, tz: 'Europe%2FIstanbul' },
+  { id: 'limc', label: 'LIMC (Milano Malpensa)', lat: 45.627, lon: 8.723, tz: 'Europe%2FRome' }
+];
+
+const KEY_HOURS = ['06:00','09:00','12:00','15:00','18:00'];
+let collectedData = {};
+
+async function fetchWeather(s, dateStr) {
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${s.lat}&longitude=${s.lon}&hourly=temperature_2m,precipitation_probability,windspeed_10m&timezone=${s.tz}&forecast_days=5`;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error('Open-Meteo hatası');
+  const d = await r.json();
+  const times = d.hourly.time;
+  const temps = d.hourly.temperature_2m;
+  const precip = d.hourly.precipitation_probability;
+  const wind = d.hourly.windspeed_10m;
+  const hours = [];
+  for (let i = 0; i < times.length; i++) {
+    if (times[i].startsWith(dateStr)) {
+      hours.push({ hour: times[i].slice(11,16), temp: temps[i], precip: precip[i], wind: wind[i] });
+    }
+  }
+  return hours;
+}
+
+async function fetchTAF(icao) {
+  const url = `https://aviationweather.gov/api/data/taf?ids=${icao}&format=raw`;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error('TAF hatası');
+  const text = await r.text();
+  return text.trim();
+}
+
+function renderHourly(id, hours) {
+  if (!hours.length) { document.getElementById('h-'+id).innerHTML = '<span class="err">Veri yok</span>'; return; }
+  const max = Math.max(...hours.map(h => h.temp));
+  document.getElementById('max-'+id).textContent = max.toFixed(1);
+  const key = hours.filter(h => KEY_HOURS.includes(h.hour));
+  document.getElementById('h-'+id).innerHTML = key.map(h =>
+    `<div class="hourly-row">
+      <span>${h.hour}</span>
+      <span style="color:#555">${h.precip}%🌧</span>
+      <span>${h.temp.toFixed(1)}°C</span>
+    </div>`
+  ).join('');
+}
+
+async function loadStation(s, dateStr) {
+  try {
+    const hours = await fetchWeather(s, dateStr);
+    renderHourly(s.id, hours);
+    collectedData[s.id] = { hours, max: hours.length ? Math.max(...hours.map(h=>h.temp)) : null };
+  } catch(e) {
+    document.getElementById('max-'+s.id).innerHTML = '<span class="err">!</span>';
+    document.getElementById('h-'+s.id).innerHTML = `<span class="err">${e.message}</span>`;
+    collectedData[s.id] = { error: e.message };
+  }
+
+  try {
+    const taf = await fetchTAF(s.id.toUpperCase());
+    document.getElementById('taf-'+s.id).textContent = taf || 'TAF mevcut değil';
+    if (collectedData[s.id]) collectedData[s.id].taf = taf;
+  } catch(e) {
+    document.getElementById('taf-'+s.id).innerHTML = `<span class="err">TAF çekilemedi</span>`;
+  }
+}
+
+async function loadAll() {
+  const dateStr = document.getElementById('dateInput').value;
+  if (!dateStr) { alert('Lütfen bir tarih seç.'); return; }
+  collectedData = {};
+  document.getElementById('status').textContent = 'Open-Meteo + aviationweather.gov çekiliyor...';
+  document.getElementById('analysisResult').textContent = '';
+
+  for (const s of stations) {
+    document.getElementById('h-'+s.id).innerHTML = '<span class="loading">çekiliyor...</span>';
+    document.getElementById('taf-'+s.id).innerHTML = '<span class="loading">çekiliyor...</span>';
+    document.getElementById('max-'+s.id).textContent = '—';
+  }
+
+  await Promise.all(stations.map(s => loadStation(s, dateStr)));
+  document.getElementById('status').textContent = `✓ Güncellendi — ${new Date().toLocaleTimeString('tr-TR')} | Tarih: ${dateStr}`;
+}
+
+async function runAnalysis() {
+  const dateStr = document.getElementById('dateInput').value;
+  if (!Object.keys(collectedData).length) {
+    alert('Önce "Veri Çek" butonuna bas.');
+    return;
+  }
+
+  const pmEglc = document.getElementById('pm-eglc').value;
+  const pmLtac = document.getElementById('pm-ltac').value;
+  const pmLimc = document.getElementById('pm-limc').value;
+
+  const resultEl = document.getElementById('analysisResult');
+  const btn = document.getElementById('analyzeBtn');
+  btn.disabled = true;
+  btn.textContent = 'Analiz ediliyor...';
+  resultEl.textContent = '';
+
+  let dataStr = `Tarih: ${dateStr}\n\n`;
+  for (const s of stations) {
+    const d = collectedData[s.id];
+    if (!d) continue;
+    dataStr += `=== ${s.label} ===\n`;
+    if (d.error) { dataStr += `HATA: ${d.error}\n\n`; continue; }
+    dataStr += `Max sıcaklık: ${d.max?.toFixed(1)}°C\n`;
+    dataStr += `Saatlik profil:\n`;
+    (d.hours || []).filter(h => KEY_HOURS.includes(h.hour)).forEach(h => {
+      dataStr += `  ${h.hour}: ${h.temp.toFixed(1)}°C | yağış olasılığı: ${h.precip}% | rüzgar: ${h.wind.toFixed(0)} km/h\n`;
+    });
+    if (d.taf) dataStr += `TAF: ${d.taf}\n`;
+    dataStr += '\n';
+  }
+
+  if (pmEglc || pmLtac || pmLimc) {
+    dataStr += `=== Polymarket Fiyatları ===\n`;
+    if (pmEglc) dataStr += `EGLC: ${pmEglc}\n`;
+    if (pmLtac) dataStr += `LTAC: ${pmLtac}\n`;
+    if (pmLimc) dataStr += `LIMC: ${pmLimc}\n`;
+  }
+
+  const prompt = `Sen bir Polymarket hava durumu piyasası uzmanısın. Aşağıdaki meteoroloji verilerini analiz et ve her istasyon için:
+1. En olası max sıcaklık tahminini ver (sayısal)
+2. Belirsizlik derecesini belirt (düşük/orta/yüksek)
+3. Eğer Polymarket fiyatı girilmişse edge hesapla (senin olasılık tahmini - PM fiyatı)
+4. Net pozisyon önerisi ver (GİR / GEÇ / BEKLE)
+5. TAF verisinde dikkat çeken önemli unsurlar varsa belirt
+
+Türkçe yanıtla. Kısa ve net ol, uzun açıklama yazma. Tablo formatı kullan.
+
+VERİ:
+${dataStr}`;
+
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1000,
+        messages: [{ role: 'user', content: prompt }]
+      })
+    });
+
+    const data = await response.json();
+    const text = data.content?.map(b => b.text || '').join('') || 'Yanıt alınamadı.';
+    resultEl.textContent = text;
+  } catch(e) {
+    resultEl.innerHTML = `<span class="err">Claude API hatası: ${e.message}</span>`;
+  }
+
+  btn.disabled = false;
+  btn.textContent = 'Claude ile Analiz Et ↗';
+}
+</script>
+</body>
+</html>

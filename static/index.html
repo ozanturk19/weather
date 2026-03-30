@@ -1,0 +1,1775 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Polymarket Hava Analizi</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+/* ===== MIRA — Soft Pro ===== */
+:root {
+  --bg:        #f0f4f8;
+  --bg-card:   #ffffff;
+  --bg-subtle: #f7f9fc;
+  --border:    #e2e8f0;
+  --border-lit:#94a3b8;
+  --accent:    #0891b2;
+  --accent-dim:rgba(8,145,178,.08);
+  --blue:      #3b82f6;
+  --blue-dim:  rgba(59,130,246,.1);
+  --red:       #ef4444;
+  --red-dim:   rgba(239,68,68,.09);
+  --green:     #10b981;
+  --green-dim: rgba(16,185,129,.09);
+  --amber:     #f59e0b;
+  --text:      #0f172a;
+  --text-2:    #64748b;
+  --text-3:    #94a3b8;
+  --mono:      'JetBrains Mono', monospace;
+  --sans:      'Space Grotesk', sans-serif;
+  --shadow:    0 1px 3px rgba(15,23,42,.08), 0 1px 2px rgba(15,23,42,.05);
+  --shadow-md: 0 4px 6px rgba(15,23,42,.07), 0 2px 4px rgba(15,23,42,.05);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: var(--sans);
+  background: var(--bg);
+  color: var(--text);
+  padding: 24px 20px 48px;
+  max-width: 1180px;
+  margin: 0 auto;
+  min-height: 100vh;
+}
+
+/* Header */
+h1 {
+  font-size: 17px; font-weight: 700;
+  letter-spacing: -.3px; color: var(--text);
+  display: flex; align-items: center; gap: 8px;
+}
+h1::before {
+  content: '';
+  display: inline-block; width: 8px; height: 8px;
+  border-radius: 50%; background: var(--accent);
+  animation: pulse 2.5s infinite;
+}
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
+
+.subtitle {
+  font-size: 11px; color: var(--text-3);
+  margin: 4px 0 22px; font-family: var(--mono);
+}
+
+/* Top bar */
+.top-bar { display:flex; align-items:center; justify-content:space-between; margin-bottom:14px; flex-wrap:wrap; gap:10px; }
+
+/* Day tabs */
+.day-tabs { display:flex; gap:2px; background:#fff; border:1px solid var(--border); border-radius:10px; padding:3px; box-shadow:var(--shadow); }
+.day-tab { padding:7px 18px; font-size:12px; font-family:var(--sans); font-weight:500; border-radius:7px; border:none; background:transparent; cursor:pointer; color:var(--text-2); line-height:1.3; text-align:center; transition:all .2s; }
+.day-tab:hover { background:var(--bg-subtle); color:var(--text); }
+.day-tab.active { background:var(--accent); color:#fff; font-weight:700; box-shadow:0 1px 3px rgba(8,145,178,.3); }
+.day-tab .tab-label { font-weight:inherit; display:block; }
+.day-tab .tab-date  { font-size:10px; opacity:.7; display:block; font-family:var(--mono); margin-top:1px; }
+
+/* Buttons */
+.btn { padding:7px 16px; font-size:12px; font-family:var(--sans); font-weight:600; border:1px solid var(--border); border-radius:8px; background:#fff; color:var(--text-2); cursor:pointer; transition:all .2s; box-shadow:var(--shadow); }
+.btn:hover:not(:disabled) { border-color:var(--border-lit); color:var(--text); }
+.btn:disabled { opacity:.3; cursor:not-allowed; }
+.btn-primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+.btn-primary:hover:not(:disabled) { background:#0e7490; }
+
+/* Status */
+.status { font-size:12px; font-family:var(--mono); color:var(--accent); margin-bottom:14px; min-height:16px; opacity:.8; }
+
+/* Wallet */
+.wallet-bar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
+.wallet-input { font-size:12px; font-family:var(--mono); padding:6px 10px; border:1px solid var(--border); border-radius:8px; background:#fff; color:var(--text); width:280px; outline:none; transition:border-color .2s; }
+.wallet-input:focus { border-color:var(--accent); }
+.wallet-connected { font-size:12px; font-family:var(--mono); color:var(--accent); background:var(--accent-dim); padding:5px 10px; border-radius:8px; border:1px solid rgba(8,145,178,.15); display:flex; align-items:center; gap:6px; }
+.wallet-connected button { background:none; border:none; cursor:pointer; font-size:11px; color:var(--text-3); padding:0 2px; }
+.wallet-connected button:hover { color:var(--red); }
+
+/* Portföy */
+.portfolio-box { background:var(--bg-card); border:1px solid var(--border); border-radius:14px; padding:16px 20px; margin-top:10px; box-shadow:var(--shadow); }
+.portfolio-box h2 { font-size:14px; font-weight:700; margin-bottom:4px; }
+.pos-table { width:100%; border-collapse:collapse; margin-top:10px; }
+.pos-table th { font-size:10px; font-weight:600; color:var(--text-3); text-transform:uppercase; letter-spacing:.5px; padding:5px 10px; border-bottom:2px solid var(--border); text-align:left; white-space:nowrap; }
+.pos-table th.r { text-align:right; }
+.pos-table td { padding:10px 10px; border-bottom:1px solid var(--bg-subtle); vertical-align:middle; font-size:13px; }
+.pos-table td.r { text-align:right; }
+.pos-table tr:last-child td { border-bottom:none; }
+.pos-side-yes { background:var(--green-dim); color:#065f46; font-size:10px; font-weight:700; padding:3px 8px; border-radius:4px; border:1px solid rgba(16,185,129,.2); white-space:nowrap; }
+.pos-side-no  { background:var(--red-dim);   color:#991b1b; font-size:10px; font-weight:700; padding:3px 8px; border-radius:4px; border:1px solid rgba(239,68,68,.2); white-space:nowrap; }
+.pos-pnl-pos { color:#15803d; font-weight:700; font-family:var(--mono); }
+.pos-pnl-neg { color:var(--red); font-weight:700; font-family:var(--mono); }
+.pos-summary { display:flex; gap:20px; padding:8px 0 4px; font-size:12px; color:var(--text-2); border-top:2px solid var(--border); margin-top:2px; }
+.pos-badge { display:inline-block; font-size:9px; font-weight:700; background:var(--accent-dim); color:var(--accent); padding:1px 5px; border-radius:3px; margin-left:4px; vertical-align:middle; font-family:var(--mono); }
+
+/* Cards */
+.grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-bottom:12px; }
+.card { background:var(--bg-card); border:1px solid var(--border); border-radius:14px; padding:16px; box-shadow:var(--shadow); transition:box-shadow .2s,border-color .2s; }
+.card:hover { box-shadow:var(--shadow-md); border-color:#cbd5e1; }
+
+.card-header { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:12px; padding-bottom:12px; border-bottom:1px solid var(--border); }
+.station-name { font-size:14px; font-weight:700; letter-spacing:-.1px; }
+.station-sub  { font-size:11px; color:var(--text-2); margin-top:2px; }
+
+/* Blend */
+.blend-block { text-align:right; }
+.blend-temp { font-size:32px; font-weight:700; line-height:1; letter-spacing:-1.5px; color:var(--text); font-family:var(--mono); }
+.blend-range { font-size:12px; color:var(--text-2); margin-top:3px; font-family:var(--mono); }
+.unc-badge { display:inline-block; font-size:9px; font-weight:700; padding:2px 7px; border-radius:20px; margin-top:4px; letter-spacing:.5px; text-transform:uppercase; }
+.unc-low  { background:var(--green-dim); color:#065f46; border:1px solid rgba(16,185,129,.2); }
+.unc-mid  { background:rgba(245,158,11,.09); color:#92400e; border:1px solid rgba(245,158,11,.2); }
+.unc-high { background:var(--red-dim); color:#991b1b; border:1px solid rgba(239,68,68,.2); }
+
+/* Section labels */
+.section-label { font-size:10px; font-weight:700; color:var(--text-3); text-transform:uppercase; letter-spacing:1px; margin:11px 0 5px; }
+
+/* Hourly */
+.hourly-row { display:grid; grid-template-columns:40px 1fr auto; gap:8px; font-size:12px; padding:5px 0; border-top:1px solid var(--bg-subtle); align-items:center; }
+.h-time { color:var(--text-3); font-family:var(--mono); font-size:11px; }
+.h-bar-wrap { height:3px; background:var(--bg); border-radius:2px; }
+.h-bar { height:3px; border-radius:2px; background:linear-gradient(90deg,var(--blue),var(--accent)); min-width:2px; }
+.h-temp { font-weight:700; font-size:13px; color:var(--text); text-align:right; font-family:var(--mono); }
+
+/* Model toggle */
+.model-toggle { font-size:11px; color:var(--text-3); cursor:pointer; margin-top:8px; display:flex; align-items:center; gap:4px; user-select:none; transition:color .2s; }
+.model-toggle:hover { color:var(--text-2); }
+.model-grid { display:none; grid-template-columns:repeat(5,1fr); gap:3px; margin-top:5px; }
+.model-grid.open { display:grid; }
+.model-cell { background:var(--bg-subtle); border:1px solid var(--border); border-radius:6px; padding:5px 4px; text-align:center; }
+.model-cell .m-name { font-size:9px; color:var(--text-3); text-transform:uppercase; letter-spacing:.4px; }
+.model-cell .m-val  { font-size:12px; font-weight:700; color:var(--text); margin-top:2px; font-family:var(--mono); }
+.model-cell .m-val.na { color:var(--text-3); font-size:10px; font-weight:400; }
+
+/* Ensemble */
+.ens-wrap { margin-top:4px; }
+.ens-bar-outer { position:relative; height:18px; background:var(--bg-subtle); border-radius:4px; margin:5px 0 4px; border:1px solid var(--border); }
+.ens-range { position:absolute; top:0; bottom:0; background:var(--blue-dim); border-radius:4px; border:1px solid rgba(59,130,246,.15); }
+.ens-p50-line { position:absolute; top:0; bottom:0; width:2px; background:var(--blue); border-radius:1px; }
+.ens-ticks { display:flex; justify-content:space-between; font-size:11px; color:var(--text-3); margin-bottom:5px; font-family:var(--mono); }
+.ens-ticks span:nth-child(2) { color:var(--blue); font-weight:700; }
+.ens-query { display:flex; align-items:center; gap:5px; font-size:12px; color:var(--text-2); margin-top:5px; }
+.ens-query input { width:54px; padding:3px 5px; border:1px solid var(--border); border-radius:5px; font-size:12px; font-family:var(--mono); text-align:center; background:#fff; color:var(--text); transition:border-color .2s; }
+.ens-query input:focus { outline:none; border-color:var(--accent); }
+.ens-prob { font-weight:700; font-size:15px; color:var(--text); min-width:42px; text-align:right; font-family:var(--mono); }
+.ens-prob.high { color:#065f46; }
+.ens-prob.low  { color:var(--red); }
+.ens-prob-wu { font-size:11px; color:var(--blue); font-weight:600; margin-top:2px; display:block; font-family:var(--mono); }
+
+/* METAR */
+.metar-row { display:flex; gap:14px; align-items:baseline; margin-bottom:5px; flex-wrap:wrap; }
+.metar-now { font-size:22px; font-weight:700; color:var(--accent); font-family:var(--mono); }
+.metar-label { font-size:11px; color:var(--text-3); }
+.metar-max { font-size:13px; color:var(--text-2); }
+.metar-max strong { color:var(--blue); font-family:var(--mono); font-size:14px; }
+
+.spark { display:flex; align-items:flex-end; gap:2px; height:22px; margin-top:4px; }
+.spark-bar { flex:1; border-radius:2px 2px 0 0; min-height:2px; background:#dbeafe; }
+.spark-bar.latest { background:var(--accent); }
+.spark-times { display:flex; gap:2px; margin-top:2px; }
+.spark-time { flex:1; font-size:9px; color:var(--text-3); text-align:center; overflow:hidden; font-family:var(--mono); }
+
+/* WU badge */
+.wu-badge { display:inline-flex; align-items:center; gap:4px; font-size:11px; color:var(--text-2); background:var(--bg-subtle); border:1px solid var(--border); border-radius:5px; padding:3px 8px; margin-top:5px; }
+.wu-badge a { color:var(--accent); text-decoration:none; }
+.wu-badge a:hover { text-decoration:underline; }
+.wu-mode-row { display:flex; align-items:center; gap:6px; margin-top:4px; font-size:11px; color:var(--text-2); }
+.wu-mode-row input[type=checkbox] { cursor:pointer; accent-color:var(--accent); }
+
+
+/* En İyi Fırsatlar */
+.top-trades-box { background:var(--bg-card); border:1px solid var(--border); border-radius:14px; padding:16px 18px; margin-top:10px; box-shadow:var(--shadow); }
+.top-trades-box h2 { font-size:14px; font-weight:700; margin-bottom:2px; }
+.top-trades-sub { font-size:12px; color:var(--text-2); margin-bottom:10px; font-family:var(--mono); }
+.trade-list { display:flex; flex-direction:column; gap:4px; }
+.trade-item { display:grid; grid-template-columns:44px 1fr 52px 58px 68px 62px; align-items:center; gap:8px; padding:9px 14px; border-radius:8px; border:1px solid var(--border); cursor:pointer; transition:all .15s; background:var(--bg-subtle); }
+.trade-item:hover { border-color:var(--border-lit); background:#f1f5f9; }
+.trade-item.sel-yes { border-color:var(--blue); background:var(--blue-dim); }
+.trade-item.sel-no  { border-color:var(--red); background:var(--red-dim); }
+.trade-item.settled { border-color:var(--green); background:var(--green-dim); opacity:.7; cursor:default; }
+.trade-station { font-size:11px; font-weight:700; color:var(--text-2); }
+.trade-bucket  { font-size:13px; font-weight:500; color:var(--text); }
+.trade-side-yes { background:var(--green-dim); color:#065f46; font-size:11px; font-weight:700; padding:3px 8px; border-radius:4px; border:1px solid rgba(16,185,129,.2); text-align:center; }
+.trade-side-no  { background:var(--red-dim); color:#991b1b; font-size:11px; font-weight:700; padding:3px 8px; border-radius:4px; border:1px solid rgba(239,68,68,.2); text-align:center; }
+.trade-edge { font-size:13px; font-weight:700; text-align:right; font-family:var(--mono); }
+.trade-edge.pos { color:#065f46; }
+.trade-edge.neg { color:var(--red); }
+.trade-price { font-size:12px; color:var(--text-3); text-align:right; font-family:var(--mono); }
+.trade-ens   { font-size:12px; color:var(--text-2); text-align:right; font-family:var(--mono); }
+.locked-banner { background:var(--green-dim); border:1px solid rgba(16,185,129,.2); border-radius:8px; padding:8px 14px; font-size:12px; color:#065f46; font-weight:600; margin-bottom:8px; display:flex; align-items:center; gap:8px; }
+.no-trades { font-size:13px; color:var(--text-3); padding:6px 0; }
+
+/* Polymarket grid */
+.pm-markets-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:12px; margin-bottom:8px; }
+@media (max-width:800px) { .pm-markets-grid { grid-template-columns:1fr; } }
+.pm-col-header { font-size:11px; font-weight:700; color:var(--text-2); text-transform:uppercase; letter-spacing:.06em; margin-bottom:8px; }
+.pm-nomarket { font-size:12px; color:var(--text-3); padding:6px 0; }
+.pm-event-meta { font-size:11px; color:var(--text-3); margin-bottom:5px; font-family:var(--mono); }
+.pm-event-meta a { color:var(--accent); text-decoration:none; }
+
+/* Bucket table */
+.bucket-table { width:100%; border-collapse:collapse; font-size:12px; }
+.bucket-table th { font-size:10px; color:var(--text-3); font-weight:600; text-align:right; padding:3px 4px; border-bottom:1px solid var(--border); letter-spacing:.5px; text-transform:uppercase; }
+.bucket-table th:first-child { text-align:left; }
+.bucket-table td { padding:4px 4px; border-bottom:1px solid var(--bg-subtle); vertical-align:middle; text-align:right; }
+.bucket-table td:first-child { text-align:left; }
+.bucket-row { cursor:pointer; transition:background .1s; }
+.bucket-row:hover { background:#f1f5f9; }
+.bucket-row.sel-yes { background:var(--blue-dim); }
+.bucket-row.sel-no  { background:var(--red-dim); }
+.bucket-row.settled-win  { background:var(--green-dim); font-weight:700; }
+.bucket-row.settled-lose { opacity:.3; }
+.b-label { font-weight:600; color:var(--text); white-space:nowrap; font-size:12px; font-family:var(--mono); }
+.b-pm-pct { font-weight:700; color:var(--blue); font-family:var(--mono); }
+.b-ens-pct { color:#065f46; font-family:var(--mono); }
+.b-edge { font-weight:700; font-family:var(--mono); }
+.b-edge.pos { color:#065f46; }
+.b-edge.neg { color:var(--red); }
+.b-edge.neu { color:var(--text-3); }
+.b-action { display:flex; gap:2px; justify-content:flex-end; }
+.b-btn { font-size:10px; font-weight:700; padding:2px 6px; border-radius:4px; border:none; cursor:pointer; font-family:var(--sans); transition:all .15s; }
+.b-btn-yes { background:var(--green-dim); color:#065f46; border:1px solid rgba(16,185,129,.2); }
+.b-btn-yes:hover { background:rgba(16,185,129,.15); }
+.b-btn-no  { background:var(--red-dim); color:#991b1b; border:1px solid rgba(239,68,68,.2); }
+.b-btn-no:hover { background:rgba(239,68,68,.15); }
+
+/* Selections */
+.selected-header { font-size:10px; font-weight:700; color:var(--text-3); text-transform:uppercase; letter-spacing:.06em; margin-bottom:8px; }
+.sel-item { display:flex; align-items:center; gap:8px; font-size:12px; margin-bottom:4px; }
+.sel-badge-yes { background:var(--green-dim); color:#065f46; border-radius:4px; padding:2px 7px; font-weight:700; font-size:10px; border:1px solid rgba(16,185,129,.2); }
+.sel-badge-no  { background:var(--red-dim); color:#991b1b; border-radius:4px; padding:2px 7px; font-weight:700; font-size:10px; border:1px solid rgba(239,68,68,.2); }
+.sel-q { color:var(--text-2); flex:1; }
+
+/* Trend + Bias */
+.trend-row { display:flex; align-items:center; gap:8px; margin-top:4px; font-size:11px; }
+.trend-up   { color:var(--red);   font-weight:700; font-family:var(--mono); }
+.trend-down { color:var(--blue);  font-weight:700; font-family:var(--mono); }
+.trend-flat { color:var(--text-2); font-weight:600; font-family:var(--mono); }
+.history-mini { display:flex; gap:3px; align-items:flex-end; height:20px; margin-top:3px; }
+.history-bar { width:8px; border-radius:1px 1px 0 0; background:#dbeafe; min-height:2px; }
+.history-bar.today { background:var(--accent); }
+.bias-badge { display:inline-block; font-size:10px; font-weight:700; padding:2px 6px; border-radius:4px; margin-left:6px; font-family:var(--mono); }
+.bias-warm { background:var(--red-dim);   color:#991b1b; }
+.bias-cold { background:var(--blue-dim);  color:#1d4ed8; }
+.bias-ok   { background:var(--green-dim); color:#065f46; }
+
+/* Positions */
+.positions-box { background:var(--bg-card); border:1px solid var(--border); border-radius:14px; padding:16px 18px; overflow:hidden; margin-top:10px; box-shadow:var(--shadow); }
+.positions-box h2 { font-size:14px; font-weight:700; margin-bottom:2px; }
+.positions-sub { font-size:12px; color:var(--text-2); margin-bottom:10px; font-family:var(--mono); }
+.divider { border:none; border-top:1px solid var(--border); margin:12px 0; }
+
+/* Progress bar */
+#progress-bar-wrap {
+  position:fixed; top:0; left:0; right:0; height:3px;
+  z-index:9999; pointer-events:none;
+  opacity:0; transition:opacity .3s;
+}
+#progress-bar {
+  height:3px; width:0%;
+  background:linear-gradient(90deg,var(--accent),var(--blue));
+  border-radius:0 2px 2px 0;
+  transition:width .25s ease, opacity .4s;
+  box-shadow:0 0 6px rgba(8,145,178,.5);
+}
+
+/* Ensemble eşik slider */
+.thresh-row { display:flex; align-items:center; gap:8px; margin-top:6px; }
+.thresh-badge {
+  background:var(--accent); color:#fff;
+  font-family:var(--mono); font-size:12px; font-weight:700;
+  padding:2px 8px; border-radius:5px; white-space:nowrap; min-width:46px; text-align:center;
+}
+.thresh-slider-wrap { flex:1; }
+input.thresh-slider {
+  width:100%; height:4px; cursor:pointer;
+  accent-color:var(--accent);
+  margin:4px 0 2px;
+}
+.thresh-ticks {
+  display:flex; justify-content:space-between;
+  font-size:9px; color:var(--text-3); font-family:var(--mono); margin-top:1px;
+}
+
+/* Karar Özeti */
+.summary-box { background:var(--bg-subtle); border:1px solid var(--border); border-radius:10px; padding:13px 14px; margin-bottom:10px; }
+.summary-range-val { font-size:26px; font-weight:700; font-family:var(--mono); color:var(--text); letter-spacing:-1px; line-height:1.1; }
+.summary-center { font-size:11px; color:var(--text-2); font-family:var(--mono); margin-top:3px; }
+.summary-conf { font-size:10px; font-weight:700; padding:3px 8px; border-radius:20px; white-space:nowrap; }
+.summary-conf-high { background:rgba(16,185,129,.1);  color:#065f46; border:1px solid rgba(16,185,129,.2); }
+.summary-conf-mid  { background:rgba(245,158,11,.1);  color:#92400e; border:1px solid rgba(245,158,11,.2); }
+.summary-conf-low  { background:rgba(239,68,68,.09);  color:#991b1b; border:1px solid rgba(239,68,68,.15); }
+.summary-trade-box { margin-top:10px; padding:8px 12px; border-radius:8px; background:var(--red-dim); border:1px solid rgba(239,68,68,.15); display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.summary-no-trade  { font-size:11px; color:var(--text-3); margin-top:8px; padding:6px 0; }
+.summary-locked    { font-size:11px; color:#065f46; font-weight:600; margin-top:6px; background:var(--green-dim); border-radius:6px; padding:4px 8px; display:inline-block; border:1px solid rgba(16,185,129,.2); }
+
+/* Detay toggle */
+.detail-toggle { font-size:11px; color:var(--text-3); cursor:pointer; margin-top:6px; display:flex; align-items:center; gap:4px; user-select:none; padding:4px 0; transition:color .15s; }
+.detail-toggle:hover { color:var(--text-2); }
+.detail-body { margin-top:6px; }
+
+/* Utils */
+.loading { color:var(--text-3); font-style:italic; font-size:12px; }
+.err { color:var(--red); font-size:12px; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width:4px; height:4px; }
+::-webkit-scrollbar-track { background:var(--bg-subtle); }
+::-webkit-scrollbar-thumb { background:var(--border); border-radius:2px; }
+
+@media (max-width:700px) {
+  body { padding:14px 12px 40px; }
+  .grid { grid-template-columns:1fr; }
+  .pm-markets-grid { grid-template-columns:1fr; }
+  .day-tabs { width:100%; }
+  .day-tab { flex:1; padding:6px 8px; }
+  .top-bar { flex-direction:column; align-items:stretch; }
+  .top-bar .btn { align-self:flex-end; }
+
+  /* Trade listesi: 2 satırlı mobil layout */
+  .trade-item {
+    grid-template-columns: 44px 1fr 52px;
+    grid-template-rows: auto auto;
+    gap:4px 6px;
+  }
+  .trade-edge { grid-column:3; grid-row:1; }
+  .trade-ens  { grid-column:2; grid-row:2; font-size:11px; color:var(--text-3); }
+  .trade-price{ grid-column:3; grid-row:2; font-size:11px; }
+
+  /* Bucket tablo: yatay scroll */
+  .pm-markets-col { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+  .bucket-table { min-width:280px; }
+  .bucket-table th, .bucket-table td { padding:4px 3px; }
+
+  /* Kartlar daha sıkışık */
+  .card { padding:12px; }
+  .blend-temp { font-size:26px; }
+  .top-trades-box, .positions-box { padding:12px 14px; }
+}
+</style>
+</head>
+<body>
+
+<div id="progress-bar-wrap"><div id="progress-bar"></div></div>
+
+<h1>Polymarket Hava Analizi</h1>
+<div class="subtitle">5 model blend · ECMWF Ensemble · METAR gözlem · Polymarket edge analizi</div>
+
+<div class="wallet-bar" id="wallet-bar">
+  <span style="font-size:12px;color:var(--text-3)">💼</span>
+  <input class="wallet-input" id="wallet-input" placeholder="Polymarket cüzdan adresi (0x...)" oninput="walletInputChange()">
+  <button class="btn" id="wallet-connect-btn" onclick="connectWallet()" disabled>Bağla</button>
+  <div id="wallet-status"></div>
+</div>
+
+<div class="top-bar">
+  <div class="day-tabs">
+    <button class="day-tab active" id="tab-0" onclick="selectDay(0)">
+      <span class="tab-label">Bugün</span>
+      <span class="tab-date" id="label-0"></span>
+    </button>
+    <button class="day-tab" onclick="selectDay(1)">
+      <span class="tab-label">Yarın</span>
+      <span class="tab-date" id="label-1"></span>
+    </button>
+    <button class="day-tab" onclick="selectDay(2)">
+      <span class="tab-label">Öbür Gün</span>
+      <span class="tab-date" id="label-2"></span>
+    </button>
+  </div>
+  <button class="btn btn-primary" id="refreshBtn" onclick="loadAll()">↻ Yenile</button>
+</div>
+
+<div class="status" id="status">Yükleniyor...</div>
+
+<div class="grid">
+  <!-- EGLC -->
+  <div class="card">
+    <div class="card-header">
+      <div>
+        <div class="station-name">🇬🇧 EGLC</div>
+        <div class="station-sub">Londra City Airport</div>
+      </div>
+      <div id="bias-eglc"></div>
+    </div>
+    <div class="summary-box" id="summary-eglc"><span class="loading">yükleniyor...</span></div>
+    <div class="detail-toggle" onclick="toggleDetail('eglc')">
+      <span id="detail-icon-eglc">▸</span> Detaylı analiz
+    </div>
+    <div class="detail-body" id="detail-eglc" style="display:none">
+      <div class="blend-block" style="margin:8px 0 4px">
+        <div class="blend-temp" id="blend-eglc">—</div>
+        <div class="blend-range" id="range-eglc"></div>
+        <div id="unc-eglc"></div>
+      </div>
+      <div class="section-label">Gözlem <span style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">METAR · Wunderground settlement</span></div>
+      <div id="metar-eglc"><span class="loading">yükleniyor...</span></div>
+      <div class="wu-badge"><span>⚖️ WU settlement:</span> <a href="https://www.wunderground.com/history/daily/gb/london/EGLC" target="_blank">EGLC · tam °C</a></div>
+      <div class="section-label">Saatlik Tahmin</div>
+      <div id="h-eglc"><span class="loading">yükleniyor...</span></div>
+      <div class="section-label">Ensemble <span id="ens-label-eglc" style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">ICON · — üye</span></div>
+      <div id="ens-eglc"><span class="loading">yükleniyor...</span></div>
+      <div class="model-toggle" onclick="toggleModels('eglc')">
+        <span id="toggle-icon-eglc">▸</span> 5 model detayı
+      </div>
+      <div class="model-grid" id="models-eglc"></div>
+    </div>
+  </div>
+
+  <!-- LTAC -->
+  <div class="card">
+    <div class="card-header">
+      <div>
+        <div class="station-name">🇹🇷 LTAC</div>
+        <div class="station-sub">Ankara Esenboğa</div>
+      </div>
+      <div id="bias-ltac"></div>
+    </div>
+    <div class="summary-box" id="summary-ltac"><span class="loading">yükleniyor...</span></div>
+    <div class="detail-toggle" onclick="toggleDetail('ltac')">
+      <span id="detail-icon-ltac">▸</span> Detaylı analiz
+    </div>
+    <div class="detail-body" id="detail-ltac" style="display:none">
+      <div class="blend-block" style="margin:8px 0 4px">
+        <div class="blend-temp" id="blend-ltac">—</div>
+        <div class="blend-range" id="range-ltac"></div>
+        <div id="unc-ltac"></div>
+      </div>
+      <div class="section-label">Gözlem <span style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">METAR · Wunderground settlement</span></div>
+      <div id="metar-ltac"><span class="loading">yükleniyor...</span></div>
+      <div class="wu-badge"><span>⚖️ WU settlement:</span> <a href="https://www.wunderground.com/history/daily/tr/ankara/LTAC" target="_blank">LTAC · tam °C</a></div>
+      <div class="section-label">Saatlik Tahmin</div>
+      <div id="h-ltac"><span class="loading">yükleniyor...</span></div>
+      <div class="section-label">Ensemble <span id="ens-label-ltac" style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">ICON · — üye</span></div>
+      <div id="ens-ltac"><span class="loading">yükleniyor...</span></div>
+      <div class="model-toggle" onclick="toggleModels('ltac')">
+        <span id="toggle-icon-ltac">▸</span> 5 model detayı
+      </div>
+      <div class="model-grid" id="models-ltac"></div>
+    </div>
+  </div>
+
+  <!-- LIMC -->
+  <div class="card">
+    <div class="card-header">
+      <div>
+        <div class="station-name">🇮🇹 LIMC</div>
+        <div class="station-sub">Milano Malpensa</div>
+      </div>
+      <div id="bias-limc"></div>
+    </div>
+    <div class="summary-box" id="summary-limc"><span class="loading">yükleniyor...</span></div>
+    <div class="detail-toggle" onclick="toggleDetail('limc')">
+      <span id="detail-icon-limc">▸</span> Detaylı analiz
+    </div>
+    <div class="detail-body" id="detail-limc" style="display:none">
+      <div class="blend-block" style="margin:8px 0 4px">
+        <div class="blend-temp" id="blend-limc">—</div>
+        <div class="blend-range" id="range-limc"></div>
+        <div id="unc-limc"></div>
+      </div>
+      <div class="section-label">Gözlem <span style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">METAR · Wunderground settlement</span></div>
+      <div id="metar-limc"><span class="loading">yükleniyor...</span></div>
+      <div class="wu-badge"><span>⚖️ WU settlement:</span> <a href="https://www.wunderground.com/history/daily/it/milan/LIMC" target="_blank">LIMC · tam °C</a></div>
+      <div class="section-label">Saatlik Tahmin</div>
+      <div id="h-limc"><span class="loading">yükleniyor...</span></div>
+      <div class="section-label">Ensemble <span id="ens-label-limc" style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">ICON · — üye</span></div>
+      <div id="ens-limc"><span class="loading">yükleniyor...</span></div>
+      <div class="model-toggle" onclick="toggleModels('limc')">
+        <span id="toggle-icon-limc">▸</span> 5 model detayı
+      </div>
+      <div class="model-grid" id="models-limc"></div>
+    </div>
+  </div>
+  </div>
+
+  <!-- LTFM -->
+  <div class="card">
+    <div class="card-header">
+      <div>
+        <div class="station-name">🇹🇷 LTFM</div>
+        <div class="station-sub">İstanbul Havalimanı</div>
+      </div>
+      <div id="bias-ltfm"></div>
+    </div>
+    <div class="summary-box" id="summary-ltfm"><span class="loading">yükleniyor...</span></div>
+    <div class="detail-toggle" onclick="toggleDetail('ltfm')">
+      <span id="detail-icon-ltfm">▸</span> Detaylı analiz
+    </div>
+    <div class="detail-body" id="detail-ltfm" style="display:none">
+      <div class="blend-block" style="margin:8px 0 4px">
+        <div class="blend-temp" id="blend-ltfm">—</div>
+        <div class="blend-range" id="range-ltfm"></div>
+        <div id="unc-ltfm"></div>
+      </div>
+      <div class="section-label">Gözlem <span style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">METAR · NOAA settlement</span></div>
+      <div id="metar-ltfm"><span class="loading">yükleniyor...</span></div>
+      <div class="wu-badge"><span>⚖️ NOAA settlement:</span> <a href="https://www.weather.gov/wrh/timeseries?site=LTFM" target="_blank">LTFM · tam °C</a></div>
+      <div class="section-label">Saatlik Tahmin</div>
+      <div id="h-ltfm"><span class="loading">yükleniyor...</span></div>
+      <div class="section-label">Ensemble <span id="ens-label-ltfm" style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">ICON · — üye</span></div>
+      <div id="ens-ltfm"><span class="loading">yükleniyor...</span></div>
+      <div class="model-toggle" onclick="toggleModels('ltfm')">
+        <span id="toggle-icon-ltfm">▸</span> 5 model detayı
+      </div>
+      <div class="model-grid" id="models-ltfm"></div>
+    </div>
+  </div>
+</div>
+
+<!-- EN İYİ İŞLEMLER -->
+<div class="top-trades-box" id="top-trades-box">
+  <h2>En İyi NO Fırsatları</h2>
+  <div class="top-trades-sub" id="top-trades-sub">yükleniyor...</div>
+  <div id="locked-banners"></div>
+  <div class="trade-list" id="trade-list"><span class="no-trades">Veri bekleniyor...</span></div>
+</div>
+
+<div class="positions-box">
+  <h2>Polymarket Bucket Analizi</h2>
+  <div class="positions-sub" id="positions-sub">Veriler yükleniyor...</div>
+
+  <div class="pm-markets-grid">
+    <div class="pm-markets-col">
+      <div class="pm-col-header">🇬🇧 EGLC — Londra City</div>
+      <div id="pm-markets-eglc"><span class="loading">yükleniyor...</span></div>
+    </div>
+    <div class="pm-markets-col">
+      <div class="pm-col-header">🇹🇷 LTAC — Ankara Esenboğa</div>
+      <div id="pm-markets-ltac"><span class="loading">yükleniyor...</span></div>
+    </div>
+    <div class="pm-markets-col">
+      <div class="pm-col-header">🇮🇹 LIMC — Milano Malpensa</div>
+      <div id="pm-markets-limc"><span class="loading">yükleniyor...</span></div>
+    </div>
+    <div class="pm-markets-col">
+      <div class="pm-col-header">🇹🇷 LTFM — İstanbul Havalimanı</div>
+      <div id="pm-markets-ltfm"><span class="loading">yükleniyor...</span></div>
+    </div>
+  </div>
+
+  <div id="selected-markets-row" style="display:none">
+    <hr class="divider">
+    <div class="selected-header">Seçilen Pozisyonlar</div>
+    <div id="selected-markets-list"></div>
+    <div style="margin-top:8px">
+      <button class="btn" onclick="clearSelections()" style="font-size:12px">Seçimleri Temizle</button>
+      <span id="selection-count" style="font-size:12px;color:#aaa;margin-left:8px"></span>
+    </div>
+  </div>
+</div>
+
+<!-- PORTFÖY -->
+<div class="portfolio-box" id="portfolio-box" style="display:none">
+  <h2>💼 Açık Hava Pozisyonları</h2>
+  <div id="portfolio-content"></div>
+</div>
+
+<script>
+const STATIONS = ['eglc', 'ltac', 'limc', 'ltfm'];
+const KEY_HOURS = ['06:00', '09:00', '12:00', '15:00', '18:00'];
+const MODEL_LABELS = { gfs: 'GFS', ecmwf: 'ECMWF', icon: 'ICON', ukmo: 'UKMO', meteofrance: 'MF' };
+
+let cache        = {};  // {station: {days, taf}}
+let ensCache     = {};  // {station: {days: {date: ensemble data}}}
+let metarCache   = {};  // {station: metar data}
+let historyCache = {};  // {station: {daily_maxes, trend_slope, trend_dir}}
+let biasCache    = {};  // {station: {bias_7d, count, entries}}
+let pmCache      = {};  // {station: {date: {buckets, ...}}}
+let portfolioCache = []; // Polymarket positions
+let selections   = {};  // {station: {bucket, side}}
+let dates        = [];
+let activeDay    = 0;
+
+// Fetch with timeout — "yükleniyor" kalmayı önler
+function fetchJSON(url, timeoutMs = 18000) {
+  return new Promise((resolve, reject) => {
+    const ctrl = new AbortController();
+    const tid  = setTimeout(() => { ctrl.abort(); reject(new Error('timeout')); }, timeoutMs);
+    fetch(url, { signal: ctrl.signal })
+      .then(r => r.json())
+      .then(d => { clearTimeout(tid); resolve(d); })
+      .catch(e => { clearTimeout(tid); reject(e); });
+  });
+}
+
+function isoDate(offset) {
+  const d = new Date();
+  d.setDate(d.getDate() + offset);
+  // Yerel tarih — UTC değil
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+
+function shortDate(iso) {
+  const [, m, d] = iso.split('-');
+  return `${parseInt(d)} ${['Oca','Şub','Mar','Nis','May','Haz','Tem','Ağu','Eyl','Eki','Kas','Ara'][parseInt(m)-1]}`;
+}
+
+function dayName(iso) {
+  const date = new Date(iso + 'T12:00:00');
+  return ['Pazar','Pazartesi','Salı','Çarşamba','Perşembe','Cuma','Cumartesi'][date.getDay()];
+}
+
+function initDates() {
+  dates = [isoDate(0), isoDate(1), isoDate(2)];
+  dates.forEach((iso, i) => {
+    document.getElementById('label-' + i).innerHTML =
+      `${dayName(iso)}<br><span style="font-size:10px;opacity:.75;font-family:var(--mono)">${shortDate(iso)}</span>`;
+  });
+
+  // Akşam 20:00 sonrası: bugün bitti, direkt yarına geç
+  const nowHour = new Date().getHours();
+  if (nowHour >= 20) {
+    document.getElementById('tab-0').style.display = 'none';
+    activeDay = 1;
+    document.querySelectorAll('.day-tab').forEach((t, i) => t.classList.toggle('active', i === 1));
+  }
+}
+
+function selectDay(idx) {
+  activeDay = idx;
+  document.querySelectorAll('.day-tab').forEach((t, i) => t.classList.toggle('active', i === idx));
+  renderAll();
+  document.getElementById('positions-sub').textContent =
+    `${dates[idx]} · Ensemble + 5 model · WU yuvarlama dahil`;
+  const date = dates[idx];
+  const pmLoads = STATIONS.map(id => {
+    // Hata aldıysa da retry et; sadece başarılı cache'i yeniden kullan
+    if (pmCache[id]?.[date] && !pmCache[id][date].error) { renderMarkets(id); return Promise.resolve(); }
+    document.getElementById('pm-markets-' + id).innerHTML = '<span class="loading">yükleniyor...</span>';
+    return loadPolymarket(id).then(() => renderMarkets(id));
+  });
+  Promise.all(pmLoads).then(() => renderTopTrades());
+}
+
+function toggleModels(id) {
+  const el   = document.getElementById('models-' + id);
+  const icon = document.getElementById('toggle-icon-' + id);
+  const open = el.classList.toggle('open');
+  icon.textContent = open ? '▾' : '▸';
+}
+
+// --- RENDER ---
+function uncClass(unc) {
+  return { 'Düşük': 'unc-low', 'Orta': 'unc-mid', 'Yüksek': 'unc-high' }[unc] || 'unc-mid';
+}
+
+function renderStation(id) {
+  const sc = cache[id];
+  if (!sc) return;
+
+  // TAF — arka planda tutulur, UI'da gösterilmez
+
+  if (!sc.days) return;
+  const date    = dates[activeDay];
+  const dayData = sc.days[date];
+
+  if (!dayData) {
+    document.getElementById('blend-' + id).textContent = '—';
+    document.getElementById('range-' + id).textContent = '';
+    document.getElementById('unc-' + id).innerHTML = '';
+    document.getElementById('h-' + id).innerHTML = '<span class="err">Bu gün için veri yok</span>';
+    document.getElementById('models-' + id).innerHTML = '';
+    return;
+  }
+
+  const { blend, models } = dayData;
+
+  // Blend değer (bias düzeltmeli ek gösterim)
+  const biasCorrVal = biasCache[id]?.bias_7d;
+  if (blend.max_temp != null && biasCorrVal != null && Math.abs(biasCorrVal) >= 0.5) {
+    const corrected = (blend.max_temp - biasCorrVal).toFixed(1);
+    document.getElementById('blend-' + id).innerHTML =
+      `${blend.max_temp.toFixed(1)}°C <span style="font-size:13px;color:${biasCorrVal<0?'#1d4ed8':'#b91c1c'};font-family:var(--mono)" title="Bias düzeltmeli tahmin">→ ${corrected}°C</span>`;
+  } else {
+    document.getElementById('blend-' + id).textContent =
+      blend.max_temp != null ? blend.max_temp.toFixed(1) + '°C' : '—';
+  }
+
+  document.getElementById('range-' + id).textContent =
+    blend.min_max != null ? `${blend.min_max} – ${blend.max_max}°C · ${Object.keys(models).length} model` : '';
+
+  // Ensemble P50 ile blend arasındaki uyumsuzluk uyarısı
+  const ensP50 = ensCache[id]?.days?.[date]?.p50;
+  const divergence = (ensP50 != null && blend.max_temp != null) ? Math.abs(ensP50 - blend.max_temp) : 0;
+  const divHtml = divergence >= 0.7
+    ? `<span class="unc-badge unc-high" title="5 model blend: ${blend.max_temp?.toFixed(1)}°C — ECMWF ensemble P50: ${ensP50}°C. Bu fark yüksek belirsizlik sinyalidir.">⚡ blend↔ens +${divergence.toFixed(1)}°C</span>`
+    : '';
+
+  document.getElementById('unc-' + id).innerHTML = (blend.uncertainty !== '?'
+    ? `<span class="unc-badge ${uncClass(blend.uncertainty)}">${blend.uncertainty} belirsizlik</span>`
+    : '') + divHtml;
+
+  // Saatlik bar chart
+  const keyHours = (blend.hours || []).filter(h => KEY_HOURS.includes(h.hour));
+  const temps = keyHours.map(h => h.temp).filter(t => t != null);
+  const minT  = temps.length ? Math.min(...temps) : 0;
+  const maxT  = temps.length ? Math.max(...temps) : 1;
+  const range = maxT - minT || 1;
+
+  document.getElementById('h-' + id).innerHTML = keyHours.map(h => {
+    const pct = Math.round(((h.temp - minT) / range) * 100);
+    return `<div class="hourly-row">
+      <span class="h-time">${h.hour}</span>
+      <div class="h-bar-wrap"><div class="h-bar" style="width:${Math.max(pct, 4)}%"></div></div>
+      <span class="h-temp">${h.temp.toFixed(1)}°C</span>
+    </div>`;
+  }).join('') || '<span class="err">Saatlik veri yok</span>';
+
+  // Model detayları
+  document.getElementById('models-' + id).innerHTML =
+    Object.entries(MODEL_LABELS).map(([key, label]) => {
+      const m   = models[key];
+      const val = m?.max_temp != null
+        ? `<div class="m-val">${m.max_temp.toFixed(1)}°</div>`
+        : `<div class="m-val na">—</div>`;
+      return `<div class="model-cell"><div class="m-name">${label}</div>${val}</div>`;
+    }).join('');
+
+  // Ensemble
+  renderEnsemble(id);
+}
+
+function renderEnsemble(id) {
+  const ensEl = document.getElementById('ens-' + id);
+  if (!ensEl) return;
+
+  const date = dates[activeDay];
+  const ens  = ensCache[id]?.days?.[date];
+
+  if (!ens) {
+    ensEl.innerHTML = '<span class="loading">yükleniyor...</span>';
+    return;
+  }
+
+  const { p10, p25, p50, p75, p90, member_maxes, count } = ens;
+
+  // Üye sayısını label'da göster
+  const labelEl = document.getElementById('ens-label-' + id);
+  if (labelEl) labelEl.textContent = `ICON · ${count} üye`;
+
+  // Bar görselleştirme
+  const lo = p10 - 1, hi = p90 + 1, span = hi - lo || 1;
+  const p25pct = Math.round(((p25 - lo) / span) * 100);
+  const p75pct = Math.round(((p75 - lo) / span) * 100);
+  const p50pct = Math.round(((p50 - lo) / span) * 100);
+
+  // Varsayılan eşik: blend max'a en yakın tam sayı
+  const blendMax = cache[id]?.days?.[date]?.blend?.max_temp;
+  const defaultThresh = blendMax != null ? Math.round(blendMax) : Math.round(p50);
+
+  ensEl.innerHTML = `
+    <div class="ens-wrap">
+      <div class="ens-bar-outer">
+        <div class="ens-range" style="left:${p25pct}%;width:${p75pct - p25pct}%"></div>
+        <div class="ens-p50-line" style="left:${p50pct}%"></div>
+      </div>
+      <div class="ens-ticks">
+        <span>P10 ${p10}°</span>
+        <span>P25 ${p25}°</span>
+        <span>P50 ${p50}°</span>
+        <span>P75 ${p75}°</span>
+        <span>P90 ${p90}°</span>
+      </div>
+      <div class="thresh-row">
+        <div class="thresh-slider-wrap">
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px">
+            <span style="font-size:11px;color:var(--text-2)">P(maks =</span>
+            <span class="thresh-badge" id="thresh-display-${id}">${defaultThresh}°C</span>
+            <span style="font-size:11px;color:var(--text-2)">)</span>
+          </div>
+          <input type="range" class="thresh-slider" id="thresh-${id}"
+            min="${Math.round(p10)-2}" max="${Math.round(p90)+2}"
+            step="1" value="${defaultThresh}"
+            oninput="document.getElementById('thresh-display-${id}').textContent=this.value+'°C';updateProb('${id}')">
+          <div class="thresh-ticks">
+            <span>P10 ${p10}°</span><span>P50 ${p50}°</span><span>P90 ${p90}°</span>
+          </div>
+        </div>
+        <div style="text-align:right">
+          <span class="ens-prob" id="prob-${id}">—</span>
+          <div style="font-size:10px;color:var(--text-3);margin-top:1px">${count} üye</div>
+        </div>
+      </div>
+      <span class="ens-prob-wu" id="prob-wu-${id}" style="font-size:10px;display:block;margin-top:3px"></span>
+    </div>`;
+
+  updateProb(id);
+}
+
+function updateProb(id) {
+  const date    = dates[activeDay];
+  const ens     = ensCache[id]?.days?.[date];
+  const probEl  = document.getElementById('prob-' + id);
+  const probWuEl = document.getElementById('prob-wu-' + id);
+  const input   = document.getElementById('thresh-' + id);
+  if (!ens || !probEl || !input) return;
+
+  const thresh = parseFloat(input.value);
+  if (isNaN(thresh)) { probEl.textContent = '—'; if (probWuEl) probWuEl.textContent = ''; return; }
+
+  const rawMaxes = ens.member_maxes || [];
+  if (!rawMaxes.length) return;
+
+  // İyileştirme #4: METAR sensörü uygula (15:00 sonrası alt zemin)
+  const maxes = censorEnsemble(id, rawMaxes);
+
+  const bias = getEffectiveBias(id);
+  const corrMaxes = Math.abs(bias) >= 0.3 ? maxes.map(v => v - bias) : maxes;
+  const n = corrMaxes.length;
+
+  // İyileştirme #2: Bucket türüne göre iki farklı olasılık
+  // P(tam bucket) = METAR yuvarlanmış maks = tam eşik  → exact market için
+  const pctExact = Math.round(corrMaxes.filter(m => Math.round(m) === thresh).length / n * 100);
+  // P(≥ eşik) = kümülatif / "or above" market için
+  const pctAbove = Math.round(corrMaxes.filter(m => Math.round(m) >= thresh).length / n * 100);
+  const cap = p => Math.min(97, Math.max(3, p));
+
+  const censoredNote = maxes !== rawMaxes
+    ? `<span style="font-size:10px;color:#0891b2;margin-left:4px" title="METAR gözlemi uygulandı">📍</span>` : '';
+  const biasTag = Math.abs(bias) >= 0.3
+    ? `<span style="font-size:10px;color:${bias<0?'#1d4ed8':'#b91c1c'};margin-left:4px" title="Bias düzeltmesi">⟳</span>` : '';
+
+  const showPct = cap(pctExact);
+  probEl.innerHTML = `%${showPct}${biasTag}${censoredNote}`;
+  probEl.className = 'ens-prob ' + (showPct >= 60 ? 'high' : showPct <= 40 ? 'low' : '');
+
+  if (probWuEl) {
+    probWuEl.innerHTML = `↳ P(maks = ${thresh}°C tam): %${cap(pctExact)} &nbsp;·&nbsp; P(≥${thresh}°C): %${cap(pctAbove)}`;
+    probWuEl.style.color = cap(pctAbove) >= 60 ? '#15803d' : cap(pctAbove) <= 40 ? '#dc2626' : '#1a6ef5';
+  }
+}
+
+function toggleDetail(id) {
+  const body = document.getElementById('detail-' + id);
+  const icon = document.getElementById('detail-icon-' + id);
+  if (!body) return;
+  const open = body.style.display === 'none';
+  body.style.display = open ? 'block' : 'none';
+  icon.textContent   = open ? '▾' : '▸';
+}
+
+// --- KARAR ÖZETİ ---
+function synthesizeStation(id) {
+  const date = dates[activeDay];
+  const ens      = ensCache[id]?.days?.[date];
+  const blend    = cache[id]?.days?.[date]?.blend;
+  if (!ens || !blend) return null;
+
+  const bias   = getEffectiveBias(id);
+  const center = Math.round(ens.p50  - bias);
+  const low    = Math.round(ens.p25  - bias);
+  const high   = Math.round(ens.p75  - bias);
+
+  // Güven: ensemble IQR + model spread
+  const iqr = ens.p75 - ens.p25;
+  const spread = (blend.max_max != null && blend.min_max != null)
+    ? blend.max_max - blend.min_max : null;
+  let conf;
+  if (iqr <= 1.5 && (spread == null || spread <= 1.5)) conf = 'high';
+  else if (iqr >= 3   || (spread != null && spread >= 3))   conf = 'low';
+  else conf = 'mid';
+
+  // En iyi NO fırsatı
+  const pm        = pmCache[id]?.[date];
+  const maxes     = ens.member_maxes || [];
+  const dayData   = cache[id]?.days?.[date] || {};
+  const modelDist = modelDistribution(dayData.models || {});
+  let bestTrade   = null;
+  if (pm?.buckets) {
+    for (let i = 0; i < pm.buckets.length; i++) {
+      const b    = pm.buckets[i];
+      const ensPr = ensBucketProb(maxes, b, modelDist, bias);
+      if (ensPr == null || b.yes_price == null) continue;
+      const edge = b.yes_price - ensPr;
+      if (edge > 0.05 && (!bestTrade || edge > bestTrade.edge)) {
+        bestTrade = { bucket: b, bucketIdx: i, edge, ensPr, pmPr: b.yes_price };
+      }
+    }
+  }
+
+  return { center, low, high, conf, bestTrade, bias };
+}
+
+function renderSummary(id) {
+  const el = document.getElementById('summary-' + id);
+  if (!el) return;
+
+  const synth = synthesizeStation(id);
+  if (!synth) { el.innerHTML = '<span class="loading">yükleniyor...</span>'; return; }
+
+  const { center, low, high, conf, bestTrade } = synth;
+
+  const confLabel = { high: '✓ Yüksek Güven', mid: '~ Orta Belirsizlik', low: '⚠ Yüksek Belirsizlik' }[conf];
+  const confCls   = 'summary-conf summary-conf-' + conf;
+  const rangeStr  = low === high ? `${center}°C` : `${low} – ${high}°C`;
+
+  let tradeHtml = '';
+  if (bestTrade) {
+    const edgePct  = Math.round(bestTrade.edge * 100);
+    const noPct    = Math.round((1 - bestTrade.ensPr) * 100);
+    const pmNoPct  = Math.round((1 - bestTrade.pmPr)  * 100);
+    tradeHtml = `
+      <div class="summary-trade-box" onclick="selectBucket('${id}',${bestTrade.bucketIdx},'no')" style="cursor:pointer">
+        <div>
+          <div style="font-size:9px;font-weight:700;color:#991b1b;letter-spacing:.6px;text-transform:uppercase;margin-bottom:2px">En İyi NO Fırsatı</div>
+          <div style="font-size:13px;font-weight:600;color:var(--text)">${bestTrade.bucket.title}</div>
+          <div style="font-size:10px;color:var(--text-3);margin-top:2px">model NO: %${noPct} · PM NO: %${pmNoPct}</div>
+        </div>
+        <div style="text-align:right;flex-shrink:0">
+          <div style="font-size:22px;font-weight:700;color:#991b1b;font-family:var(--mono);line-height:1">+${edgePct}%</div>
+          <div style="font-size:9px;color:var(--text-3);margin-top:2px">edge</div>
+        </div>
+      </div>`;
+  } else {
+    tradeHtml = `<div class="summary-no-trade">Bu gün için belirgin NO fırsatı yok.</div>`;
+  }
+
+  const lockedMax = getLockedMax(id);
+  const lockedHtml = lockedMax != null
+    ? `<span class="summary-locked">🔒 Maks kilitlendi: ${lockedMax}°C</span>` : '';
+
+  el.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:6px">
+      <div>
+        <div style="font-size:10px;color:var(--text-3);text-transform:uppercase;letter-spacing:.8px;font-weight:600;margin-bottom:3px">Beklenen Maks</div>
+        <div class="summary-range-val">${rangeStr}</div>
+        <div class="summary-center">en olası settlement: <strong>${center}°C</strong></div>
+      </div>
+      <div style="padding-top:2px"><span class="${confCls}">${confLabel}</span></div>
+    </div>
+    ${lockedHtml}
+    ${tradeHtml}`;
+}
+
+function renderAll() {
+  STATIONS.forEach(id => renderStation(id));
+  STATIONS.forEach(id => renderMetar(id));
+  STATIONS.forEach(id => renderEnsemble(id));
+  STATIONS.forEach(id => renderBias(id));
+  STATIONS.forEach(id => renderSummary(id));
+}
+
+// --- BIAS BADGE ---
+// API bias_7d zaten üstel ağırlıklı + MAE-capped.
+// Ek olarak ilk 5 gün için kademeli güven ağırlığı uygula.
+function getEffectiveBias(id) {
+  const b = biasCache[id];
+  if (!b || b.count < 1) return 0;
+  const weight = Math.min(1, b.count / 5);
+  return b.bias_7d * weight;
+}
+
+function renderBias(id) {
+  const el = document.getElementById('bias-' + id);
+  if (!el) return;
+  const b = biasCache[id];
+  if (!b || b.count < 1) { el.innerHTML = ''; return; }
+  const raw = b.bias_7d;
+  const mae = b.mae;
+  if (Math.abs(raw) < 0.3) { el.innerHTML = `<span class="bias-badge bias-ok">bias ≈0</span>`; return; }
+  const cls   = raw > 0 ? 'bias-warm' : 'bias-cold';
+  const label = raw > 0 ? `model +${raw.toFixed(1)}°C sıcak` : `model ${raw.toFixed(1)}°C soğuk`;
+  const maeStr = mae != null ? ` ±${mae.toFixed(1)}` : '';
+  const note  = b.count < 5
+    ? ` (${b.count}g · %${Math.round(b.count/5*100)} güven)`
+    : ` (${b.count}g${maeStr}°C MAE)`;
+  el.innerHTML = `<span class="bias-badge ${cls}" title="Üstel ağırlıklı bias, MAE ile sınırlı. ${b.count} gün veri.">${label}${note}</span>`;
+}
+
+// --- TOP TRADES ---
+const STATION_FLAGS = { eglc: '🇬🇧', ltac: '🇹🇷', limc: '🇮🇹', ltfm: '🇹🇷' };
+
+function computeTopTrades() {
+  const date = dates[activeDay];
+  const trades = [];
+
+  for (const id of STATIONS) {
+    const pm       = pmCache[id]?.[date];
+    if (!pm?.buckets?.length) continue;
+    const dayData   = cache[id]?.days?.[date] || {};
+    const rawMaxes  = ensCache[id]?.days?.[date]?.member_maxes || [];
+    const maxes     = censorEnsemble(id, rawMaxes);   // İyileştirme #4
+    const modelDist = modelDistribution(dayData.models || {});
+    const bias      = getEffectiveBias(id);
+    const lockedMax = getLockedMax(id);
+
+    for (let i = 0; i < pm.buckets.length; i++) {
+      const b     = pm.buckets[i];
+      let ensPr   = ensBucketProb(maxes, b, modelDist, bias);
+
+      // Eğer bugün max kilitlendiyse → gözlenen bucket %100, diğerleri %0
+      if (lockedMax !== null) {
+        const isWinner = (!b.is_below && !b.is_above && b.threshold === lockedMax)
+          || (b.is_below  && lockedMax <= b.threshold)
+          || (b.is_above  && lockedMax >= b.threshold);
+        ensPr = isWinner ? 1.0 : 0.0;
+      }
+
+      if (ensPr == null || b.yes_price == null) continue;
+
+      // Sadece NO fırsatları: model YES olasılığını PM'den düşük görüyorsa → NO al
+      const edgeNo = b.yes_price - ensPr;
+      if (edgeNo > 0.03) trades.push({ id, b, i, side:'no', edge:edgeNo, price:b.no_price, ensPr:1-ensPr, lockedMax });
+    }
+  }
+
+  trades.sort((a,b) => b.edge - a.edge);
+  return trades.slice(0, 10);
+}
+
+function getLockedMax(id) {
+  // Sadece bugün için: METAR day_max kilitlendi mi?
+  // Kural: Yerel saat 15:00'ten ÖNCE asla kilitleme — günün zirvesi öğleden sonra gelir
+  if (activeDay !== 0) return null;
+  const m = metarCache[id];
+  if (!m || m.day_max == null || !m.observations?.length) return null;
+
+  // Yerel saati kontrol et (istasyon zaman dilimine göre)
+  const tzMap = { eglc: 'Europe/London', ltac: 'Europe/Istanbul', limc: 'Europe/Rome', ltfm: 'Europe/Istanbul' };
+  const tz   = tzMap[id] || 'UTC';
+  const localHour = parseInt(new Date().toLocaleString('en-US', { timeZone: tz, hour: 'numeric', hour12: false }), 10);
+  // 15:00 yerel saaten önce kilitleme
+  if (localHour < 15) return null;
+
+  // Son 3 METAR okuma hepsi day_max'tan düşükse ve day_max makul büyüklükteyse → locked
+  const dayMaxRounded = Math.round(m.day_max);
+  const recent = m.observations.slice(0, 3).map(o => Math.round(o.temp));
+  if (recent[0] <= dayMaxRounded - 1 && recent.every(t => t <= dayMaxRounded)) return dayMaxRounded;
+  return null;
+}
+
+function renderTopTrades() {
+  const date   = dates[activeDay];
+  const trades = computeTopTrades();
+  const subEl  = document.getElementById('top-trades-sub');
+  const listEl = document.getElementById('trade-list');
+  const bannerEl = document.getElementById('locked-banners');
+
+  // Locked banners — sadece 15:00 sonrası referans göster, öncesi gürültü
+  const banners = STATIONS
+    .map(id => {
+      const lm = getLockedMax(id);
+      if (lm) return `<div class="locked-banner">🔒 ${STATION_FLAGS[id]} ${id.toUpperCase()} — Maks kilitlendi: ${lm}°C → Diğer tüm bucket'lar ~%100 NO</div>`;
+      // 15:00 sonrası: referans olarak göster ama "henüz kilitlenmedi" uyarısıyla
+      const tzB = { eglc: 'Europe/London', ltac: 'Europe/Istanbul', limc: 'Europe/Rome', ltfm: 'Europe/Istanbul' };
+      const lhB = parseInt(new Date().toLocaleString('en-US', { timeZone: tzB[id] || 'UTC', hour: 'numeric', hour12: false }), 10);
+      const m  = metarCache[id];
+      if (lhB >= 15 && !lm && m?.day_max != null) {
+        return `<div class="locked-banner" style="background:#fffbe6;border-color:#d97706;color:#92400e">📍 ${STATION_FLAGS[id]} ${id.toUpperCase()} — Bugün maks: ${m.day_max}°C (henüz kilitlenmedi)</div>`;
+      }
+      return '';
+    }).join('');
+  bannerEl.innerHTML = banners;
+
+  const modelsLoaded = STATIONS.some(id => cache[id]?.days?.[date]?.blend?.max_temp != null);
+  const pmLoaded     = STATIONS.some(id => pmCache[id]?.[date]?.buckets?.length);
+
+  if (!modelsLoaded || !pmLoaded) {
+    subEl.textContent = 'Veriler yükleniyor...';
+    listEl.innerHTML = '<span class="no-trades">Lütfen bekleyin.</span>';
+    return;
+  }
+
+  subEl.textContent = `${dates[activeDay]} · Model NO > PM NO · Edge'e göre sıralı`;
+
+  if (!trades.length) {
+    listEl.innerHTML = '<span class="no-trades">Bu gün için belirgin fırsat bulunamadı.</span>';
+    return;
+  }
+
+  const stationLabels = { eglc: 'EGLC', ltac: 'LTAC', limc: 'LIMC', ltfm: 'LTFM' };
+  const sel = selections;
+
+  listEl.innerHTML = trades.map((t, idx) => {
+    const isSelYes = sel[t.id]?.bucketIdx === t.i && sel[t.id]?.side === 'yes';
+    const isSelNo  = sel[t.id]?.bucketIdx === t.i && sel[t.id]?.side === 'no';
+    const cls = isSelYes ? 'trade-item sel-yes' : isSelNo ? 'trade-item sel-no' : 'trade-item';
+    const badgeCls = t.side === 'yes' ? 'trade-side-yes' : 'trade-side-no';
+    const sideLabel = t.side === 'yes' ? 'YES' : 'NO';
+    const edgeSign = '+';
+    const isLocked = t.lockedMax !== null;
+    const lockedNote = isLocked ? ' 🔒' : '';
+
+    return `
+      <div class="${cls}" onclick="selectBucket('${t.id}',${t.i},'${t.side}')">
+        <span class="trade-station">${STATION_FLAGS[t.id]} ${stationLabels[t.id]}</span>
+        <span class="trade-bucket">${t.b.title}${lockedNote}</span>
+        <span class="${badgeCls}">${sideLabel}</span>
+        <span class="trade-edge pos">${edgeSign}${(t.edge*100).toFixed(0)}%</span>
+        <span class="trade-ens">model: ${(t.ensPr*100).toFixed(0)}%</span>
+        <span class="trade-price">@ ${(t.price*100).toFixed(1)}%</span>
+      </div>`;
+  }).join('');
+}
+
+// --- METAR ---
+function renderMetar(id) {
+  const el = document.getElementById('metar-' + id);
+  if (!el) return;
+
+  const m = metarCache[id];
+  if (!m) { el.innerHTML = '<span class="loading">yükleniyor...</span>'; return; }
+  if (m.error) { el.innerHTML = `<span class="err">${m.error}</span>`; return; }
+
+  const isToday = activeDay === 0;
+
+  if (!isToday) {
+    // Gelecek günler: sadece son gözlem referans olarak
+    el.innerHTML = m.current_temp != null
+      ? `<div style="font-size:12px;color:#aaa">Son METAR: <strong style="color:#555">${m.current_temp}°C</strong> (${m.current_time || '—'}) — gelecek gün için henüz gözlem yok</div>`
+      : '<span style="font-size:12px;color:#aaa">Gözlem yok</span>';
+    return;
+  }
+
+  // Bugün: maks + şu an + sparkline
+  const dayMax     = m.day_max  != null ? `${m.day_max}°C` : '—';
+  const currentTemp = m.current_temp != null ? `${m.current_temp}°C` : '—';
+  const currentTime = m.current_time || '';
+
+  // Sparkline (son 12 obs, eskiden yeniye)
+  const obs = [...(m.observations || [])].reverse();
+  let sparkHtml = '';
+  if (obs.length > 1) {
+    const temps = obs.map(o => o.temp);
+    const mn = Math.min(...temps), mx = Math.max(...temps), rng = mx - mn || 1;
+    sparkHtml = `
+      <div class="spark">
+        ${temps.map((t, i) => `<div class="spark-bar${i === temps.length-1 ? ' latest' : ''}" style="height:${Math.max(Math.round(((t-mn)/rng)*22), 2)}px" title="${obs[i].time} ${t}°C"></div>`).join('')}
+      </div>
+      <div class="spark-times">
+        ${obs.map(o => `<div class="spark-time">${o.time.slice(0,2)}</div>`).join('')}
+      </div>`;
+  }
+
+  // Model bias (blend vs gözlem) — sadece 15:00 sonrası anlamlı
+  const tzMapM = { eglc: 'Europe/London', ltac: 'Europe/Istanbul', limc: 'Europe/Rome', ltfm: 'Europe/Istanbul' };
+  const localHourM = parseInt(new Date().toLocaleString('en-US', { timeZone: tzMapM[id] || 'UTC', hour: 'numeric', hour12: false }), 10);
+  const blendMax = cache[id]?.days?.[dates[0]]?.blend?.max_temp;
+  let biasHtml = '';
+  if (blendMax != null && m.day_max != null && localHourM >= 15) {
+    const bias = (blendMax - m.day_max).toFixed(1);
+    const col  = Math.abs(bias) <= 1 ? '#16a34a' : Math.abs(bias) <= 2 ? '#d97706' : '#dc2626';
+    biasHtml = `<span style="font-size:11px;color:${col};margin-left:8px">model bias: ${bias > 0 ? '+' : ''}${bias}°C</span>`;
+  }
+
+  // 7 günlük trend mini bar chart
+  const hist = historyCache[id];
+  let trendHtml = '';
+  if (hist?.daily_maxes?.length >= 3) {
+    const days  = hist.daily_maxes.slice(-7);
+    const vals  = days.map(d => d.max_temp);
+    const minV  = Math.min(...vals), maxV = Math.max(...vals), rng = maxV - minV || 1;
+    const arrow = hist.trend_dir;
+    const slope = hist.trend_slope;
+    const tClass = arrow === '↑' ? 'trend-up' : arrow === '↓' ? 'trend-down' : 'trend-flat';
+    const bars  = vals.map((v, i) => {
+      const h   = Math.max(Math.round(((v - minV) / rng) * 18), 2);
+      const isTd = days[i].date === dates[0];
+      return `<div class="history-bar${isTd?' today':''}" style="height:${h}px" title="${days[i].date}: ${v}°C"></div>`;
+    }).join('');
+    trendHtml = `
+      <div class="trend-row">
+        <span class="${tClass}">${arrow} ${slope > 0 ? '+' : ''}${slope}°C/gün</span>
+        <span style="font-size:10px;color:#bbb">son ${days.length} gün</span>
+      </div>
+      <div class="history-mini">${bars}</div>`;
+  }
+
+  el.innerHTML = `
+    <div class="metar-row">
+      <div>
+        <div class="metar-label">Bugün maks (settlement)</div>
+        <div class="metar-now">${dayMax}</div>
+      </div>
+      <div>
+        <div class="metar-label">Şu an (${currentTime})</div>
+        <div class="metar-max"><strong>${currentTemp}</strong></div>
+      </div>
+      ${biasHtml ? `<div style="align-self:flex-end">${biasHtml}</div>` : ''}
+    </div>
+    ${sparkHtml}${trendHtml}`;
+}
+
+// --- VERİ ÇEKME ---
+async function loadStation(id) {
+  const [weatherRes, tafRes, ensRes, metarRes, histRes, biasRes] = await Promise.allSettled([
+    fetchJSON(`/api/weather?station=${id}`),
+    fetchJSON(`/api/taf?icao=${id.toUpperCase()}`, 8000),
+    fetchJSON(`/api/ensemble?station=${id}`, 25000),
+    fetchJSON(`/api/metar?station=${id}`, 10000),
+    fetchJSON(`/api/metar-history?station=${id}`, 20000),
+    fetchJSON(`/api/prediction-bias?station=${id}`, 5000),
+  ]);
+
+  cache[id]        = {};
+  ensCache[id]     = {};
+  metarCache[id]   = {};
+  historyCache[id] = {};
+  biasCache[id]    = {};
+
+  if (weatherRes.status === 'fulfilled' && weatherRes.value?.days) {
+    cache[id].days = weatherRes.value.days;
+  } else {
+    const msg = weatherRes.value?.detail || weatherRes.reason?.message || 'Veri alınamadı';
+    document.getElementById('h-' + id).innerHTML = `<span class="err">${msg}</span>`;
+    document.getElementById('blend-' + id).textContent = '—';
+  }
+
+  // TAF arka planda cache'e alınır, UI'da gösterilmez
+  if (tafRes.status === 'fulfilled' && tafRes.value?.taf) {
+    cache[id].taf = tafRes.value.taf;
+  }
+
+  if (ensRes.status === 'fulfilled' && ensRes.value?.days) {
+    ensCache[id].days = ensRes.value.days;
+  } else {
+    document.getElementById('ens-' + id).innerHTML = '<span class="err">Ensemble zaman aşımı</span>';
+  }
+
+  if (metarRes.status === 'fulfilled' && !metarRes.value?.detail) {
+    metarCache[id] = metarRes.value;
+    // Bugünün gözlenen maks'ını logla — SADECE 18:00 yerel saaten sonra
+    // (Sabahın erken day_max'ı günün gerçek zirvesi değil, bias'ı bozar)
+    const today = dates[0];
+    if (metarRes.value?.day_max != null) {
+      const tzMap2 = { eglc: 'Europe/London', ltac: 'Europe/Istanbul', limc: 'Europe/Rome', ltfm: 'Europe/Istanbul' };
+      const tz2    = tzMap2[id] || 'UTC';
+      const lh2    = parseInt(new Date().toLocaleString('en-US', { timeZone: tz2, hour: 'numeric', hour12: false }), 10);
+      if (lh2 >= 18) {
+        fetch('/api/log-prediction', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ station: id, date: today, actual: metarRes.value.day_max }),
+        }).catch(() => {});
+      }
+    }
+  } else {
+    metarCache[id] = { error: 'METAR alınamadı' };
+  }
+
+  if (histRes.status === 'fulfilled' && histRes.value?.daily_maxes) {
+    historyCache[id] = histRes.value;
+  }
+
+  if (biasRes.status === 'fulfilled' && biasRes.value?.bias_7d !== undefined) {
+    biasCache[id] = biasRes.value;
+  }
+
+  // Bugünün blend tahminini logla (bias hesabı için)
+  const today    = dates[0];
+  const dayData  = cache[id]?.days?.[today];
+  const blendMax = dayData?.blend?.max_temp;
+  const p50      = ensCache[id]?.days?.[today]?.p50;
+  if (blendMax != null) {
+    fetch('/api/log-prediction', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ station: id, date: today, blend: blendMax, p50: p50 || null }),
+    }).catch(() => {});
+  }
+}
+
+// --- PROGRESS BAR ---
+let _progressInterval = null;
+let _isLoading = false;
+
+function startProgress() {
+  const wrap = document.getElementById('progress-bar-wrap');
+  const bar  = document.getElementById('progress-bar');
+  wrap.style.opacity = '1';
+  bar.style.transition = 'none';
+  bar.style.width = '0%';
+  clearInterval(_progressInterval);
+  // Fake progress: hız yavaşlayan kayan bar — 0→90% bitiş bekleniyor
+  let pct = 0;
+  _progressInterval = setInterval(() => {
+    pct += (90 - pct) * 0.1;
+    bar.style.transition = 'width .3s ease';
+    bar.style.width = pct + '%';
+  }, 350);
+}
+
+function finishProgress() {
+  clearInterval(_progressInterval);
+  const wrap = document.getElementById('progress-bar-wrap');
+  const bar  = document.getElementById('progress-bar');
+  bar.style.transition = 'width .25s ease';
+  bar.style.width = '100%';
+  setTimeout(() => { wrap.style.opacity = '0'; setTimeout(() => { bar.style.width = '0%'; }, 400); }, 400);
+}
+
+async function loadAll() {
+  if (_isLoading) return;           // çift tıklamaya karşı lock
+  _isLoading = true;
+  cache        = {};
+  ensCache     = {};
+  metarCache   = {};
+  historyCache = {};
+  biasCache    = {};
+  document.getElementById('refreshBtn').disabled = true;
+  document.getElementById('status').textContent = 'Veriler çekiliyor...';
+  startProgress();
+
+  STATIONS.forEach(id => {
+    document.getElementById('blend-' + id).textContent  = '—';
+    document.getElementById('range-' + id).textContent  = '';
+    document.getElementById('unc-' + id).innerHTML      = '';
+    document.getElementById('bias-' + id).innerHTML     = '';
+    document.getElementById('h-' + id).innerHTML        = '<span class="loading">yükleniyor...</span>';
+    document.getElementById('ens-' + id).innerHTML      = '<span class="loading">yükleniyor...</span>';
+    document.getElementById('metar-' + id).innerHTML    = '<span class="loading">yükleniyor...</span>';
+    document.getElementById('models-' + id).innerHTML   = '';
+  });
+
+  try {
+    await Promise.all(STATIONS.map(id => loadStation(id)));
+    await Promise.all(STATIONS.map(id => loadPolymarket(id)));
+    renderAll();
+    STATIONS.forEach(id => renderMarkets(id));
+    renderTopTrades();
+    document.getElementById('positions-sub').textContent =
+      `${dates[activeDay]} · Ensemble + 5 model · WU yuvarlama dahil`;
+    document.getElementById('status').textContent =
+      `✓ Güncellendi — ${new Date().toLocaleTimeString('tr-TR')}`;
+  } catch(e) {
+    document.getElementById('status').textContent = '⚠ Yüklenirken hata oluştu — yenileyin';
+  } finally {
+    finishProgress();
+    document.getElementById('refreshBtn').disabled = false;
+    _isLoading = false;
+  }
+}
+
+// --- POLYMARKET ---
+async function loadPolymarket(id) {
+  const date = dates[activeDay];
+  try {
+    const r = await fetch(`/api/polymarket?station=${id}&date=${date}`);
+    const d = await r.json();
+    if (!pmCache[id]) pmCache[id] = {};
+    pmCache[id][date] = d.detail ? { error: d.detail } : d;
+  } catch (e) {
+    if (!pmCache[id]) pmCache[id] = {};
+    pmCache[id][dates[activeDay]] = { error: e.message };
+  }
+}
+
+// --- METAR ENSEMBLE SENSÖRÜ (İyileştirme #4) ---
+// 15:00 sonrası: METAR day_max bir alt sınır.
+// Observed max'ın altında kalan ensemble üyeleri → imkânsız → max'a yuvarla.
+const TZ_MAP = { eglc: 'Europe/London', ltac: 'Europe/Istanbul', limc: 'Europe/Rome', ltfm: 'Europe/Istanbul' };
+
+function localHourFor(id) {
+  return parseInt(new Date().toLocaleString('en-US', { timeZone: TZ_MAP[id] || 'UTC', hour: 'numeric', hour12: false }), 10);
+}
+
+function censorEnsemble(id, maxes) {
+  if (!maxes?.length || activeDay !== 0) return maxes;
+  const m = metarCache[id];
+  if (!m || m.day_max == null) return maxes;
+  const lh = localHourFor(id);
+  if (lh < 15) return maxes; // Gün zirvesi henüz gelmedi
+  // Bias düzeltmesi: corrected = raw - bias_7d ≥ day_max
+  // → raw ≥ day_max + bias_7d
+  // (model soğuk bias_7d<0 → floor düşer; sıcak bias → floor yükselir)
+  const bias = getEffectiveBias(id);
+  const floor = m.day_max + bias;
+  return maxes.map(v => Math.max(v, floor));
+}
+
+// Gaussian yardımcılar
+function erf(x) {
+  const a1=0.254829592, a2=-0.284496736, a3=1.421413741, a4=-1.453152027, a5=1.061405429, p=0.3275911;
+  const sign = x < 0 ? -1 : 1; x = Math.abs(x);
+  const t = 1/(1+p*x);
+  return sign*(1-(((((a5*t+a4)*t)+a3)*t+a2)*t+a1)*t*Math.exp(-x*x));
+}
+function gaussianCDF(x, mean, std) { return 0.5*(1+erf((x-mean)/(std*Math.SQRT2))); }
+
+// Ensemble member_maxes varsa direkt say, yoksa 5 model Gaussian'ı kullan
+// bias: son 7 gün model hatası (pozitif = model sıcak tahmin ediyor → maxes'i düşür)
+// ICON seamless ensemble maks üye sayısı
+const ICON_TOTAL = 40;
+
+function ensBucketProb(memberMaxes, bucket, modelDist, bias) {
+  const t = bucket.threshold;
+  if (t == null) return null;
+  const b = (typeof bias === 'number' && !isNaN(bias)) ? bias : 0;
+
+  const CAP_LO = 0.03, CAP_HI = 0.97;
+  const cap = p => Math.min(CAP_HI, Math.max(CAP_LO, p));
+
+  // Gaussian olasılık (bias düzeltmeli mean)
+  function gaussProb() {
+    if (!modelDist) return null;
+    const mean = modelDist.mean - b;
+    const std  = Math.max(modelDist.std, 0.5);
+    if (bucket.is_below) return cap(gaussianCDF(t + 0.5, mean, std));
+    if (bucket.is_above) return cap(1 - gaussianCDF(t - 0.5, mean, std));
+    return cap(Math.max(0, gaussianCDF(t + 0.5, mean, std) - gaussianCDF(t - 0.5, mean, std)));
+  }
+
+  if (memberMaxes?.length >= 5) {
+    // Bias düzeltmesi: member maxes'i kaydır
+    const corrected = b !== 0 ? memberMaxes.map(v => v - b) : memberMaxes;
+    // Ensemble sayımı (WU METAR tam °C yuvarlama)
+    let cnt = 0;
+    for (const v of corrected) {
+      const r = Math.round(v);
+      if      (bucket.is_below && r <= t) cnt++;
+      else if (bucket.is_above && r >= t) cnt++;
+      else if (!bucket.is_below && !bucket.is_above && r === t) cnt++;
+    }
+    const ensProb = cap(cnt / corrected.length);
+
+    // İyileştirme #1: Üye eksikliğinde Gaussian ile harmanla
+    // Tamamlanmışlık = mevcut üye / ICON toplam (40)
+    const completeness = Math.min(1, corrected.length / ICON_TOTAL);
+    if (completeness >= 0.9) return ensProb; // Yeterli üye → saf ensemble
+    const gp = gaussProb();
+    if (gp == null) return ensProb;
+    return cap(completeness * ensProb + (1 - completeness) * gp);
+  }
+
+  // Fallback: 5 model Gaussian dağılımı
+  return gaussProb() ?? null;
+}
+
+// 5 modelden Gaussian dağılım parametrelerini hesapla
+function modelDistribution(models) {
+  const vals = Object.values(models).map(m => m?.max_temp).filter(v => v != null);
+  if (vals.length < 2) return null;
+  const mean = vals.reduce((a,b)=>a+b,0)/vals.length;
+  const std  = Math.sqrt(vals.reduce((a,b)=>a+(b-mean)**2,0)/vals.length);
+  return { mean, std: Math.max(std, 0.5) };  // min 0.5°C std
+}
+
+function renderMarkets(id) {
+  const el = document.getElementById('pm-markets-' + id);
+  if (!el) return;
+
+  const date = dates[activeDay];
+  const pm   = pmCache[id]?.[date];
+  if (!pm) { el.innerHTML = '<span class="loading">yükleniyor...</span>'; return; }
+  if (pm.error) { el.innerHTML = `<span class="pm-nomarket">⚠ ${pm.error}</span>`; return; }
+
+  const buckets = pm.buckets || [];
+  if (!buckets.length) {
+    el.innerHTML = `<span class="pm-nomarket">Market yok — <a href="${pm.event_url}" target="_blank" style="color:#1a6ef5">PM'de ara ↗</a></span>`;
+    return;
+  }
+
+  const ens       = ensCache[id]?.days?.[date];
+  const rawMaxes  = ens?.member_maxes || [];
+  const maxes     = censorEnsemble(id, rawMaxes);   // İyileştirme #4
+  const dayData   = cache[id]?.days?.[date] || {};
+  const blendMax  = dayData.blend?.max_temp;
+  const modelDist = modelDistribution(dayData.models || {});
+  const bias      = getEffectiveBias(id);
+
+  const lockedMax = getLockedMax(id);
+
+  const bCount   = biasCache[id]?.count || 0;
+  const biasNote = Math.abs(bias) >= 0.5
+    ? `<span style="font-size:10px;font-weight:600;background:${bias<0?'rgba(59,130,246,.12)':'rgba(239,68,68,.12)'};color:${bias>0?'#b91c1c':'#1d4ed8'};padding:1px 5px;border-radius:3px;margin-left:5px" title="${bCount}g veri ile bias düzeltmesi aktif">⟳ bias ${bias>0?'+':''}${bias.toFixed(1)}°C (${bCount}g)</span>`
+    : '';
+
+  let html = `
+    <div class="pm-event-meta">
+      $${(pm.liquidity||0).toLocaleString()} likidite ·
+      <a href="${pm.event_url}" target="_blank">↗ PM</a>${biasNote}
+    </div>
+    <table class="bucket-table">
+      <tr><th>°C</th><th>PM%</th><th>Ens%</th><th>Edge</th><th></th></tr>`;
+
+  const rows = buckets.map((b, i) => {
+    let ensPr = ensBucketProb(maxes, b, modelDist, bias);
+
+    // Locked-day: gözlenen bucket → %100, diğerleri → %0
+    if (lockedMax !== null) {
+      const isWinner = (!b.is_below && !b.is_above && b.threshold === lockedMax)
+        || (b.is_below  && lockedMax <= b.threshold)
+        || (b.is_above  && lockedMax >= b.threshold);
+      ensPr = isWinner ? 1.0 : 0.0;
+    }
+
+    const pmPr = b.yes_price;
+    const edge = (ensPr != null && pmPr != null) ? ensPr - pmPr : null;
+
+    // Satır sınıfı
+    const sel = selections[id];
+    const isSelYes = sel?.bucketIdx === i && sel.side === 'yes';
+    const isSelNo  = sel?.bucketIdx === i && sel.side === 'no';
+    const isNearBlend = !lockedMax && blendMax != null && b.threshold != null &&
+      Math.abs(Math.round(blendMax) - b.threshold) <= 1;
+    const isSettledWin  = lockedMax !== null && ensPr === 1.0;
+    const isSettledLose = lockedMax !== null && ensPr === 0.0;
+
+    const rowCls = isSelYes ? 'bucket-row sel-yes'
+      : isSelNo         ? 'bucket-row sel-no'
+      : isSettledWin    ? 'bucket-row settled-win'
+      : isSettledLose   ? 'bucket-row settled-lose'
+      : isNearBlend     ? 'bucket-row highlight'
+      : 'bucket-row';
+
+    const pmPct  = pmPr  != null ? Math.round(pmPr  * 100) + '%' : '—';
+    const ensPct = ensPr != null ? Math.round(ensPr * 100) + '%' : '—';
+
+    let edgeHtml = '<span class="b-edge neu">·</span>';
+    if (edge != null) {
+      const pct = (edge * 100).toFixed(0);
+      const cls = edge > 0.03 ? 'pos' : edge < -0.03 ? 'neg' : 'neu';
+      edgeHtml = `<span class="b-edge ${cls}">${edge>0?'+':''}${pct}%</span>`;
+    }
+
+    // Portföy pozisyon rozeti
+    const myPos = findPosition(id, date, b.title);
+    const posBadge = myPos.length
+      ? myPos.map(p => `<span class="pos-badge">${p.outcome==='Yes'?'Y':'N'} ${parseFloat(p.size).toFixed(0)}</span>`).join('')
+      : '';
+
+    return `
+      <tr class="${rowCls}">
+        <td class="b-label">${b.title}${posBadge}</td>
+        <td class="b-pm-pct">${pmPct}</td>
+        <td class="b-ens-pct">${ensPct}</td>
+        <td>${edgeHtml}</td>
+        <td class="b-action">
+          <button class="b-btn b-btn-yes" onclick="selectBucket('${id}',${i},'yes')">Y</button>
+          <button class="b-btn b-btn-no"  onclick="selectBucket('${id}',${i},'no')">N</button>
+        </td>
+      </tr>`;
+  });
+
+  html += rows.join('') + '</table>';
+  el.innerHTML = html;
+}
+
+function selectBucket(stationId, idx, side) {
+  const date    = dates[activeDay];
+  const buckets = pmCache[stationId]?.[date]?.buckets || [];
+  const b       = buckets[idx];
+  if (!b) return;
+
+  const prev = selections[stationId];
+  if (prev?.bucketIdx === idx && prev?.side === side) {
+    delete selections[stationId];  // toggle off
+  } else {
+    selections[stationId] = { bucket: b, bucketIdx: idx, side, date };
+  }
+  renderMarkets(stationId);
+  renderTopTrades();
+  updateSelectedRow();
+}
+
+function updateSelectedRow() {
+  const row  = document.getElementById('selected-markets-row');
+  const list = document.getElementById('selected-markets-list');
+  const cnt  = document.getElementById('selection-count');
+  const entries = Object.entries(selections);
+
+  if (!entries.length) {
+    row.style.display = 'none';
+    cnt.textContent = '';
+    return;
+  }
+
+  row.style.display = 'block';
+  cnt.textContent = `${entries.length} pozisyon seçildi`;
+
+  const stationLabels = { eglc: '🇬🇧 EGLC', ltac: '🇹🇷 LTAC', limc: '🇮🇹 LIMC', ltfm: '🇹🇷 LTFM' };
+
+  list.innerHTML = entries.map(([sid, sel]) => {
+    const badge = sel.side === 'yes'
+      ? `<span class="sel-badge-yes">YES</span>`
+      : `<span class="sel-badge-no">NO</span>`;
+    const price = sel.side === 'yes' ? sel.bucket.yes_price : sel.bucket.no_price;
+    const pctStr = price != null ? ` @ %${Math.round(price*100)}` : '';
+    return `<div class="sel-item">${badge}<span style="font-size:11px;color:#888;min-width:48px">${stationLabels[sid]||sid}</span><span class="sel-q">${sel.bucket.title}</span><span style="font-size:11px;color:#888">${pctStr}</span></div>`;
+  }).join('');
+}
+
+function clearSelections() {
+  selections = {};
+  STATIONS.forEach(id => renderMarkets(id));
+  updateSelectedRow();
+}
+
+
+// --- OTOMATİK YENİLEME ---
+// 6 saatte bir: tüm veriler (model güncellemeleri 00/06/12/18 UTC'de gelir)
+setInterval(() => { if (!_isLoading) loadAll(); }, 6 * 60 * 60 * 1000);
+
+// 20 dakikada bir: sadece PM fiyatları + METAR (hızlı, sessiz)
+async function refreshLive() {
+  if (_isLoading) return;
+  const date = dates[activeDay];
+  // PM fiyatları
+  await Promise.all(STATIONS.map(async id => {
+    try {
+      const r = await fetch(`/api/polymarket?station=${id}&date=${date}`);
+      const d = await r.json();
+      if (!pmCache[id]) pmCache[id] = {};
+      if (!d.detail) pmCache[id][date] = d;
+    } catch {}
+  }));
+  // METAR
+  await Promise.all(STATIONS.map(async id => {
+    try {
+      const r = await fetch(`/api/metar?station=${id}`);
+      const d = await r.json();
+      if (!d.detail) metarCache[id] = d;
+    } catch {}
+  }));
+  STATIONS.forEach(id => { renderMetar(id); renderMarkets(id); });
+  renderTopTrades();
+  // Portföy fiyatlarını da güncelle
+  const wallet = localStorage.getItem('pm_wallet');
+  if (wallet) loadPortfolio(wallet);
+  // Sekme aktifse subtle güncelleme notu
+  const s = document.getElementById('status');
+  if (s) s.textContent = `✓ Güncellendi — ${new Date().toLocaleTimeString('tr-TR')}`;
+}
+setInterval(() => { if (!_isLoading) refreshLive(); }, 20 * 60 * 1000);
+
+// --- WALLET & PORTFÖY ---
+const CITY_SLUG = { eglc: 'london', ltac: 'ankara', limc: 'milan' };
+const MONTH_EN  = ['january','february','march','april','may','june','july','august','september','october','november','december'];
+
+function walletInputChange() {
+  const v = document.getElementById('wallet-input').value.trim();
+  document.getElementById('wallet-connect-btn').disabled = !(v.startsWith('0x') && v.length >= 20);
+}
+
+function connectWallet() {
+  const addr = document.getElementById('wallet-input').value.trim();
+  if (!addr) return;
+  localStorage.setItem('pm_wallet', addr);
+  document.getElementById('wallet-input').value = '';
+  document.getElementById('wallet-connect-btn').disabled = true;
+  renderWalletStatus(addr);
+  loadPortfolio(addr);
+}
+
+function disconnectWallet() {
+  localStorage.removeItem('pm_wallet');
+  portfolioCache = [];
+  document.getElementById('wallet-status').innerHTML = '';
+  document.getElementById('portfolio-box').style.display = 'none';
+}
+
+function renderWalletStatus(addr) {
+  const short = addr.slice(0, 6) + '…' + addr.slice(-4);
+  document.getElementById('wallet-status').innerHTML =
+    `<div class="wallet-connected">🟢 ${short} <button onclick="disconnectWallet()" title="Bağlantıyı kes">✕</button></div>`;
+}
+
+async function loadPortfolio(addr) {
+  if (!addr) return;
+  try {
+    const d = await fetchJSON(`/api/portfolio?address=${encodeURIComponent(addr)}`, 15000);
+    portfolioCache = d.positions || [];
+    renderPortfolio();
+    // Bucket tablolarında pozisyon rozetlerini güncelle
+    STATIONS.forEach(id => renderMarkets(id));
+  } catch (e) {
+    document.getElementById('portfolio-box').style.display = 'none';
+  }
+}
+
+function getEventSlug(stationId, dateStr) {
+  const city  = CITY_SLUG[stationId];
+  const d     = new Date(dateStr + 'T12:00:00');
+  return `highest-temperature-in-${city}-on-${MONTH_EN[d.getMonth()]}-${d.getDate()}-${d.getFullYear()}`;
+}
+
+// Bir bucket için eşleşen pozisyonu bul
+function findPosition(stationId, dateStr, bucketTitle) {
+  const slug = getEventSlug(stationId, dateStr);
+  return portfolioCache.filter(p => {
+    if (p.eventSlug !== slug) return false;
+    // title içinde bucket sıcaklık değeri geçiyor mu?
+    const bt = bucketTitle.replace('°C','').replace(' or below','').replace(' or above','').trim();
+    return p.title.includes(bt) || p.slug.includes(bt.toLowerCase().replace(' ','-'));
+  });
+}
+
+function renderPortfolio() {
+  const box  = document.getElementById('portfolio-box');
+  const cont = document.getElementById('portfolio-content');
+  if (!portfolioCache.length) { box.style.display = 'none'; return; }
+  box.style.display = 'block';
+
+  const STATION_FLAG = { eglc:'🇬🇧', ltac:'🇹🇷', limc:'🇮🇹' };
+
+  const rows = portfolioCache.map(p => {
+    let stFlag = '🌍';
+    for (const [id, city] of Object.entries(CITY_SLUG)) {
+      if (p.eventSlug?.includes(city)) { stFlag = STATION_FLAG[id]; break; }
+    }
+    const side   = p.outcome === 'Yes' ? 'YES' : 'NO';
+    const sideCls= p.outcome === 'Yes' ? 'pos-side-yes' : 'pos-side-no';
+    const size   = parseFloat(p.size).toFixed(0);
+    const avg    = (parseFloat(p.avgPrice || 0) * 100).toFixed(0);
+    const cur    = (parseFloat(p.curPrice  || 0) * 100).toFixed(0);
+    const val    = parseFloat(p.currentValue || 0).toFixed(2);
+    const pnl    = parseFloat(p.cashPnl || 0);
+    const pnlCls = pnl >= 0 ? 'pos-pnl-pos' : 'pos-pnl-neg';
+    const pnlStr = (pnl >= 0 ? '+' : '') + pnl.toFixed(2);
+    const titleShort = p.title?.replace(/Will the highest temperature.+? be /i,'').replace(/\?.*/,'') || p.slug;
+
+    return `<tr>
+      <td>${stFlag} <span style="font-weight:600;color:var(--text)">${titleShort}</span></td>
+      <td class="r"><span class="${sideCls}">${side}</span></td>
+      <td class="r" style="font-family:var(--mono);color:var(--text-2)">${size}</td>
+      <td class="r" style="font-family:var(--mono);color:var(--text-3)">%${avg}</td>
+      <td class="r" style="font-family:var(--mono);color:var(--text-2)">%${cur}</td>
+      <td class="r" style="font-family:var(--mono);color:var(--text-2)">$${val}</td>
+      <td class="r"><span class="${pnlCls}">${pnlStr}$</span></td>
+    </tr>`;
+  }).join('');
+
+  const totalPnl = portfolioCache.reduce((s,p) => s + parseFloat(p.cashPnl||0), 0);
+  const totalVal = portfolioCache.reduce((s,p) => s + parseFloat(p.currentValue||0), 0);
+  const pnlCls   = totalPnl >= 0 ? 'pos-pnl-pos' : 'pos-pnl-neg';
+
+  cont.innerHTML = `
+    <table class="pos-table">
+      <thead><tr>
+        <th>Piyasa</th>
+        <th class="r">Yön</th>
+        <th class="r">Hisse</th>
+        <th class="r">Avg</th>
+        <th class="r">Güncel</th>
+        <th class="r">Değer</th>
+        <th class="r">P&amp;L</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div class="pos-summary">
+      <span>${portfolioCache.length} pozisyon</span>
+      <span>Toplam: <strong style="font-family:var(--mono)">$${totalVal.toFixed(2)}</strong></span>
+      <span>P&amp;L: <strong class="${pnlCls}">${totalPnl>=0?'+':''}${totalPnl.toFixed(2)}$</strong></span>
+    </div>`;
+}
+
+// --- BAŞLAT ---
+initDates();
+loadAll();
+
+// Kaydedilmiş cüzdan varsa yükle
+const _savedWallet = localStorage.getItem('pm_wallet');
+if (_savedWallet) {
+  renderWalletStatus(_savedWallet);
+  loadPortfolio(_savedWallet);
+}
+</script>
+</body>
+</html>

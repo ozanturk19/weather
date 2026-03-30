@@ -1,0 +1,24 @@
+# Environment & secrets
+.env
+*.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+.venv/
+*.egg-info/
+
+# Predictions (local veri, repoya gitmesin)
+predictions.json
+
+# OS
+.DS_Store
+.claude/
+
+# IDE
+.vscode/
+.idea/
