@@ -1,21 +1,22 @@
 import asyncio
+import json
 import os
+import re
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
 
-import anthropic
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 load_dotenv()
 
 app = FastAPI(title="Polymarket Hava Analizi")
-
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
 STATIONS = {
     "eglc": {"lat": 51.505, "lon": 0.055,  "tz": "Europe/London",   "label": "EGLC (Londra City)",     "pm_query": "London"},
@@ -311,7 +312,6 @@ def pm_slug(city: str, date_str: str) -> str:
 
 def parse_threshold(title: str) -> Optional[float]:
     """'13°C' → 13.0  |  '10°C or below' → 10.0  |  '16°C or above' → 16.0"""
-    import re
     m = re.search(r'(-?\d+)\s*°C', title)
     return float(m.group(1)) if m else None
 
@@ -342,7 +342,6 @@ async def get_polymarket_markets(station: str, date: str):
     event    = events[0]
     markets  = event.get("markets", [])
 
-    import json as _json
     buckets = []
     for m in markets:
         title = m.get("groupItemTitle", "") or m.get("question", "")
@@ -350,7 +349,7 @@ async def get_polymarket_markets(station: str, date: str):
 
         prices = m.get("outcomePrices", "[]")
         if isinstance(prices, str):
-            try: prices = _json.loads(prices)
+            try: prices = json.loads(prices)
             except: prices = []
 
         yes_price = round(float(prices[0]), 4) if len(prices) >= 1 else None
@@ -389,19 +388,19 @@ async def get_polymarket_markets(station: str, date: str):
 
 
 
-import json as _json_mod
-from pathlib import Path
-
 PREDICTIONS_FILE = Path(__file__).parent / "predictions.json"
+_preds_lock = asyncio.Lock()
 
 def _load_preds() -> dict:
     try:
-        return _json_mod.loads(PREDICTIONS_FILE.read_text()) if PREDICTIONS_FILE.exists() else {}
+        return json.loads(PREDICTIONS_FILE.read_text()) if PREDICTIONS_FILE.exists() else {}
     except Exception:
         return {}
 
 def _save_preds(data: dict):
-    PREDICTIONS_FILE.write_text(_json_mod.dumps(data, indent=2))
+    tmp = PREDICTIONS_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2))
+    tmp.replace(PREDICTIONS_FILE)
 
 
 @app.get("/api/metar-history")
@@ -474,14 +473,15 @@ class PredictionLog(BaseModel):
 @app.post("/api/log-prediction")
 async def log_prediction(req: PredictionLog):
     """Günlük tahmin kaydını sakla (otomatik bias hesabı için)."""
-    preds = _load_preds()
-    st    = req.station.lower()
-    preds.setdefault(st, {})
-    entry = preds[st].setdefault(req.date, {})
-    if req.blend  is not None: entry["blend"]  = req.blend
-    if req.p50    is not None: entry["p50"]    = req.p50
-    if req.actual is not None: entry["actual"] = req.actual
-    _save_preds(preds)
+    async with _preds_lock:
+        preds = _load_preds()
+        st    = req.station.lower()
+        preds.setdefault(st, {})
+        entry = preds[st].setdefault(req.date, {})
+        if req.blend  is not None: entry["blend"]  = req.blend
+        if req.p50    is not None: entry["p50"]    = req.p50
+        if req.actual is not None: entry["actual"] = req.actual
+        _save_preds(preds)
     return {"ok": True}
 
 
@@ -551,8 +551,6 @@ async def get_portfolio(address: str):
     )
     return {"positions": weather, "address": address, "total_markets": len(all_pos)}
 
-
-from fastapi.responses import FileResponse
 
 @app.get("/", include_in_schema=False)
 async def root():

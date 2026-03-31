@@ -1032,9 +1032,7 @@ function getLockedMax(id) {
   if (!m || m.day_max == null || !m.observations?.length) return null;
 
   // Yerel saati kontrol et (istasyon zaman dilimine göre)
-  const tzMap = { eglc: 'Europe/London', ltac: 'Europe/Istanbul', limc: 'Europe/Rome', ltfm: 'Europe/Istanbul' };
-  const tz   = tzMap[id] || 'UTC';
-  const localHour = parseInt(new Date().toLocaleString('en-US', { timeZone: tz, hour: 'numeric', hour12: false }), 10);
+  const localHour = localHourFor(id);
   // 15:00 yerel saaten önce kilitleme
   if (localHour < 15) return null;
 
@@ -1058,8 +1056,7 @@ function renderTopTrades() {
       const lm = getLockedMax(id);
       if (lm) return `<div class="locked-banner">🔒 ${STATION_FLAGS[id]} ${id.toUpperCase()} — Maks kilitlendi: ${lm}°C → Diğer tüm bucket'lar ~%100 NO</div>`;
       // 15:00 sonrası: referans olarak göster ama "henüz kilitlenmedi" uyarısıyla
-      const tzB = { eglc: 'Europe/London', ltac: 'Europe/Istanbul', limc: 'Europe/Rome', ltfm: 'Europe/Istanbul' };
-      const lhB = parseInt(new Date().toLocaleString('en-US', { timeZone: tzB[id] || 'UTC', hour: 'numeric', hour12: false }), 10);
+      const lhB = localHourFor(id);
       const m  = metarCache[id];
       if (lhB >= 15 && !lm && m?.day_max != null) {
         return `<div class="locked-banner" style="background:#fffbe6;border-color:#d97706;color:#92400e">📍 ${STATION_FLAGS[id]} ${id.toUpperCase()} — Bugün maks: ${m.day_max}°C (henüz kilitlenmedi)</div>`;
@@ -1149,8 +1146,7 @@ function renderMetar(id) {
   }
 
   // Model bias (blend vs gözlem) — sadece 15:00 sonrası anlamlı
-  const tzMapM = { eglc: 'Europe/London', ltac: 'Europe/Istanbul', limc: 'Europe/Rome', ltfm: 'Europe/Istanbul' };
-  const localHourM = parseInt(new Date().toLocaleString('en-US', { timeZone: tzMapM[id] || 'UTC', hour: 'numeric', hour12: false }), 10);
+  const localHourM = localHourFor(id);
   const blendMax = cache[id]?.days?.[dates[0]]?.blend?.max_temp;
   let biasHtml = '';
   if (blendMax != null && m.day_max != null && localHourM >= 15) {
@@ -1239,15 +1235,13 @@ async function loadStation(id) {
     // (Sabahın erken day_max'ı günün gerçek zirvesi değil, bias'ı bozar)
     const today = dates[0];
     if (metarRes.value?.day_max != null) {
-      const tzMap2 = { eglc: 'Europe/London', ltac: 'Europe/Istanbul', limc: 'Europe/Rome', ltfm: 'Europe/Istanbul' };
-      const tz2    = tzMap2[id] || 'UTC';
-      const lh2    = parseInt(new Date().toLocaleString('en-US', { timeZone: tz2, hour: 'numeric', hour12: false }), 10);
+      const lh2 = localHourFor(id);
       if (lh2 >= 18) {
         fetch('/api/log-prediction', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ station: id, date: today, actual: metarRes.value.day_max }),
-        }).catch(() => {});
+        }).catch(e => console.warn(`[log-prediction] actual ${id}:`, e.message));
       }
     }
   } else {
@@ -1272,7 +1266,7 @@ async function loadStation(id) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ station: id, date: today, blend: blendMax, p50: p50 || null }),
-    }).catch(() => {});
+    }).catch(e => console.warn(`[log-prediction] blend ${id}:`, e.message));
   }
 }
 
@@ -1618,7 +1612,7 @@ async function refreshLive() {
       const d = await r.json();
       if (!pmCache[id]) pmCache[id] = {};
       if (!d.detail) pmCache[id][date] = d;
-    } catch {}
+    } catch (e) { console.warn(`[refreshLive] PM ${id}:`, e.message); }
   }));
   // METAR
   await Promise.all(STATIONS.map(async id => {
@@ -1626,7 +1620,7 @@ async function refreshLive() {
       const r = await fetch(`/api/metar?station=${id}`);
       const d = await r.json();
       if (!d.detail) metarCache[id] = d;
-    } catch {}
+    } catch (e) { console.warn(`[refreshLive] METAR ${id}:`, e.message); }
   }));
   STATIONS.forEach(id => { renderMetar(id); renderMarkets(id); });
   renderTopTrades();
@@ -1640,7 +1634,7 @@ async function refreshLive() {
 setInterval(() => { if (!_isLoading) refreshLive(); }, 20 * 60 * 1000);
 
 // --- WALLET & PORTFÖY ---
-const CITY_SLUG = { eglc: 'london', ltac: 'ankara', limc: 'milan' };
+const CITY_SLUG = { eglc: 'london', ltac: 'ankara', limc: 'milan', ltfm: 'istanbul' };
 const MONTH_EN  = ['january','february','march','april','may','june','july','august','september','october','november','december'];
 
 function walletInputChange() {
@@ -1707,7 +1701,7 @@ function renderPortfolio() {
   if (!portfolioCache.length) { box.style.display = 'none'; return; }
   box.style.display = 'block';
 
-  const STATION_FLAG = { eglc:'🇬🇧', ltac:'🇹🇷', limc:'🇮🇹' };
+  const STATION_FLAG = { eglc:'🇬🇧', ltac:'🇹🇷', limc:'🇮🇹', ltfm:'🇹🇷' };
 
   const rows = portfolioCache.map(p => {
     let stFlag = '🌍';
