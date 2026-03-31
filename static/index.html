@@ -206,7 +206,7 @@ h1::before {
 .no-trades { font-size:13px; color:var(--text-3); padding:6px 0; }
 
 /* Polymarket grid */
-.pm-markets-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:12px; margin-bottom:8px; }
+.pm-markets-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-bottom:8px; }
 @media (max-width:800px) { .pm-markets-grid { grid-template-columns:1fr; } }
 .pm-col-header { font-size:11px; font-weight:700; color:var(--text-2); text-transform:uppercase; letter-spacing:.06em; margin-bottom:8px; }
 .pm-nomarket { font-size:12px; color:var(--text-3); padding:6px 0; }
@@ -521,6 +521,199 @@ input.thresh-slider {
       <div class="model-grid" id="models-ltfm"></div>
     </div>
   </div>
+
+  <!-- LEMD -->
+  <div class="card">
+    <div class="card-header">
+      <div>
+        <div class="station-name">🇪🇸 LEMD</div>
+        <div class="station-sub">Madrid Barajas</div>
+      </div>
+      <div id="bias-lemd"></div>
+    </div>
+    <div class="summary-box" id="summary-lemd"><span class="loading">yükleniyor...</span></div>
+    <div class="detail-toggle" onclick="toggleDetail('lemd')">
+      <span id="detail-icon-lemd">▸</span> Detaylı analiz
+    </div>
+    <div class="detail-body" id="detail-lemd" style="display:none">
+      <div class="blend-block" style="margin:8px 0 4px">
+        <div class="blend-temp" id="blend-lemd">—</div>
+        <div class="blend-range" id="range-lemd"></div>
+        <div id="unc-lemd"></div>
+      </div>
+      <div class="section-label">Gözlem <span style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">METAR</span></div>
+      <div id="metar-lemd"><span class="loading">yükleniyor...</span></div>
+      <div class="section-label">Saatlik Tahmin</div>
+      <div id="h-lemd"><span class="loading">yükleniyor...</span></div>
+      <div class="section-label">Ensemble <span id="ens-label-lemd" style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">ICON · — üye</span></div>
+      <div id="ens-lemd"><span class="loading">yükleniyor...</span></div>
+      <div class="model-toggle" onclick="toggleModels('lemd')">
+        <span id="toggle-icon-lemd">▸</span> 5 model detayı
+      </div>
+      <div class="model-grid" id="models-lemd"></div>
+    </div>
+  </div>
+
+  <!-- RKSI -->
+  <div class="card">
+    <div class="card-header">
+      <div>
+        <div class="station-name">🇰🇷 RKSI</div>
+        <div class="station-sub">Seoul Incheon</div>
+      </div>
+      <div id="bias-rksi"></div>
+    </div>
+    <div class="summary-box" id="summary-rksi"><span class="loading">yükleniyor...</span></div>
+    <div class="detail-toggle" onclick="toggleDetail('rksi')">
+      <span id="detail-icon-rksi">▸</span> Detaylı analiz
+    </div>
+    <div class="detail-body" id="detail-rksi" style="display:none">
+      <div class="blend-block" style="margin:8px 0 4px">
+        <div class="blend-temp" id="blend-rksi">—</div>
+        <div class="blend-range" id="range-rksi"></div>
+        <div id="unc-rksi"></div>
+      </div>
+      <div class="section-label">Gözlem <span style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">METAR</span></div>
+      <div id="metar-rksi"><span class="loading">yükleniyor...</span></div>
+      <div class="section-label">Saatlik Tahmin</div>
+      <div id="h-rksi"><span class="loading">yükleniyor...</span></div>
+      <div class="section-label">Ensemble <span id="ens-label-rksi" style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">ICON · — üye</span></div>
+      <div id="ens-rksi"><span class="loading">yükleniyor...</span></div>
+      <div class="model-toggle" onclick="toggleModels('rksi')">
+        <span id="toggle-icon-rksi">▸</span> 5 model detayı
+      </div>
+      <div class="model-grid" id="models-rksi"></div>
+    </div>
+  </div>
+
+  <!-- RCTP -->
+  <div class="card">
+    <div class="card-header">
+      <div>
+        <div class="station-name">🇹🇼 RCTP</div>
+        <div class="station-sub">Taipei Taoyuan</div>
+      </div>
+      <div id="bias-rctp"></div>
+    </div>
+    <div class="summary-box" id="summary-rctp"><span class="loading">yükleniyor...</span></div>
+    <div class="detail-toggle" onclick="toggleDetail('rctp')">
+      <span id="detail-icon-rctp">▸</span> Detaylı analiz
+    </div>
+    <div class="detail-body" id="detail-rctp" style="display:none">
+      <div class="blend-block" style="margin:8px 0 4px">
+        <div class="blend-temp" id="blend-rctp">—</div>
+        <div class="blend-range" id="range-rctp"></div>
+        <div id="unc-rctp"></div>
+      </div>
+      <div class="section-label">Gözlem <span style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">METAR · NOAA settlement</span></div>
+      <div id="metar-rctp"><span class="loading">yükleniyor...</span></div>
+      <div class="wu-badge"><span>⚖️ NOAA settlement:</span> <a href="https://www.weather.gov/wrh/timeseries?site=RCTP" target="_blank">RCTP · tam °C</a></div>
+      <div class="section-label">Saatlik Tahmin</div>
+      <div id="h-rctp"><span class="loading">yükleniyor...</span></div>
+      <div class="section-label">Ensemble <span id="ens-label-rctp" style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">ICON · — üye</span></div>
+      <div id="ens-rctp"><span class="loading">yükleniyor...</span></div>
+      <div class="model-toggle" onclick="toggleModels('rctp')">
+        <span id="toggle-icon-rctp">▸</span> 5 model detayı
+      </div>
+      <div class="model-grid" id="models-rctp"></div>
+    </div>
+  </div>
+
+  <!-- RJTT -->
+  <div class="card">
+    <div class="card-header">
+      <div>
+        <div class="station-name">🇯🇵 RJTT</div>
+        <div class="station-sub">Tokyo Haneda</div>
+      </div>
+      <div id="bias-rjtt"></div>
+    </div>
+    <div class="summary-box" id="summary-rjtt"><span class="loading">yükleniyor...</span></div>
+    <div class="detail-toggle" onclick="toggleDetail('rjtt')">
+      <span id="detail-icon-rjtt">▸</span> Detaylı analiz
+    </div>
+    <div class="detail-body" id="detail-rjtt" style="display:none">
+      <div class="blend-block" style="margin:8px 0 4px">
+        <div class="blend-temp" id="blend-rjtt">—</div>
+        <div class="blend-range" id="range-rjtt"></div>
+        <div id="unc-rjtt"></div>
+      </div>
+      <div class="section-label">Gözlem <span style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">METAR</span></div>
+      <div id="metar-rjtt"><span class="loading">yükleniyor...</span></div>
+      <div class="section-label">Saatlik Tahmin</div>
+      <div id="h-rjtt"><span class="loading">yükleniyor...</span></div>
+      <div class="section-label">Ensemble <span id="ens-label-rjtt" style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">ICON · — üye</span></div>
+      <div id="ens-rjtt"><span class="loading">yükleniyor...</span></div>
+      <div class="model-toggle" onclick="toggleModels('rjtt')">
+        <span id="toggle-icon-rjtt">▸</span> 5 model detayı
+      </div>
+      <div class="model-grid" id="models-rjtt"></div>
+    </div>
+  </div>
+
+  <!-- ZBAA -->
+  <div class="card">
+    <div class="card-header">
+      <div>
+        <div class="station-name">🇨🇳 ZBAA</div>
+        <div class="station-sub">Beijing Capital</div>
+      </div>
+      <div id="bias-zbaa"></div>
+    </div>
+    <div class="summary-box" id="summary-zbaa"><span class="loading">yükleniyor...</span></div>
+    <div class="detail-toggle" onclick="toggleDetail('zbaa')">
+      <span id="detail-icon-zbaa">▸</span> Detaylı analiz
+    </div>
+    <div class="detail-body" id="detail-zbaa" style="display:none">
+      <div class="blend-block" style="margin:8px 0 4px">
+        <div class="blend-temp" id="blend-zbaa">—</div>
+        <div class="blend-range" id="range-zbaa"></div>
+        <div id="unc-zbaa"></div>
+      </div>
+      <div class="section-label">Gözlem <span style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">METAR</span></div>
+      <div id="metar-zbaa"><span class="loading">yükleniyor...</span></div>
+      <div class="section-label">Saatlik Tahmin</div>
+      <div id="h-zbaa"><span class="loading">yükleniyor...</span></div>
+      <div class="section-label">Ensemble <span id="ens-label-zbaa" style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">ICON · — üye</span></div>
+      <div id="ens-zbaa"><span class="loading">yükleniyor...</span></div>
+      <div class="model-toggle" onclick="toggleModels('zbaa')">
+        <span id="toggle-icon-zbaa">▸</span> 5 model detayı
+      </div>
+      <div class="model-grid" id="models-zbaa"></div>
+    </div>
+  </div>
+
+  <!-- LFPG -->
+  <div class="card">
+    <div class="card-header">
+      <div>
+        <div class="station-name">🇫🇷 LFPG</div>
+        <div class="station-sub">Paris CDG</div>
+      </div>
+      <div id="bias-lfpg"></div>
+    </div>
+    <div class="summary-box" id="summary-lfpg"><span class="loading">yükleniyor...</span></div>
+    <div class="detail-toggle" onclick="toggleDetail('lfpg')">
+      <span id="detail-icon-lfpg">▸</span> Detaylı analiz
+    </div>
+    <div class="detail-body" id="detail-lfpg" style="display:none">
+      <div class="blend-block" style="margin:8px 0 4px">
+        <div class="blend-temp" id="blend-lfpg">—</div>
+        <div class="blend-range" id="range-lfpg"></div>
+        <div id="unc-lfpg"></div>
+      </div>
+      <div class="section-label">Gözlem <span style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">METAR</span></div>
+      <div id="metar-lfpg"><span class="loading">yükleniyor...</span></div>
+      <div class="section-label">Saatlik Tahmin</div>
+      <div id="h-lfpg"><span class="loading">yükleniyor...</span></div>
+      <div class="section-label">Ensemble <span id="ens-label-lfpg" style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">ICON · — üye</span></div>
+      <div id="ens-lfpg"><span class="loading">yükleniyor...</span></div>
+      <div class="model-toggle" onclick="toggleModels('lfpg')">
+        <span id="toggle-icon-lfpg">▸</span> 5 model detayı
+      </div>
+      <div class="model-grid" id="models-lfpg"></div>
+    </div>
+  </div>
 </div>
 
 <!-- EN İYİ İŞLEMLER -->
@@ -551,6 +744,30 @@ input.thresh-slider {
     <div class="pm-markets-col">
       <div class="pm-col-header">🇹🇷 LTFM — İstanbul Havalimanı</div>
       <div id="pm-markets-ltfm"><span class="loading">yükleniyor...</span></div>
+    </div>
+    <div class="pm-markets-col">
+      <div class="pm-col-header">🇪🇸 LEMD — Madrid Barajas</div>
+      <div id="pm-markets-lemd"><span class="loading">yükleniyor...</span></div>
+    </div>
+    <div class="pm-markets-col">
+      <div class="pm-col-header">🇰🇷 RKSI — Seoul Incheon</div>
+      <div id="pm-markets-rksi"><span class="loading">yükleniyor...</span></div>
+    </div>
+    <div class="pm-markets-col">
+      <div class="pm-col-header">🇹🇼 RCTP — Taipei Taoyuan</div>
+      <div id="pm-markets-rctp"><span class="loading">yükleniyor...</span></div>
+    </div>
+    <div class="pm-markets-col">
+      <div class="pm-col-header">🇯🇵 RJTT — Tokyo Haneda</div>
+      <div id="pm-markets-rjtt"><span class="loading">yükleniyor...</span></div>
+    </div>
+    <div class="pm-markets-col">
+      <div class="pm-col-header">🇨🇳 ZBAA — Beijing Capital</div>
+      <div id="pm-markets-zbaa"><span class="loading">yükleniyor...</span></div>
+    </div>
+    <div class="pm-markets-col">
+      <div class="pm-col-header">🇫🇷 LFPG — Paris CDG</div>
+      <div id="pm-markets-lfpg"><span class="loading">yükleniyor...</span></div>
     </div>
   </div>
 
