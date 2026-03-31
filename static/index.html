@@ -572,7 +572,7 @@ input.thresh-slider {
 </div>
 
 <script>
-const STATIONS = ['eglc', 'ltac', 'limc', 'ltfm'];
+const STATIONS = ['eglc', 'ltac', 'limc', 'ltfm', 'lemd', 'rksi', 'rctp', 'rjtt', 'zbaa', 'lfpg'];
 const KEY_HOURS = ['06:00', '09:00', '12:00', '15:00', '18:00'];
 const MODEL_LABELS = { gfs: 'GFS', ecmwf: 'ECMWF', icon: 'ICON', ukmo: 'UKMO', meteofrance: 'MF' };
 
@@ -984,7 +984,7 @@ function renderBias(id) {
 }
 
 // --- TOP TRADES ---
-const STATION_FLAGS = { eglc: '🇬🇧', ltac: '🇹🇷', limc: '🇮🇹', ltfm: '🇹🇷' };
+const STATION_FLAGS = { eglc: '🇬🇧', ltac: '🇹🇷', limc: '🇮🇹', ltfm: '🇹🇷', lemd: '🇪🇸', rksi: '🇰🇷', rctp: '🇹🇼', rjtt: '🇯🇵', zbaa: '🇨🇳', lfpg: '🇫🇷' };
 
 function computeTopTrades() {
   const date = dates[activeDay];
@@ -1358,7 +1358,7 @@ async function loadPolymarket(id) {
 // --- METAR ENSEMBLE SENSÖRÜ (İyileştirme #4) ---
 // 15:00 sonrası: METAR day_max bir alt sınır.
 // Observed max'ın altında kalan ensemble üyeleri → imkânsız → max'a yuvarla.
-const TZ_MAP = { eglc: 'Europe/London', ltac: 'Europe/Istanbul', limc: 'Europe/Rome', ltfm: 'Europe/Istanbul' };
+const TZ_MAP = { eglc: 'Europe/London', ltac: 'Europe/Istanbul', limc: 'Europe/Rome', ltfm: 'Europe/Istanbul', lemd: 'Europe/Madrid', rksi: 'Asia/Seoul', rctp: 'Asia/Taipei', rjtt: 'Asia/Tokyo', zbaa: 'Asia/Shanghai', lfpg: 'Europe/Paris' };
 
 function localHourFor(id) {
   return parseInt(new Date().toLocaleString('en-US', { timeZone: TZ_MAP[id] || 'UTC', hour: 'numeric', hour12: false }), 10);
@@ -1634,7 +1634,7 @@ async function refreshLive() {
 setInterval(() => { if (!_isLoading) refreshLive(); }, 20 * 60 * 1000);
 
 // --- WALLET & PORTFÖY ---
-const CITY_SLUG = { eglc: 'london', ltac: 'ankara', limc: 'milan', ltfm: 'istanbul' };
+const CITY_SLUG = { eglc: 'london', ltac: 'ankara', limc: 'milan', ltfm: 'istanbul', lemd: 'madrid', rksi: 'seoul', rctp: 'taipei', rjtt: 'tokyo', zbaa: 'beijing', lfpg: 'paris' };
 const MONTH_EN  = ['january','february','march','april','may','june','july','august','september','october','november','december'];
 
 function walletInputChange() {
