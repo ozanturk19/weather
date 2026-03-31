@@ -23,12 +23,12 @@ STATIONS = {
     "ltac": {"lat": 40.128, "lon": 32.995, "tz": "Europe/Istanbul", "label": "LTAC (Ankara Esenboğa)", "pm_query": "Ankara"},
     "limc": {"lat": 45.627, "lon": 8.723,  "tz": "Europe/Rome",     "label": "LIMC (Milano Malpensa)", "pm_query": "Milan"},
     "ltfm": {"lat": 41.262, "lon": 28.742, "tz": "Europe/Istanbul", "label": "LTFM (İstanbul)",        "pm_query": "Istanbul"},
-    "lemd": {"lat": 40.472, "lon": -3.561, "tz": "Europe/Madrid", "label": "LEMD", "pm_query": "Madrid"},
-    "rksi": {"lat": 37.469, "lon": 126.451, "tz": "Asia/Seoul", "label": "RKSI", "pm_query": "Seoul"},
-    "rctp": {"lat": 25.077, "lon": 121.233, "tz": "Asia/Taipei", "label": "RCTP", "pm_query": "Taipei", "settlement": "noaa"},
-    "rjtt": {"lat": 35.552, "lon": 139.780, "tz": "Asia/Tokyo", "label": "RJTT", "pm_query": "Tokyo"},
-    "zbaa": {"lat": 40.080, "lon": 116.584, "tz": "Asia/Shanghai", "label": "ZBAA", "pm_query": "Beijing"},
-    "lfpg": {"lat": 49.009, "lon": 2.547, "tz": "Europe/Paris", "label": "LFPG", "pm_query": "Paris"},
+    "lemd": {"lat": 40.472, "lon": -3.561,  "tz": "Europe/Madrid",   "label": "LEMD (Madrid)",   "pm_query": "Madrid",  "settlement": "wu"},
+    "rksi": {"lat": 37.469, "lon": 126.451, "tz": "Asia/Seoul",      "label": "RKSI (Seoul)",    "pm_query": "Seoul",   "settlement": "wu"},
+    "rctp": {"lat": 25.077, "lon": 121.233, "tz": "Asia/Taipei",     "label": "RCTP (Taipei)",   "pm_query": "Taipei",  "settlement": "noaa"},
+    "rjtt": {"lat": 35.552, "lon": 139.780, "tz": "Asia/Tokyo",      "label": "RJTT (Tokyo)",    "pm_query": "Tokyo",   "settlement": "wu"},
+    "zbaa": {"lat": 40.080, "lon": 116.584, "tz": "Asia/Shanghai",   "label": "ZBAA (Beijing)",  "pm_query": "Beijing", "settlement": "wu"},
+    "lfpg": {"lat": 49.009, "lon": 2.547,  "tz": "Europe/Paris",    "label": "LFPG (Paris)",    "pm_query": "Paris",   "settlement": "wu"},
 }
 
 # Her model için Open-Meteo model adı

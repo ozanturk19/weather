@@ -110,7 +110,9 @@ h1::before {
 .pos-badge { display:inline-block; font-size:9px; font-weight:700; background:var(--accent-dim); color:var(--accent); padding:1px 5px; border-radius:3px; margin-left:4px; vertical-align:middle; font-family:var(--mono); }
 
 /* Cards */
-.grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-bottom:12px; }
+.grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin-bottom:12px; }
+@media (max-width:1200px) { .grid { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+@media (max-width:900px)  { .grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 .card { background:var(--bg-card); border:1px solid var(--border); border-radius:14px; padding:16px; box-shadow:var(--shadow); transition:box-shadow .2s,border-color .2s; }
 .card:hover { box-shadow:var(--shadow-md); border-color:#cbd5e1; }
 
@@ -325,7 +327,7 @@ input.thresh-slider {
 
 @media (max-width:700px) {
   body { padding:14px 12px 40px; }
-  .grid { grid-template-columns:1fr; }
+  .grid { grid-template-columns:1fr !important; }
   .pm-markets-grid { grid-template-columns:1fr; }
   .day-tabs { width:100%; }
   .day-tab { flex:1; padding:6px 8px; }
@@ -541,8 +543,9 @@ input.thresh-slider {
         <div class="blend-range" id="range-lemd"></div>
         <div id="unc-lemd"></div>
       </div>
-      <div class="section-label">Gözlem <span style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">METAR</span></div>
+      <div class="section-label">Gözlem <span style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">METAR · WU settlement</span></div>
       <div id="metar-lemd"><span class="loading">yükleniyor...</span></div>
+      <div class="wu-badge"><span>⚖️ WU settlement:</span> <a href="https://www.wunderground.com/history/daily/es/madrid/LEMD" target="_blank">LEMD · tam °C</a></div>
       <div class="section-label">Saatlik Tahmin</div>
       <div id="h-lemd"><span class="loading">yükleniyor...</span></div>
       <div class="section-label">Ensemble <span id="ens-label-lemd" style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">ICON · — üye</span></div>
@@ -573,8 +576,9 @@ input.thresh-slider {
         <div class="blend-range" id="range-rksi"></div>
         <div id="unc-rksi"></div>
       </div>
-      <div class="section-label">Gözlem <span style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">METAR</span></div>
+      <div class="section-label">Gözlem <span style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">METAR · WU settlement</span></div>
       <div id="metar-rksi"><span class="loading">yükleniyor...</span></div>
+      <div class="wu-badge"><span>⚖️ WU settlement:</span> <a href="https://www.wunderground.com/history/daily/kr/seoul/RKSI" target="_blank">RKSI · tam °C</a></div>
       <div class="section-label">Saatlik Tahmin</div>
       <div id="h-rksi"><span class="loading">yükleniyor...</span></div>
       <div class="section-label">Ensemble <span id="ens-label-rksi" style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">ICON · — üye</span></div>
@@ -638,8 +642,9 @@ input.thresh-slider {
         <div class="blend-range" id="range-rjtt"></div>
         <div id="unc-rjtt"></div>
       </div>
-      <div class="section-label">Gözlem <span style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">METAR</span></div>
+      <div class="section-label">Gözlem <span style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">METAR · WU settlement</span></div>
       <div id="metar-rjtt"><span class="loading">yükleniyor...</span></div>
+      <div class="wu-badge"><span>⚖️ WU settlement:</span> <a href="https://www.wunderground.com/history/daily/jp/tokyo/RJTT" target="_blank">RJTT · tam °C</a></div>
       <div class="section-label">Saatlik Tahmin</div>
       <div id="h-rjtt"><span class="loading">yükleniyor...</span></div>
       <div class="section-label">Ensemble <span id="ens-label-rjtt" style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">ICON · — üye</span></div>
@@ -670,8 +675,9 @@ input.thresh-slider {
         <div class="blend-range" id="range-zbaa"></div>
         <div id="unc-zbaa"></div>
       </div>
-      <div class="section-label">Gözlem <span style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">METAR</span></div>
+      <div class="section-label">Gözlem <span style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">METAR · WU settlement</span></div>
       <div id="metar-zbaa"><span class="loading">yükleniyor...</span></div>
+      <div class="wu-badge"><span>⚖️ WU settlement:</span> <a href="https://www.wunderground.com/history/daily/cn/beijing/ZBAA" target="_blank">ZBAA · tam °C</a></div>
       <div class="section-label">Saatlik Tahmin</div>
       <div id="h-zbaa"><span class="loading">yükleniyor...</span></div>
       <div class="section-label">Ensemble <span id="ens-label-zbaa" style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">ICON · — üye</span></div>
@@ -702,8 +708,9 @@ input.thresh-slider {
         <div class="blend-range" id="range-lfpg"></div>
         <div id="unc-lfpg"></div>
       </div>
-      <div class="section-label">Gözlem <span style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">METAR</span></div>
+      <div class="section-label">Gözlem <span style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">METAR · WU settlement</span></div>
       <div id="metar-lfpg"><span class="loading">yükleniyor...</span></div>
+      <div class="wu-badge"><span>⚖️ WU settlement:</span> <a href="https://www.wunderground.com/history/daily/fr/paris/LFPG" target="_blank">LFPG · tam °C</a></div>
       <div class="section-label">Saatlik Tahmin</div>
       <div id="h-lfpg"><span class="loading">yükleniyor...</span></div>
       <div class="section-label">Ensemble <span id="ens-label-lfpg" style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">ICON · — üye</span></div>
