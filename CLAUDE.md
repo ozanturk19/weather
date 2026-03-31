@@ -2,9 +2,11 @@
 
 ## Git Kuralları
 - **Git push için daima `Bash` aracını kullan** — MCP GitHub tool kullanma
-- SSH key ile push çalışıyor: `git push origin <branch>`
 - Varsayılan branch: `main`
-- Remote: `git@github.com:ozanturk19/weather.git`
+- Remote: `https://github.com/ozanturk19/weather.git`
+- Push öncesi remote URL'yi HTTPS+PAT ile ayarla:
+  `git remote set-url origin https://GITHUB_PAT@github.com/ozanturk19/weather.git`
+- PAT yoksa kullanıcıdan iste
 
 ## Proje
 - FastAPI backend: `main.py` (port 8001)
