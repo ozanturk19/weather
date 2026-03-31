@@ -9,10 +9,12 @@
 - PAT yoksa kullanıcıdan iste
 
 ## Proje
+- Yerel dizin: `/Users/mac/Projects Weather`
+- VPS dizin: `/root/weather` (git pull ile güncellenir)
 - FastAPI backend: `main.py` (port 8001)
 - Frontend: `static/index.html`
 - Bias verisi: `predictions.json` (gitignored, kaydetme)
-- Servis: `systemctl status weather`
+- Servis: `systemctl status weather` (VPS'te)
 
 ## İstasyonlar
 - EGLC — Londra City
