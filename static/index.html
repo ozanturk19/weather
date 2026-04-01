@@ -1546,16 +1546,29 @@ async function loadAll() {
       set('metar-',    'innerHTML',   '<span class="loading">yükleniyor...</span>');
       set('models-',   'innerHTML',   '');
     });
-    await Promise.all(STATIONS.map(id => loadStation(id)));
+    // Batch yükleme: 4'er 4'er — VPS'i ve dış API'leri bunaltmaz
+    const BATCH = 4;
+    for (let i = 0; i < STATIONS.length; i += BATCH) {
+      await Promise.all(
+        STATIONS.slice(i, i + BATCH).map(id =>
+          loadStation(id).then(() => {
+            // Her istasyon gelince hemen render et
+            try { renderStation(id); renderMetar(id); renderEnsemble(id); renderBias(id); renderSummary(id); }
+            catch(e) { console.error('[render]', id, e); }
+          })
+        )
+      );
+    }
+    // PM hafif istek — hepsini paralel çek
     await Promise.all(STATIONS.map(id => loadPolymarket(id)));
-    renderAll();
-    STATIONS.forEach(id => renderMarkets(id));
-    renderTopTrades();
+    STATIONS.forEach(id => { try { renderMarkets(id); } catch(e) { console.error('[renderMarkets]', id, e); } });
+    try { renderTopTrades(); } catch(e) { console.error('[renderTopTrades]', e); }
     document.getElementById('positions-sub').textContent =
       `${dates[activeDay]} · Ensemble + 5 model · WU yuvarlama dahil`;
     document.getElementById('status').textContent =
       `✓ Güncellendi — ${new Date().toLocaleTimeString('tr-TR')}`;
   } catch(e) {
+    console.error('[loadAll]', e);
     document.getElementById('status').textContent = '⚠ Yüklenirken hata oluştu — yenileyin';
   } finally {
     finishProgress();
