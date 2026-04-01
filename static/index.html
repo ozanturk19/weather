@@ -1329,7 +1329,7 @@ function renderTopTrades() {
     return;
   }
 
-  const stationLabels = { eglc: 'EGLC', ltac: 'LTAC', limc: 'LIMC', ltfm: 'LTFM' };
+  const stationLabels = { eglc: 'EGLC · Londra', ltac: 'LTAC · Ankara', limc: 'LIMC · Milano', ltfm: 'LTFM · İstanbul', lemd: 'LEMD · Madrid', rksi: 'RKSI · Seoul', rctp: 'RCTP · Taipei', rjtt: 'RJTT · Tokyo', zbaa: 'ZBAA · Pekin', lfpg: 'LFPG · Paris' };
   const sel = selections;
 
   listEl.innerHTML = trades.map((t, idx) => {
