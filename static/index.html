@@ -1843,7 +1843,7 @@ function updateSelectedRow() {
   row.style.display = 'block';
   cnt.textContent = `${entries.length} pozisyon seçildi`;
 
-  const stationLabels = { eglc: '🇬🇧 EGLC', ltac: '🇹🇷 LTAC', limc: '🇮🇹 LIMC', ltfm: '🇹🇷 LTFM' };
+  const stationLabels = { eglc: '🇬🇧 EGLC', ltac: '🇹🇷 LTAC', limc: '🇮🇹 LIMC', ltfm: '🇹🇷 LTFM', lemd: '🇪🇸 LEMD', rksi: '🇰🇷 RKSI', rctp: '🇹🇼 RCTP', rjtt: '🇯🇵 RJTT', zbaa: '🇨🇳 ZBAA', lfpg: '🇫🇷 LFPG' };
 
   list.innerHTML = entries.map(([sid, sel]) => {
     const badge = sel.side === 'yes'
