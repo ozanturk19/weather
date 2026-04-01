@@ -1534,18 +1534,18 @@ async function loadAll() {
   document.getElementById('status').textContent = 'Veriler çekiliyor...';
   startProgress();
 
-  STATIONS.forEach(id => {
-    document.getElementById('blend-' + id).textContent  = '—';
-    document.getElementById('range-' + id).textContent  = '';
-    document.getElementById('unc-' + id).innerHTML      = '';
-    document.getElementById('bias-' + id).innerHTML     = '';
-    document.getElementById('h-' + id).innerHTML        = '<span class="loading">yükleniyor...</span>';
-    document.getElementById('ens-' + id).innerHTML      = '<span class="loading">yükleniyor...</span>';
-    document.getElementById('metar-' + id).innerHTML    = '<span class="loading">yükleniyor...</span>';
-    document.getElementById('models-' + id).innerHTML   = '';
-  });
-
   try {
+    STATIONS.forEach(id => {
+      const set = (sel, prop, val) => { const el = document.getElementById(sel+id); if (el) el[prop] = val; };
+      set('blend-',    'textContent', '—');
+      set('range-',    'textContent', '');
+      set('unc-',      'innerHTML',   '');
+      set('bias-',     'innerHTML',   '');
+      set('h-',        'innerHTML',   '<span class="loading">yükleniyor...</span>');
+      set('ens-',      'innerHTML',   '<span class="loading">yükleniyor...</span>');
+      set('metar-',    'innerHTML',   '<span class="loading">yükleniyor...</span>');
+      set('models-',   'innerHTML',   '');
+    });
     await Promise.all(STATIONS.map(id => loadStation(id)));
     await Promise.all(STATIONS.map(id => loadPolymarket(id)));
     renderAll();
