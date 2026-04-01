@@ -904,19 +904,38 @@ function renderStation(id) {
 
   const { blend, models } = dayData;
 
-  // Blend değer (bias düzeltmeli ek gösterim)
-  const biasCorrVal = biasCache[id]?.bias_7d;
-  if (blend.max_temp != null && biasCorrVal != null && Math.abs(biasCorrVal) >= 0.5) {
-    const corrected = (blend.max_temp - biasCorrVal).toFixed(1);
-    document.getElementById('blend-' + id).innerHTML =
-      `${blend.max_temp.toFixed(1)}°C <span style="font-size:13px;color:${biasCorrVal<0?'#1d4ed8':'#b91c1c'};font-family:var(--mono)" title="Bias düzeltmeli tahmin">→ ${corrected}°C</span>`;
+  // Blend değer: bias_corrected_blend varsa onu göster, yoksa ham blend
+  const corrBlend = blend.bias_active && blend.bias_corrected_blend != null
+    ? blend.bias_corrected_blend : null;
+  const displayBlend = corrBlend ?? blend.max_temp;
+
+  if (blend.max_temp != null) {
+    if (corrBlend != null && Math.abs(corrBlend - blend.max_temp) >= 0.2) {
+      document.getElementById('blend-' + id).innerHTML =
+        `${blend.max_temp.toFixed(1)}°C <span style="font-size:13px;color:${corrBlend>blend.max_temp?'#1d4ed8':'#b91c1c'};font-family:var(--mono)" title="Bias düzeltmeli tahmin (${blend.bias_count}g veri)">→ ${corrBlend.toFixed(1)}°C</span>`;
+    } else {
+      document.getElementById('blend-' + id).textContent = blend.max_temp.toFixed(1) + '°C';
+    }
   } else {
-    document.getElementById('blend-' + id).textContent =
-      blend.max_temp != null ? blend.max_temp.toFixed(1) + '°C' : '—';
+    document.getElementById('blend-' + id).textContent = '—';
   }
 
-  document.getElementById('range-' + id).textContent =
-    blend.min_max != null ? `${blend.min_max} – ${blend.max_max}°C · ${Object.keys(models).length} model` : '';
+  // Outlier uyarısı
+  const outlierBadge = (blend.outliers_removed?.length > 0)
+    ? ` · <span style="color:#b45309;font-size:11px" title="${blend.outliers_removed.join(', ')} hariç tutuldu (${OUTLIER_THRESHOLD || 5}°C+ sapma)">⚠ ${blend.outliers_removed.join('+')} outlier</span>`
+    : '';
+
+  // WU yuvarlama riski: blend tam sayıya 0.3°C'den fazla yakınsa
+  const settlement = SETTLEMENT_SRC?.[id] || 'WU';
+  const wuRisk = settlement === 'WU' && displayBlend != null
+    && Math.abs(displayBlend - Math.round(displayBlend)) > 0.25
+    ? ` · <span style="color:#92400e;font-size:11px" title="WU Fahrenheit→Celsius dönüşümü ±0.3°C belirsizlik yaratabilir">⚠ WU sınır</span>`
+    : '';
+
+  document.getElementById('range-' + id).innerHTML =
+    blend.min_max != null
+      ? `${blend.min_max} – ${blend.max_max}°C · ${(blend.models_used || Object.keys(models)).length} model${outlierBadge}${wuRisk}`
+      : '';
 
   // Ensemble P50 ile blend arasındaki uyumsuzluk uyarısı
   const ensP50 = ensCache[id]?.days?.[date]?.p50;
@@ -983,8 +1002,10 @@ function renderEnsemble(id) {
   const p75pct = Math.round(((p75 - lo) / span) * 100);
   const p50pct = Math.round(((p50 - lo) / span) * 100);
 
-  // Varsayılan eşik: blend max'a en yakın tam sayı
-  const blendMax = cache[id]?.days?.[date]?.blend?.max_temp;
+  // Varsayılan eşik: bias düzeltmeli blend'e en yakın tam sayı
+  const blendObj   = cache[id]?.days?.[date]?.blend;
+  const blendMax   = (blendObj?.bias_active && blendObj?.bias_corrected_blend != null)
+    ? blendObj.bias_corrected_blend : blendObj?.max_temp;
   const defaultThresh = blendMax != null ? Math.round(blendMax) : Math.round(p50);
 
   ensEl.innerHTML = `
@@ -1181,12 +1202,11 @@ function renderAll() {
 
 // --- BIAS BADGE ---
 // API bias_7d zaten üstel ağırlıklı + MAE-capped.
-// Ek olarak ilk 5 gün için kademeli güven ağırlığı uygula.
+// En az 7 gün veri olmadan bias düzeltmesi aktif değil.
 function getEffectiveBias(id) {
   const b = biasCache[id];
-  if (!b || b.count < 1) return 0;
-  const weight = Math.min(1, b.count / 5);
-  return b.bias_7d * weight;
+  if (!b || !b.bias_active) return 0;
+  return b.bias_7d;
 }
 
 function renderBias(id) {
@@ -1196,18 +1216,23 @@ function renderBias(id) {
   if (!b || b.count < 1) { el.innerHTML = ''; return; }
   const raw = b.bias_7d;
   const mae = b.mae;
+  if (!b.bias_active) {
+    const remaining = 7 - b.count;
+    el.innerHTML = `<span class="bias-badge bias-ok" title="Bias düzeltmesi için ${remaining} gün daha gerekli">bias: ${b.count}/7g</span>`;
+    return;
+  }
   if (Math.abs(raw) < 0.3) { el.innerHTML = `<span class="bias-badge bias-ok">bias ≈0</span>`; return; }
   const cls   = raw > 0 ? 'bias-warm' : 'bias-cold';
   const label = raw > 0 ? `model +${raw.toFixed(1)}°C sıcak` : `model ${raw.toFixed(1)}°C soğuk`;
   const maeStr = mae != null ? ` ±${mae.toFixed(1)}` : '';
-  const note  = b.count < 5
-    ? ` (${b.count}g · %${Math.round(b.count/5*100)} güven)`
-    : ` (${b.count}g${maeStr}°C MAE)`;
+  const note  = ` (${b.count}g${maeStr}°C MAE)`;
   el.innerHTML = `<span class="bias-badge ${cls}" title="Üstel ağırlıklı bias, MAE ile sınırlı. ${b.count} gün veri.">${label}${note}</span>`;
 }
 
 // --- TOP TRADES ---
-const STATION_FLAGS = { eglc: '🇬🇧', ltac: '🇹🇷', limc: '🇮🇹', ltfm: '🇹🇷', lemd: '🇪🇸', rksi: '🇰🇷', rctp: '🇹🇼', rjtt: '🇯🇵', zbaa: '🇨🇳', lfpg: '🇫🇷' };
+const STATION_FLAGS  = { eglc: '🇬🇧', ltac: '🇹🇷', limc: '🇮🇹', ltfm: '🇹🇷', lemd: '🇪🇸', rksi: '🇰🇷', rctp: '🇹🇼', rjtt: '🇯🇵', zbaa: '🇨🇳', lfpg: '🇫🇷' };
+const SETTLEMENT_SRC = { eglc: 'WU', ltac: 'WU', limc: 'WU', ltfm: 'NOAA', lemd: 'WU', rksi: 'WU', rctp: 'NOAA', rjtt: 'WU', zbaa: 'WU', lfpg: 'WU' };
+const OUTLIER_THRESHOLD = 5;
 
 function computeTopTrades() {
   const date = dates[activeDay];
@@ -1700,16 +1725,20 @@ function renderMarkets(id) {
   const rawMaxes  = ens?.member_maxes || [];
   const maxes     = censorEnsemble(id, rawMaxes);   // İyileştirme #4
   const dayData   = cache[id]?.days?.[date] || {};
-  const blendMax  = dayData.blend?.max_temp;
+  const blendRaw  = dayData.blend?.max_temp;
+  // Bias düzeltmeli blend varsa onu kullan, yoksa ham blend
+  const blendMax  = (dayData.blend?.bias_active && dayData.blend?.bias_corrected_blend != null)
+    ? dayData.blend.bias_corrected_blend : blendRaw;
   const modelDist = modelDistribution(dayData.models || {});
   const bias      = getEffectiveBias(id);
 
   const lockedMax = getLockedMax(id);
 
   const bCount   = biasCache[id]?.count || 0;
-  const biasNote = Math.abs(bias) >= 0.5
+  const bActive  = biasCache[id]?.bias_active || false;
+  const biasNote = bActive && Math.abs(bias) >= 0.3
     ? `<span style="font-size:10px;font-weight:600;background:${bias<0?'rgba(59,130,246,.12)':'rgba(239,68,68,.12)'};color:${bias>0?'#b91c1c':'#1d4ed8'};padding:1px 5px;border-radius:3px;margin-left:5px" title="${bCount}g veri ile bias düzeltmesi aktif">⟳ bias ${bias>0?'+':''}${bias.toFixed(1)}°C (${bCount}g)</span>`
-    : '';
+    : (!bActive && bCount > 0 ? `<span style="font-size:10px;color:#6b7280;margin-left:5px">bias: ${bCount}/7g</span>` : '');
 
   let html = `
     <div class="pm-event-meta">

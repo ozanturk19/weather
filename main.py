@@ -40,6 +40,21 @@ MODELS = {
     "meteofrance": "meteofrance_seamless",
 }
 
+# Model ağırlıkları: ECMWF küresel en doğru, GFS Asya'da zayıf
+MODEL_WEIGHTS = {
+    "ecmwf":       2.0,
+    "icon":        1.0,
+    "gfs":         0.8,
+    "ukmo":        0.9,
+    "meteofrance": 1.0,
+}
+
+# Basit ortalamadan bu kadar sapan model outlier sayılır
+OUTLIER_THRESHOLD = 5.0
+
+# Bias düzeltmesi için minimum gün sayısı
+BIAS_MIN_DAYS = 7
+
 KEY_HOURS = ["06:00", "09:00", "12:00", "15:00", "18:00"]
 
 
@@ -72,14 +87,36 @@ def parse_hourly(data: dict) -> dict:
 
 
 def blend_day(models_data: dict) -> dict:
-    """Tüm modellerin max temp'lerini blend et."""
-    maxes = [v["max_temp"] for v in models_data.values() if v.get("max_temp") is not None]
-    if not maxes:
-        return {"max_temp": None, "min_max": None, "max_max": None, "spread": None, "uncertainty": "?"}
+    """Ağırlıklı blend; outlier modeller otomatik hariç tutulur."""
+    model_maxes = {
+        name: v["max_temp"]
+        for name, v in models_data.items()
+        if v.get("max_temp") is not None
+    }
+    if not model_maxes:
+        return {
+            "max_temp": None, "min_max": None, "max_max": None,
+            "spread": None, "uncertainty": "?",
+            "outliers_removed": [], "models_used": [],
+        }
 
-    blend  = round(sum(maxes) / len(maxes), 1)
-    lo     = round(min(maxes), 1)
-    hi     = round(max(maxes), 1)
+    values = list(model_maxes.values())
+
+    # 1. Adım: outlier tespiti için basit ortalama
+    simple_mean = sum(values) / len(values)
+
+    # 2. Adım: OUTLIER_THRESHOLD°C'den fazla sapan modelleri çıkar
+    filtered = {k: v for k, v in model_maxes.items() if abs(v - simple_mean) < OUTLIER_THRESHOLD}
+    if not filtered:
+        filtered = model_maxes  # güvenlik: hepsini çıkarma
+    outliers_removed = [k for k in model_maxes if k not in filtered]
+
+    # 3. Adım: ECMWF 2x ağırlıklı ortalama
+    total_w = sum(MODEL_WEIGHTS.get(k, 1.0) for k in filtered)
+    blend   = round(sum(v * MODEL_WEIGHTS.get(k, 1.0) for k, v in filtered.items()) / total_w, 1)
+
+    lo     = round(min(filtered.values()), 1)
+    hi     = round(max(filtered.values()), 1)
     spread = round(hi - lo, 1)
 
     if spread < 1.0:
@@ -89,29 +126,35 @@ def blend_day(models_data: dict) -> dict:
     else:
         uncertainty = "Yüksek"
 
-    # Saatlik blend
-    all_hours: dict = {}  # hour -> list of temps
-    for model_day in models_data.values():
+    # Saatlik ağırlıklı blend (outlier modeller hariç)
+    all_hours: dict = {}  # hour -> list of (temp, weight)
+    for model_name, model_day in models_data.items():
+        if model_name in outliers_removed:
+            continue
+        w = MODEL_WEIGHTS.get(model_name, 1.0)
         for h in model_day.get("hours", []):
             if h["temp"] is not None:
-                all_hours.setdefault(h["hour"], []).append(h["temp"])
+                all_hours.setdefault(h["hour"], []).append((h["temp"], w))
 
     hourly_blend = []
-    for hour, temps in sorted(all_hours.items()):
-        # precip / wind sadece GFS'ten al (en güvenilir kaynak)
+    for hour, tw_list in sorted(all_hours.items()):
+        total_wh = sum(w for _, w in tw_list)
+        avg_temp = sum(t * w for t, w in tw_list) / total_wh
         hourly_blend.append({
             "hour": hour,
-            "temp": round(sum(temps) / len(temps), 1),
-            "n":    len(temps),  # kaç model agree etti
+            "temp": round(avg_temp, 1),
+            "n":    len(tw_list),
         })
 
     return {
-        "max_temp":    blend,
-        "min_max":     lo,
-        "max_max":     hi,
-        "spread":      spread,
-        "uncertainty": uncertainty,
-        "hours":       hourly_blend,
+        "max_temp":         blend,
+        "min_max":          lo,
+        "max_max":          hi,
+        "spread":           spread,
+        "uncertainty":      uncertainty,
+        "hours":            hourly_blend,
+        "outliers_removed": outliers_removed,
+        "models_used":      list(filtered.keys()),
     }
 
 
@@ -162,6 +205,32 @@ async def get_weather(station: str):
             "models": per_model,
             "blend":  blend_day(per_model),
         }
+
+    # Bias düzeltmesi: predictions.json'dan sistematik hatayı hesapla
+    preds = _load_preds()
+    bias_entries = []
+    for date_key, e in sorted(preds.get(station, {}).items()):
+        if e.get("blend") is not None and e.get("actual") is not None:
+            bias_entries.append(e["blend"] - e["actual"])
+
+    recent_bias = bias_entries[-7:]
+    bias_active  = len(recent_bias) >= BIAS_MIN_DAYS
+    bias_correction = 0.0
+    if bias_active:
+        w       = [2 ** i for i in range(len(recent_bias))]
+        w_bias  = sum(err * wi for err, wi in zip(recent_bias, w)) / sum(w)
+        mae     = sum(abs(e) for e in recent_bias) / len(recent_bias)
+        bias_correction = round(max(-mae, min(mae, w_bias)), 2)
+
+    for date_key in days_result:
+        b = days_result[date_key]["blend"]
+        b["bias_count"]       = len(recent_bias)
+        b["bias_active"]      = bias_active
+        b["bias_correction"]  = round(-bias_correction, 2)   # blend'e eklenecek miktar
+        if b["max_temp"] is not None:
+            b["bias_corrected_blend"] = round(b["max_temp"] - bias_correction, 1)
+        else:
+            b["bias_corrected_blend"] = None
 
     return {"station": station, "days": days_result}
 
@@ -507,7 +576,8 @@ async def get_prediction_bias(station: str):
             })
     recent = entries[-7:]
     if not recent:
-        return {"station": station, "bias_7d": 0.0, "mae": 0.0, "count": 0, "entries": []}
+        return {"station": station, "bias_7d": 0.0, "mae": 0.0, "count": 0,
+                "bias_active": False, "entries": []}
 
     # Üstel ağırlıklı ortalama: en yeni gün en yüksek ağırlık (2^i)
     # [eski ... yeni] → weights [1, 2, 4, 8, ...]
@@ -521,11 +591,12 @@ async def get_prediction_bias(station: str):
     bias = round(max(-mae, min(mae, w_bias)), 2)
 
     return {
-        "station":  station,
-        "bias_7d":  bias,
-        "mae":      round(mae, 2),
-        "count":    len(recent),
-        "entries":  entries[-14:],
+        "station":    station,
+        "bias_7d":    bias,
+        "mae":        round(mae, 2),
+        "count":      len(recent),
+        "bias_active": len(recent) >= BIAS_MIN_DAYS,
+        "entries":    entries[-14:],
     }
 
 
