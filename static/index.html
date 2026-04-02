@@ -96,6 +96,27 @@ h1::before {
 /* Portföy */
 .portfolio-box { background:var(--bg-card); border:1px solid var(--border); border-radius:14px; padding:16px 20px; margin-top:10px; box-shadow:var(--shadow); }
 .portfolio-box h2 { font-size:14px; font-weight:700; margin-bottom:4px; }
+.report-box { background:var(--bg-card); border:1px solid var(--border); border-radius:14px; padding:20px 24px; margin-top:10px; box-shadow:var(--shadow); }
+.report-title { font-size:16px; font-weight:700; margin-bottom:2px; }
+.report-meta  { font-size:12px; color:var(--text-3); margin-bottom:18px; font-family:var(--mono); }
+.report-section { margin-bottom:20px; }
+.report-section h3 { font-size:13px; font-weight:700; color:var(--text-2); text-transform:uppercase; letter-spacing:.5px; margin-bottom:10px; border-bottom:1px solid var(--border); padding-bottom:6px; }
+.report-table { width:100%; border-collapse:collapse; font-size:13px; }
+.report-table th { font-size:11px; color:var(--text-3); font-weight:600; text-align:left; padding:5px 8px; border-bottom:2px solid var(--border); white-space:nowrap; }
+.report-table th.r { text-align:right; }
+.report-table td { padding:8px 8px; border-bottom:1px solid var(--bg-subtle); vertical-align:middle; }
+.report-table td.r { text-align:right; font-family:var(--mono); }
+.report-table tr:last-child td { border-bottom:none; }
+.report-edge-pos { color:#15803d; font-weight:700; }
+.report-edge-neg { color:#b91c1c; }
+.report-edge-neu { color:var(--text-3); }
+.report-star { color:#f59e0b; font-size:14px; }
+.report-warn { background:#fffbe6; border:1px solid #fcd34d; border-radius:8px; padding:10px 14px; font-size:12px; color:#92400e; margin-bottom:12px; }
+.report-note { font-size:11px; color:var(--text-3); margin-top:16px; font-style:italic; }
+.report-acc-badge { display:inline-block; font-size:11px; font-weight:700; padding:2px 7px; border-radius:5px; }
+.report-acc-good  { background:#d1fae5; color:#065f46; }
+.report-acc-mid   { background:#fef3c7; color:#92400e; }
+.report-acc-bad   { background:#fee2e2; color:#991b1b; }
 .pos-table { width:100%; border-collapse:collapse; margin-top:10px; }
 .pos-table th { font-size:10px; font-weight:600; color:var(--text-3); text-transform:uppercase; letter-spacing:.5px; padding:5px 10px; border-bottom:2px solid var(--border); text-align:left; white-space:nowrap; }
 .pos-table th.r { text-align:right; }
@@ -383,6 +404,9 @@ input.thresh-slider {
     <button class="day-tab" onclick="selectDay(2)">
       <span class="tab-label">Öbür Gün</span>
       <span class="tab-date" id="label-2"></span>
+    </button>
+    <button class="day-tab" id="tab-report" onclick="selectReport()">
+      <span class="tab-label">📋 Günlük Rapor</span>
     </button>
   </div>
   <button class="btn btn-primary" id="refreshBtn" onclick="loadAll()">↻ Yenile</button>
@@ -788,6 +812,13 @@ input.thresh-slider {
   </div>
 </div>
 
+<!-- GÜNLÜK RAPOR -->
+<div id="daily-report-panel" style="display:none">
+  <div class="report-box" id="report-content">
+    <span class="loading">Rapor hazırlanıyor...</span>
+  </div>
+</div>
+
 <!-- PORTFÖY -->
 <div class="portfolio-box" id="portfolio-box" style="display:none">
   <h2>💼 Açık Hava Pozisyonları</h2>
@@ -857,7 +888,12 @@ function initDates() {
 
 function selectDay(idx) {
   activeDay = idx;
-  document.querySelectorAll('.day-tab').forEach((t, i) => t.classList.toggle('active', i === idx));
+  document.getElementById('daily-report-panel').style.display = 'none';
+  document.getElementById('tab-report').classList.remove('active');
+  document.querySelector('.grid').style.display = '';
+  document.getElementById('top-trades-box').style.display = '';
+  document.querySelector('.positions-box').style.display = '';
+  document.querySelectorAll('.day-tab:not(#tab-report)').forEach((t, i) => t.classList.toggle('active', i === idx));
   renderAll();
   document.getElementById('positions-sub').textContent =
     `${dates[idx]} · Ensemble + 5 model · WU yuvarlama dahil`;
@@ -869,6 +905,190 @@ function selectDay(idx) {
     return loadPolymarket(id).then(() => renderMarkets(id));
   });
   Promise.all(pmLoads).then(() => renderTopTrades());
+}
+
+function selectReport() {
+  document.querySelectorAll('.day-tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('tab-report').classList.add('active');
+  document.querySelector('.grid').style.display = 'none';
+  document.getElementById('top-trades-box').style.display = 'none';
+  document.querySelector('.positions-box').style.display = 'none';
+  document.getElementById('daily-report-panel').style.display = '';
+  renderDailyReport();
+}
+
+function renderDailyReport() {
+  const el = document.getElementById('report-content');
+  const today = dates[0];
+  const tomorrow = dates[1];
+  const now = new Date().toLocaleString('tr-TR', { dateStyle: 'long', timeStyle: 'short' });
+
+  const STATION_NAMES = {
+    eglc: 'EGLC · Londra', ltac: 'LTAC · Ankara', limc: 'LIMC · Milano',
+    ltfm: 'LTFM · İstanbul', lemd: 'LEMD · Madrid', rksi: 'RKSI · Seoul',
+    rctp: 'RCTP · Taipei', rjtt: 'RJTT · Tokyo', zbaa: 'ZBAA · Pekin', lfpg: 'LFPG · Paris'
+  };
+  const FLAGS = { eglc:'🇬🇧', ltac:'🇹🇷', limc:'🇮🇹', ltfm:'🇹🇷', lemd:'🇪🇸', rksi:'🇰🇷', rctp:'🇹🇼', rjtt:'🇯🇵', zbaa:'🇨🇳', lfpg:'🇫🇷' };
+  const SETTLE = { eglc:'WU', ltac:'WU', limc:'WU', ltfm:'NOAA', lemd:'WU', rksi:'WU', rctp:'NOAA', rjtt:'WU', zbaa:'WU', lfpg:'WU' };
+
+  // --- BÖLÜM 1: Model Doğruluk Tablosu ---
+  let accRows = '';
+  for (const id of STATIONS) {
+    const b = biasCache[id];
+    if (!b || b.count < 1) {
+      accRows += `<tr><td>${FLAGS[id]} ${STATION_NAMES[id]}</td><td class="r" colspan="4" style="color:var(--text-3)">Veri yok (${b?.count||0} gün)</td></tr>`;
+      continue;
+    }
+    const mae = b.mae;
+    const bias = b.bias_7d;
+    const n = b.count;
+    const accCls = mae < 0.5 ? 'report-acc-good' : mae < 1.5 ? 'report-acc-mid' : 'report-acc-bad';
+    const biasDir = Math.abs(bias) < 0.3 ? '≈0' : bias > 0 ? `+${bias.toFixed(1)}°C ↑` : `${bias.toFixed(1)}°C ↓`;
+    const activeLabel = b.bias_active ? '<span style="color:#15803d;font-size:10px">✓ aktif</span>' : `<span style="color:#6b7280;font-size:10px">${n}/7g</span>`;
+    accRows += `<tr>
+      <td>${FLAGS[id]} ${STATION_NAMES[id]}</td>
+      <td class="r"><span class="report-acc-badge ${accCls}">MAE ${mae.toFixed(2)}°C</span></td>
+      <td class="r" style="font-family:var(--mono)">${biasDir}</td>
+      <td class="r">${n}g</td>
+      <td class="r">${activeLabel}</td>
+    </tr>`;
+  }
+
+  // --- BÖLÜM 2: Bugün PM Fırsatları ---
+  const edgeRows = { today: '', tomorrow: '' };
+  for (const [dayIdx, dateKey, label] of [[0, today, 'Bugün'], [1, tomorrow, 'Yarın']]) {
+    const rows = [];
+    for (const id of STATIONS) {
+      const pm = pmCache[id]?.[dateKey];
+      if (!pm?.buckets?.length) continue;
+      const dayData = cache[id]?.days?.[dateKey] || {};
+      const rawMaxes = ensCache[id]?.days?.[dateKey]?.member_maxes || [];
+      const maxes = censorEnsemble(id, rawMaxes);
+      const modelDist = modelDistribution(dayData.models || {});
+      const bias = getEffectiveBias(id);
+      const blendObj = dayData.blend;
+      const blendDisplay = (blendObj?.bias_active && blendObj?.bias_corrected_blend != null)
+        ? blendObj.bias_corrected_blend : blendObj?.max_temp;
+      const liq = pm.liquidity || 0;
+
+      for (const b of pm.buckets) {
+        const ensPr = ensBucketProb(maxes, b, modelDist, bias);
+        if (ensPr == null || b.yes_price == null) continue;
+        const edge = ensPr - b.yes_price;
+        if (Math.abs(edge) < 0.05) continue;
+        rows.push({ id, b, edge, ensPr, blendDisplay, liq, settle: SETTLE[id] });
+      }
+    }
+    rows.sort((a, b) => Math.abs(b.edge) - Math.abs(a.edge));
+    const top = rows.slice(0, 8);
+    if (!top.length) {
+      edgeRows[dayIdx === 0 ? 'today' : 'tomorrow'] = '<div style="color:var(--text-3);font-size:13px;padding:8px 0">Anlamlı edge bulunamadı.</div>';
+      continue;
+    }
+    edgeRows[dayIdx === 0 ? 'today' : 'tomorrow'] = top.map(r => {
+      const edgePct = (r.edge * 100).toFixed(0);
+      const edgeCls = r.edge > 0 ? 'report-edge-pos' : 'report-edge-neg';
+      const side = r.edge > 0 ? 'YES' : 'NO';
+      const pmPct = Math.round(r.b.yes_price * 100);
+      const ensPct = Math.round(r.ensPr * 100);
+      const star = Math.abs(r.edge) > 0.15 ? '<span class="report-star">★</span> ' : '';
+      const wuWarn = r.settle === 'WU' && r.blendDisplay != null && Math.abs(r.blendDisplay - Math.round(r.blendDisplay)) > 0.25 ? ' ⚠' : '';
+      return `<tr>
+        <td>${star}${FLAGS[r.id]} ${STATION_NAMES[r.id]}</td>
+        <td>${r.b.title}</td>
+        <td class="r"><span class="report-acc-badge" style="background:#e0f2fe;color:#0369a1">${side}</span></td>
+        <td class="r" style="font-family:var(--mono)">PM: ${pmPct}%</td>
+        <td class="r" style="font-family:var(--mono)">Model: ${ensPct}%</td>
+        <td class="r"><span class="${edgeCls}">${r.edge>0?'+':''}${edgePct}%</span>${wuWarn}</td>
+        <td class="r" style="color:var(--text-3);font-size:11px">$${(r.liq/1000).toFixed(0)}K</td>
+      </tr>`;
+    }).join('');
+  }
+
+  // --- BÖLÜM 3: Model Spread Uyarıları ---
+  let warnHtml = '';
+  for (const id of STATIONS) {
+    const blend = cache[id]?.days?.[today]?.blend;
+    if (!blend) continue;
+    if (blend.outliers_removed?.length > 0) {
+      warnHtml += `<div class="report-warn">⚠ <strong>${FLAGS[id]} ${STATION_NAMES[id]}</strong> — Bugün <strong>${blend.outliers_removed.join(', ')}</strong> modeli outlier olarak hariç tutuldu (>5°C sapma). Kalan ${blend.models_used?.length} model ile blend: <strong>${blend.max_temp}°C</strong></div>`;
+    }
+    if (blend.spread >= 3) {
+      warnHtml += `<div class="report-warn" style="border-color:#fca5a5;background:#fef2f2;color:#7f1d1d">🔴 <strong>${FLAGS[id]} ${STATION_NAMES[id]}</strong> — Model spread <strong>${blend.spread}°C</strong> (yüksek belirsizlik)</div>`;
+    }
+  }
+  if (!warnHtml) warnHtml = '<div style="color:var(--text-3);font-size:13px;padding:4px 0">Bugün için anlamlı model uyarısı yok.</div>';
+
+  // --- BÖLÜM 4: Dün Aktüel vs Tahmin ---
+  let histRows = '';
+  const allBiasEntries = [];
+  for (const id of STATIONS) {
+    const b = biasCache[id];
+    if (!b?.entries?.length) continue;
+    const last = b.entries[b.entries.length - 1];
+    if (!last) continue;
+    allBiasEntries.push({ id, ...last });
+  }
+  allBiasEntries.sort((a, b) => Math.abs(b.error) - Math.abs(a.error));
+  if (allBiasEntries.length) {
+    histRows = allBiasEntries.map(e => {
+      const errCls = Math.abs(e.error) < 0.5 ? 'report-edge-pos' : Math.abs(e.error) < 1.5 ? '' : 'report-edge-neg';
+      const errStr = e.error > 0 ? `+${e.error.toFixed(1)}` : e.error.toFixed(1);
+      return `<tr>
+        <td>${FLAGS[e.id]} ${STATION_NAMES[e.id]}</td>
+        <td class="r">${e.date}</td>
+        <td class="r">${e.blend.toFixed(1)}°C</td>
+        <td class="r"><strong>${e.actual.toFixed(0)}°C</strong></td>
+        <td class="r"><span class="${errCls}">${errStr}°C</span></td>
+      </tr>`;
+    }).join('');
+  } else {
+    histRows = '<tr><td colspan="5" style="color:var(--text-3)">Aktüel veri yok</td></tr>';
+  }
+
+  el.innerHTML = `
+    <div class="report-title">📋 Günlük Hava & Polymarket Raporu</div>
+    <div class="report-meta">Oluşturulma: ${now} · ${today} (Bugün) · ${tomorrow} (Yarın)</div>
+
+    <div class="report-section">
+      <h3>🎯 Model Doğruluk & Bias Durumu</h3>
+      <table class="report-table">
+        <tr><th>İstasyon</th><th class="r">MAE</th><th class="r">Sistematik Bias</th><th class="r">Veri</th><th class="r">Düzeltme</th></tr>
+        ${accRows}
+      </table>
+    </div>
+
+    <div class="report-section">
+      <h3>📊 Son Aktüel vs Tahmin</h3>
+      <table class="report-table">
+        <tr><th>İstasyon</th><th class="r">Tarih</th><th class="r">Blend</th><th class="r">Aktüel</th><th class="r">Hata</th></tr>
+        ${histRows}
+      </table>
+    </div>
+
+    <div class="report-section">
+      <h3>⚡ Model Uyarıları — Bugün</h3>
+      ${warnHtml}
+    </div>
+
+    <div class="report-section">
+      <h3>💰 Polymarket Edge — Bugün (${today})</h3>
+      <table class="report-table">
+        <tr><th>İstasyon</th><th>Bucket</th><th class="r">Taraf</th><th class="r">PM</th><th class="r">Model</th><th class="r">Edge</th><th class="r">Likiditie</th></tr>
+        ${edgeRows.today}
+      </table>
+    </div>
+
+    <div class="report-section">
+      <h3>💰 Polymarket Edge — Yarın (${tomorrow})</h3>
+      <table class="report-table">
+        <tr><th>İstasyon</th><th>Bucket</th><th class="r">Taraf</th><th class="r">PM</th><th class="r">Model</th><th class="r">Edge</th><th class="r">Likidite</th></tr>
+        ${edgeRows.tomorrow}
+      </table>
+    </div>
+
+    <div class="report-note">★ = edge >15% · ⚠ = WU Fahrenheit sınır riski · Bias düzeltmesi ≥7 gün veri sonrası aktif olur</div>
+  `;
 }
 
 function toggleModels(id) {
