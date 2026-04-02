@@ -907,13 +907,31 @@ function selectDay(idx) {
   Promise.all(pmLoads).then(() => renderTopTrades());
 }
 
-function selectReport() {
+async function selectReport() {
   document.querySelectorAll('.day-tab').forEach(t => t.classList.remove('active'));
   document.getElementById('tab-report').classList.add('active');
   document.querySelector('.grid').style.display = 'none';
   document.getElementById('top-trades-box').style.display = 'none';
   document.querySelector('.positions-box').style.display = 'none';
   document.getElementById('daily-report-panel').style.display = '';
+  document.getElementById('report-content').innerHTML = '<span class="loading">Rapor hazırlanıyor...</span>';
+
+  // Bugün ve yarın için PM verisi eksikse yükle
+  const datesNeeded = [dates[0], dates[1]].filter(Boolean);
+  const pmLoads = [];
+  for (const id of STATIONS) {
+    for (const d of datesNeeded) {
+      if (!pmCache[id]?.[d] || pmCache[id][d].error) {
+        pmLoads.push(
+          fetch(`/api/polymarket?station=${id}&date=${d}`)
+            .then(r => r.json())
+            .then(data => { if (!pmCache[id]) pmCache[id] = {}; pmCache[id][d] = data.detail ? { error: data.detail } : data; })
+            .catch(() => {})
+        );
+      }
+    }
+  }
+  if (pmLoads.length) await Promise.all(pmLoads);
   renderDailyReport();
 }
 
