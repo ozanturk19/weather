@@ -392,6 +392,11 @@ input.thresh-slider {
 .cc-edge-yes { color:#065f46; font-weight:700; }
 .cc-edge-no  { color:#b91c1c; font-weight:700; }
 .cc-hint { font-size:10px; color:var(--text-3); margin-top:8px; text-align:right; }
+.cc-unc  { font-size:10px; margin-top:5px; min-height:14px; }
+.cc-unc-high { border-left:3px solid #ef4444 !important; }
+.cc-unc-med  { border-left:3px solid #f59e0b !important; }
+.cc-unc-badge-high { color:#dc2626; font-weight:700; }
+.cc-unc-badge-med  { color:#d97706; font-weight:600; }
 
 /* Station panels (hidden storage) */
 #station-panels { display:none; }
@@ -455,6 +460,7 @@ input.thresh-slider {
     <div class="cc-header"><div><div class="cc-name">🇬🇧 EGLC</div><div class="cc-sub">Londra City <span class="cc-settle">WU</span></div></div><div id="cc-bias-eglc"></div></div>
     <div class="cc-temp" id="cc-blend-eglc">—</div>
     <div class="cc-range" id="cc-range-eglc"></div>
+    <div class="cc-unc"   id="cc-unc-eglc"></div>
     <div class="cc-metar" id="cc-metar-eglc"></div>
     <div class="cc-edge"  id="cc-edge-eglc"></div>
     <div class="cc-hint">Detay için tıkla ↗</div>
@@ -463,6 +469,7 @@ input.thresh-slider {
     <div class="cc-header"><div><div class="cc-name">🇹🇷 LTAC</div><div class="cc-sub">Ankara Esenboğa <span class="cc-settle">WU</span></div></div><div id="cc-bias-ltac"></div></div>
     <div class="cc-temp" id="cc-blend-ltac">—</div>
     <div class="cc-range" id="cc-range-ltac"></div>
+    <div class="cc-unc"   id="cc-unc-ltac"></div>
     <div class="cc-metar" id="cc-metar-ltac"></div>
     <div class="cc-edge"  id="cc-edge-ltac"></div>
     <div class="cc-hint">Detay için tıkla ↗</div>
@@ -471,6 +478,7 @@ input.thresh-slider {
     <div class="cc-header"><div><div class="cc-name">🇮🇹 LIMC</div><div class="cc-sub">Milano Malpensa <span class="cc-settle">WU</span></div></div><div id="cc-bias-limc"></div></div>
     <div class="cc-temp" id="cc-blend-limc">—</div>
     <div class="cc-range" id="cc-range-limc"></div>
+    <div class="cc-unc"   id="cc-unc-limc"></div>
     <div class="cc-metar" id="cc-metar-limc"></div>
     <div class="cc-edge"  id="cc-edge-limc"></div>
     <div class="cc-hint">Detay için tıkla ↗</div>
@@ -479,6 +487,7 @@ input.thresh-slider {
     <div class="cc-header"><div><div class="cc-name">🇹🇷 LTFM</div><div class="cc-sub">İstanbul Havalimanı <span class="cc-settle cc-settle-noaa">NOAA</span></div></div><div id="cc-bias-ltfm"></div></div>
     <div class="cc-temp" id="cc-blend-ltfm">—</div>
     <div class="cc-range" id="cc-range-ltfm"></div>
+    <div class="cc-unc"   id="cc-unc-ltfm"></div>
     <div class="cc-metar" id="cc-metar-ltfm"></div>
     <div class="cc-edge"  id="cc-edge-ltfm"></div>
     <div class="cc-hint">Detay için tıkla ↗</div>
@@ -487,6 +496,7 @@ input.thresh-slider {
     <div class="cc-header"><div><div class="cc-name">🇪🇸 LEMD</div><div class="cc-sub">Madrid Barajas <span class="cc-settle">WU</span></div></div><div id="cc-bias-lemd"></div></div>
     <div class="cc-temp" id="cc-blend-lemd">—</div>
     <div class="cc-range" id="cc-range-lemd"></div>
+    <div class="cc-unc"   id="cc-unc-lemd"></div>
     <div class="cc-metar" id="cc-metar-lemd"></div>
     <div class="cc-edge"  id="cc-edge-lemd"></div>
     <div class="cc-hint">Detay için tıkla ↗</div>
@@ -495,6 +505,7 @@ input.thresh-slider {
     <div class="cc-header"><div><div class="cc-name">🇰🇷 RKSI</div><div class="cc-sub">Seoul Incheon <span class="cc-settle">WU</span></div></div><div id="cc-bias-rksi"></div></div>
     <div class="cc-temp" id="cc-blend-rksi">—</div>
     <div class="cc-range" id="cc-range-rksi"></div>
+    <div class="cc-unc"   id="cc-unc-rksi"></div>
     <div class="cc-metar" id="cc-metar-rksi"></div>
     <div class="cc-edge"  id="cc-edge-rksi"></div>
     <div class="cc-hint">Detay için tıkla ↗</div>
@@ -503,6 +514,7 @@ input.thresh-slider {
     <div class="cc-header"><div><div class="cc-name">🇹🇼 RCTP</div><div class="cc-sub">Taipei Taoyuan <span class="cc-settle cc-settle-noaa">NOAA</span></div></div><div id="cc-bias-rctp"></div></div>
     <div class="cc-temp" id="cc-blend-rctp">—</div>
     <div class="cc-range" id="cc-range-rctp"></div>
+    <div class="cc-unc"   id="cc-unc-rctp"></div>
     <div class="cc-metar" id="cc-metar-rctp"></div>
     <div class="cc-edge"  id="cc-edge-rctp"></div>
     <div class="cc-hint">Detay için tıkla ↗</div>
@@ -511,6 +523,7 @@ input.thresh-slider {
     <div class="cc-header"><div><div class="cc-name">🇯🇵 RJTT</div><div class="cc-sub">Tokyo Haneda <span class="cc-settle">WU</span></div></div><div id="cc-bias-rjtt"></div></div>
     <div class="cc-temp" id="cc-blend-rjtt">—</div>
     <div class="cc-range" id="cc-range-rjtt"></div>
+    <div class="cc-unc"   id="cc-unc-rjtt"></div>
     <div class="cc-metar" id="cc-metar-rjtt"></div>
     <div class="cc-edge"  id="cc-edge-rjtt"></div>
     <div class="cc-hint">Detay için tıkla ↗</div>
@@ -519,6 +532,7 @@ input.thresh-slider {
     <div class="cc-header"><div><div class="cc-name">🇨🇳 ZBAA</div><div class="cc-sub">Beijing Capital <span class="cc-settle">WU</span></div></div><div id="cc-bias-zbaa"></div></div>
     <div class="cc-temp" id="cc-blend-zbaa">—</div>
     <div class="cc-range" id="cc-range-zbaa"></div>
+    <div class="cc-unc"   id="cc-unc-zbaa"></div>
     <div class="cc-metar" id="cc-metar-zbaa"></div>
     <div class="cc-edge"  id="cc-edge-zbaa"></div>
     <div class="cc-hint">Detay için tıkla ↗</div>
@@ -527,6 +541,7 @@ input.thresh-slider {
     <div class="cc-header"><div><div class="cc-name">🇫🇷 LFPG</div><div class="cc-sub">Paris CDG <span class="cc-settle">WU</span></div></div><div id="cc-bias-lfpg"></div></div>
     <div class="cc-temp" id="cc-blend-lfpg">—</div>
     <div class="cc-range" id="cc-range-lfpg"></div>
+    <div class="cc-unc"   id="cc-unc-lfpg"></div>
     <div class="cc-metar" id="cc-metar-lfpg"></div>
     <div class="cc-edge"  id="cc-edge-lfpg"></div>
     <div class="cc-hint">Detay için tıkla ↗</div>
@@ -966,6 +981,24 @@ function renderCompact(id) {
     const unc  = blendObj.spread != null ? ` ±${blendObj.spread.toFixed(1)}°` : '';
     rangeEl.textContent = blendObj.min_max + '–' + blendObj.max_max + '°C' + unc + outW;
   }
+
+  // Uncertainty badge
+  const uncEl = document.getElementById('cc-unc-' + id);
+  const card  = document.getElementById('cc-' + id);
+  if (uncEl && blendObj?.spread != null) {
+    const s = blendObj.spread;
+    const outlierW = blendObj.outliers_removed?.length ? ' · model çıkarıldı' : '';
+    card.classList.remove('cc-unc-high','cc-unc-med');
+    if (s >= 3) {
+      uncEl.innerHTML = `<span class="cc-unc-badge-high">⚠ yüksek belirsizlik ±${s.toFixed(1)}°${outlierW}</span>`;
+      card.classList.add('cc-unc-high');
+    } else if (s >= 1.5) {
+      uncEl.innerHTML = `<span class="cc-unc-badge-med">~ orta belirsizlik ±${s.toFixed(1)}°${outlierW}</span>`;
+      card.classList.add('cc-unc-med');
+    } else {
+      uncEl.innerHTML = outlierW ? `<span style="color:var(--text-3)">model çıkarıldı</span>` : '';
+    }
+  } else if (uncEl) { uncEl.innerHTML = ''; }
 
   // METAR
   const m = metarCache[id];
