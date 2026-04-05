@@ -532,42 +532,6 @@ input.thresh-slider {
     <div class="cc-edge"  id="cc-edge-lemd"></div>
     <div class="cc-hint">Detay için tıkla ↗</div>
   </div>
-  <div class="cc" id="cc-rksi" onclick="openModal('rksi')">
-    <div class="cc-header"><div><div class="cc-name">🇰🇷 RKSI</div><div class="cc-sub">Seoul Incheon <span class="cc-settle">WU</span></div></div><div id="cc-bias-rksi"></div></div>
-    <div class="cc-temp" id="cc-blend-rksi">—</div>
-    <div class="cc-range" id="cc-range-rksi"></div>
-    <div class="cc-unc"   id="cc-unc-rksi"></div>
-    <div class="cc-metar" id="cc-metar-rksi"></div>
-    <div class="cc-edge"  id="cc-edge-rksi"></div>
-    <div class="cc-hint">Detay için tıkla ↗</div>
-  </div>
-  <div class="cc" id="cc-rctp" onclick="openModal('rctp')">
-    <div class="cc-header"><div><div class="cc-name">🇹🇼 RCTP</div><div class="cc-sub">Taipei Taoyuan <span class="cc-settle cc-settle-noaa">NOAA</span></div></div><div id="cc-bias-rctp"></div></div>
-    <div class="cc-temp" id="cc-blend-rctp">—</div>
-    <div class="cc-range" id="cc-range-rctp"></div>
-    <div class="cc-unc"   id="cc-unc-rctp"></div>
-    <div class="cc-metar" id="cc-metar-rctp"></div>
-    <div class="cc-edge"  id="cc-edge-rctp"></div>
-    <div class="cc-hint">Detay için tıkla ↗</div>
-  </div>
-  <div class="cc" id="cc-rjtt" onclick="openModal('rjtt')">
-    <div class="cc-header"><div><div class="cc-name">🇯🇵 RJTT</div><div class="cc-sub">Tokyo Haneda <span class="cc-settle">WU</span></div></div><div id="cc-bias-rjtt"></div></div>
-    <div class="cc-temp" id="cc-blend-rjtt">—</div>
-    <div class="cc-range" id="cc-range-rjtt"></div>
-    <div class="cc-unc"   id="cc-unc-rjtt"></div>
-    <div class="cc-metar" id="cc-metar-rjtt"></div>
-    <div class="cc-edge"  id="cc-edge-rjtt"></div>
-    <div class="cc-hint">Detay için tıkla ↗</div>
-  </div>
-  <div class="cc" id="cc-zbaa" onclick="openModal('zbaa')">
-    <div class="cc-header"><div><div class="cc-name">🇨🇳 ZBAA</div><div class="cc-sub">Beijing Capital <span class="cc-settle">WU</span></div></div><div id="cc-bias-zbaa"></div></div>
-    <div class="cc-temp" id="cc-blend-zbaa">—</div>
-    <div class="cc-range" id="cc-range-zbaa"></div>
-    <div class="cc-unc"   id="cc-unc-zbaa"></div>
-    <div class="cc-metar" id="cc-metar-zbaa"></div>
-    <div class="cc-edge"  id="cc-edge-zbaa"></div>
-    <div class="cc-hint">Detay için tıkla ↗</div>
-  </div>
   <div class="cc" id="cc-lfpg" onclick="openModal('lfpg')">
     <div class="cc-header"><div><div class="cc-name">🇫🇷 LFPG</div><div class="cc-sub">Paris CDG <span class="cc-settle">WU</span></div></div><div id="cc-bias-lfpg"></div></div>
     <div class="cc-temp" id="cc-blend-lfpg">—</div>
@@ -672,74 +636,6 @@ input.thresh-slider {
     <div class="modal-col-right">
       <div class="modal-section-label">Polymarket Buckets</div>
       <div id="pm-markets-lemd"><span class="loading">yükleniyor...</span></div>
-    </div>
-  </div>
-
-  <div id="panel-rksi">
-    <div class="modal-col-left">
-      <div><div id="bias-rksi"></div><div class="summary-box" id="summary-rksi"><span class="loading">yükleniyor...</span></div></div>
-      <div><div class="modal-section-label">Blend Tahmini</div>
-        <div class="blend-block"><div class="blend-temp" id="blend-rksi">—</div><div class="blend-range" id="range-rksi"></div><div id="unc-rksi"></div></div></div>
-      <div><div class="modal-section-label">Saatlik Tahmin</div><div id="h-rksi"><span class="loading">yükleniyor...</span></div></div>
-      <div><div class="modal-section-label">ICON Ensemble <span id="ens-label-rksi" style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">ICON · — üye</span></div><div id="ens-rksi"><span class="loading">yükleniyor...</span></div></div>
-      <div><div class="modal-section-label">METAR Gözlem</div><div id="metar-rksi"><span class="loading">yükleniyor...</span></div>
-        <div class="wu-badge"><span>⚖️ WU settlement:</span> <a href="https://www.wunderground.com/history/daily/kr/seoul/RKSI" target="_blank">RKSI · tam °C</a></div></div>
-      <div><div class="model-toggle" onclick="toggleModels('rksi')"><span id="toggle-icon-rksi">▸</span> 5 model detayı</div><div class="model-grid" id="models-rksi"></div></div>
-    </div>
-    <div class="modal-col-right">
-      <div class="modal-section-label">Polymarket Buckets</div>
-      <div id="pm-markets-rksi"><span class="loading">yükleniyor...</span></div>
-    </div>
-  </div>
-
-  <div id="panel-rctp">
-    <div class="modal-col-left">
-      <div><div id="bias-rctp"></div><div class="summary-box" id="summary-rctp"><span class="loading">yükleniyor...</span></div></div>
-      <div><div class="modal-section-label">Blend Tahmini</div>
-        <div class="blend-block"><div class="blend-temp" id="blend-rctp">—</div><div class="blend-range" id="range-rctp"></div><div id="unc-rctp"></div></div></div>
-      <div><div class="modal-section-label">Saatlik Tahmin</div><div id="h-rctp"><span class="loading">yükleniyor...</span></div></div>
-      <div><div class="modal-section-label">ICON Ensemble <span id="ens-label-rctp" style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">ICON · — üye</span></div><div id="ens-rctp"><span class="loading">yükleniyor...</span></div></div>
-      <div><div class="modal-section-label">METAR Gözlem</div><div id="metar-rctp"><span class="loading">yükleniyor...</span></div>
-        <div class="wu-badge"><span>⚖️ NOAA settlement:</span> <a href="https://www.weather.gov/wrh/timeseries?site=RCTP" target="_blank">RCTP · tam °C</a></div></div>
-      <div><div class="model-toggle" onclick="toggleModels('rctp')"><span id="toggle-icon-rctp">▸</span> 5 model detayı</div><div class="model-grid" id="models-rctp"></div></div>
-    </div>
-    <div class="modal-col-right">
-      <div class="modal-section-label">Polymarket Buckets</div>
-      <div id="pm-markets-rctp"><span class="loading">yükleniyor...</span></div>
-    </div>
-  </div>
-
-  <div id="panel-rjtt">
-    <div class="modal-col-left">
-      <div><div id="bias-rjtt"></div><div class="summary-box" id="summary-rjtt"><span class="loading">yükleniyor...</span></div></div>
-      <div><div class="modal-section-label">Blend Tahmini</div>
-        <div class="blend-block"><div class="blend-temp" id="blend-rjtt">—</div><div class="blend-range" id="range-rjtt"></div><div id="unc-rjtt"></div></div></div>
-      <div><div class="modal-section-label">Saatlik Tahmin</div><div id="h-rjtt"><span class="loading">yükleniyor...</span></div></div>
-      <div><div class="modal-section-label">ICON Ensemble <span id="ens-label-rjtt" style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">ICON · — üye</span></div><div id="ens-rjtt"><span class="loading">yükleniyor...</span></div></div>
-      <div><div class="modal-section-label">METAR Gözlem</div><div id="metar-rjtt"><span class="loading">yükleniyor...</span></div>
-        <div class="wu-badge"><span>⚖️ WU settlement:</span> <a href="https://www.wunderground.com/history/daily/jp/tokyo/RJTT" target="_blank">RJTT · tam °C</a></div></div>
-      <div><div class="model-toggle" onclick="toggleModels('rjtt')"><span id="toggle-icon-rjtt">▸</span> 5 model detayı</div><div class="model-grid" id="models-rjtt"></div></div>
-    </div>
-    <div class="modal-col-right">
-      <div class="modal-section-label">Polymarket Buckets</div>
-      <div id="pm-markets-rjtt"><span class="loading">yükleniyor...</span></div>
-    </div>
-  </div>
-
-  <div id="panel-zbaa">
-    <div class="modal-col-left">
-      <div><div id="bias-zbaa"></div><div class="summary-box" id="summary-zbaa"><span class="loading">yükleniyor...</span></div></div>
-      <div><div class="modal-section-label">Blend Tahmini</div>
-        <div class="blend-block"><div class="blend-temp" id="blend-zbaa">—</div><div class="blend-range" id="range-zbaa"></div><div id="unc-zbaa"></div></div></div>
-      <div><div class="modal-section-label">Saatlik Tahmin</div><div id="h-zbaa"><span class="loading">yükleniyor...</span></div></div>
-      <div><div class="modal-section-label">ICON Ensemble <span id="ens-label-zbaa" style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">ICON · — üye</span></div><div id="ens-zbaa"><span class="loading">yükleniyor...</span></div></div>
-      <div><div class="modal-section-label">METAR Gözlem</div><div id="metar-zbaa"><span class="loading">yükleniyor...</span></div>
-        <div class="wu-badge"><span>⚖️ WU settlement:</span> <a href="https://www.wunderground.com/history/daily/cn/beijing/ZBAA" target="_blank">ZBAA · tam °C</a></div></div>
-      <div><div class="model-toggle" onclick="toggleModels('zbaa')"><span id="toggle-icon-zbaa">▸</span> 5 model detayı</div><div class="model-grid" id="models-zbaa"></div></div>
-    </div>
-    <div class="modal-col-right">
-      <div class="modal-section-label">Polymarket Buckets</div>
-      <div id="pm-markets-zbaa"><span class="loading">yükleniyor...</span></div>
     </div>
   </div>
 
@@ -851,7 +747,7 @@ input.thresh-slider {
 </div>
 
 <script>
-const STATIONS = ['eglc', 'ltac', 'limc', 'ltfm', 'lemd', 'rksi', 'rctp', 'rjtt', 'zbaa', 'lfpg'];
+const STATIONS = ['eglc', 'ltac', 'limc', 'ltfm', 'lemd', 'lfpg'];
 const KEY_HOURS = ['06:00', '09:00', '12:00', '15:00', '18:00'];
 const MODEL_LABELS = { gfs: 'GFS', ecmwf: 'ECMWF', icon: 'ICON', ukmo: 'UKMO', meteofrance: 'MF' };
 
@@ -968,9 +864,7 @@ let modalActiveDay = 0;
 const MODAL_TITLES = {
   eglc:'🇬🇧 EGLC — Londra City', ltac:'🇹🇷 LTAC — Ankara Esenboğa',
   limc:'🇮🇹 LIMC — Milano Malpensa', ltfm:'🇹🇷 LTFM — İstanbul',
-  lemd:'🇪🇸 LEMD — Madrid', rksi:'🇰🇷 RKSI — Seoul',
-  rctp:'🇹🇼 RCTP — Taipei', rjtt:'🇯🇵 RJTT — Tokyo',
-  zbaa:'🇨🇳 ZBAA — Pekin', lfpg:'🇫🇷 LFPG — Paris'
+  lemd:'🇪🇸 LEMD — Madrid', lfpg:'🇫🇷 LFPG — Paris'
 };
 
 function openModal(id) {
@@ -1160,8 +1054,7 @@ async function ptScanSignals() {
   const trades = ptLoad();
   const STATION_NAMES = {
     eglc:'EGLC · Londra', ltac:'LTAC · Ankara', limc:'LIMC · Milano',
-    ltfm:'LTFM · İstanbul', lemd:'LEMD · Madrid', rksi:'RKSI · Seoul',
-    rctp:'RCTP · Taipei', rjtt:'RJTT · Tokyo', zbaa:'ZBAA · Pekin', lfpg:'LFPG · Paris'
+    ltfm:'LTFM · İstanbul', lemd:'LEMD · Madrid', lfpg:'LFPG · Paris'
   };
   let added = 0;
 
@@ -1398,11 +1291,10 @@ function renderDailyReport() {
 
   const STATION_NAMES = {
     eglc: 'EGLC · Londra', ltac: 'LTAC · Ankara', limc: 'LIMC · Milano',
-    ltfm: 'LTFM · İstanbul', lemd: 'LEMD · Madrid', rksi: 'RKSI · Seoul',
-    rctp: 'RCTP · Taipei', rjtt: 'RJTT · Tokyo', zbaa: 'ZBAA · Pekin', lfpg: 'LFPG · Paris'
+    ltfm: 'LTFM · İstanbul', lemd: 'LEMD · Madrid', lfpg: 'LFPG · Paris'
   };
-  const FLAGS = { eglc:'🇬🇧', ltac:'🇹🇷', limc:'🇮🇹', ltfm:'🇹🇷', lemd:'🇪🇸', rksi:'🇰🇷', rctp:'🇹🇼', rjtt:'🇯🇵', zbaa:'🇨🇳', lfpg:'🇫🇷' };
-  const SETTLE = { eglc:'WU', ltac:'WU', limc:'WU', ltfm:'NOAA', lemd:'WU', rksi:'WU', rctp:'NOAA', rjtt:'WU', zbaa:'WU', lfpg:'WU' };
+  const FLAGS = { eglc:'🇬🇧', ltac:'🇹🇷', limc:'🇮🇹', ltfm:'🇹🇷', lemd:'🇪🇸', lfpg:'🇫🇷' };
+  const SETTLE = { eglc:'WU', ltac:'WU', limc:'WU', ltfm:'NOAA', lemd:'WU', lfpg:'WU' };
 
   // --- BÖLÜM 1: Model Doğruluk Tablosu ---
   let accRows = '';
@@ -1927,8 +1819,8 @@ function renderBias(id) {
 }
 
 // --- TOP TRADES ---
-const STATION_FLAGS  = { eglc: '🇬🇧', ltac: '🇹🇷', limc: '🇮🇹', ltfm: '🇹🇷', lemd: '🇪🇸', rksi: '🇰🇷', rctp: '🇹🇼', rjtt: '🇯🇵', zbaa: '🇨🇳', lfpg: '🇫🇷' };
-const SETTLEMENT_SRC = { eglc: 'WU', ltac: 'WU', limc: 'WU', ltfm: 'NOAA', lemd: 'WU', rksi: 'WU', rctp: 'NOAA', rjtt: 'WU', zbaa: 'WU', lfpg: 'WU' };
+const STATION_FLAGS  = { eglc: '🇬🇧', ltac: '🇹🇷', limc: '🇮🇹', ltfm: '🇹🇷', lemd: '🇪🇸', lfpg: '🇫🇷' };
+const SETTLEMENT_SRC = { eglc: 'WU', ltac: 'WU', limc: 'WU', ltfm: 'NOAA', lemd: 'WU', lfpg: 'WU' };
 const OUTLIER_THRESHOLD = 5;
 
 function computeTopTrades() {
@@ -2026,7 +1918,7 @@ function renderTopTrades() {
     return;
   }
 
-  const stationLabels = { eglc: 'EGLC · Londra', ltac: 'LTAC · Ankara', limc: 'LIMC · Milano', ltfm: 'LTFM · İstanbul', lemd: 'LEMD · Madrid', rksi: 'RKSI · Seoul', rctp: 'RCTP · Taipei', rjtt: 'RJTT · Tokyo', zbaa: 'ZBAA · Pekin', lfpg: 'LFPG · Paris' };
+  const stationLabels = { eglc: 'EGLC · Londra', ltac: 'LTAC · Ankara', limc: 'LIMC · Milano', ltfm: 'LTFM · İstanbul', lemd: 'LEMD · Madrid', lfpg: 'LFPG · Paris' };
   const sel = selections;
 
   listEl.innerHTML = trades.map((t, idx) => {
@@ -2324,7 +2216,7 @@ async function loadPolymarket(id) {
 // --- METAR ENSEMBLE SENSÖRÜ (İyileştirme #4) ---
 // 15:00 sonrası: METAR day_max bir alt sınır.
 // Observed max'ın altında kalan ensemble üyeleri → imkânsız → max'a yuvarla.
-const TZ_MAP = { eglc: 'Europe/London', ltac: 'Europe/Istanbul', limc: 'Europe/Rome', ltfm: 'Europe/Istanbul', lemd: 'Europe/Madrid', rksi: 'Asia/Seoul', rctp: 'Asia/Taipei', rjtt: 'Asia/Tokyo', zbaa: 'Asia/Shanghai', lfpg: 'Europe/Paris' };
+const TZ_MAP = { eglc: 'Europe/London', ltac: 'Europe/Istanbul', limc: 'Europe/Rome', ltfm: 'Europe/Istanbul', lemd: 'Europe/Madrid', lfpg: 'Europe/Paris' };
 
 function localHourFor(id) {
   return parseInt(new Date().toLocaleString('en-US', { timeZone: TZ_MAP[id] || 'UTC', hour: 'numeric', hour12: false }), 10);
@@ -2548,7 +2440,7 @@ function updateSelectedRow() {
   row.style.display = 'block';
   cnt.textContent = `${entries.length} pozisyon seçildi`;
 
-  const stationLabels = { eglc: '🇬🇧 EGLC', ltac: '🇹🇷 LTAC', limc: '🇮🇹 LIMC', ltfm: '🇹🇷 LTFM', lemd: '🇪🇸 LEMD', rksi: '🇰🇷 RKSI', rctp: '🇹🇼 RCTP', rjtt: '🇯🇵 RJTT', zbaa: '🇨🇳 ZBAA', lfpg: '🇫🇷 LFPG' };
+  const stationLabels = { eglc: '🇬🇧 EGLC', ltac: '🇹🇷 LTAC', limc: '🇮🇹 LIMC', ltfm: '🇹🇷 LTFM', lemd: '🇪🇸 LEMD', lfpg: '🇫🇷 LFPG' };
 
   list.innerHTML = entries.map(([sid, sel]) => {
     const badge = sel.side === 'yes'
@@ -2604,7 +2496,7 @@ async function refreshLive() {
 setInterval(() => { if (!_isLoading) refreshLive(); }, 20 * 60 * 1000);
 
 // --- WALLET & PORTFÖY ---
-const CITY_SLUG = { eglc: 'london', ltac: 'ankara', limc: 'milan', ltfm: 'istanbul', lemd: 'madrid', rksi: 'seoul', rctp: 'taipei', rjtt: 'tokyo', zbaa: 'beijing', lfpg: 'paris' };
+const CITY_SLUG = { eglc: 'london', ltac: 'ankara', limc: 'milan', ltfm: 'istanbul', lemd: 'madrid', lfpg: 'paris' };
 const MONTH_EN  = ['january','february','march','april','may','june','july','august','september','october','november','december'];
 
 function walletInputChange() {
