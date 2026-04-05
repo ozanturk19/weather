@@ -402,27 +402,30 @@ input.thresh-slider {
 }
 
 /* Compact cards */
-.cc { background:var(--bg-card); border:1px solid var(--border); border-radius:14px; padding:14px 16px; box-shadow:var(--shadow); cursor:pointer; transition:box-shadow .2s,border-color .2s,transform .1s; }
-.cc:hover { box-shadow:var(--shadow-md); border-color:#cbd5e1; transform:translateY(-1px); }
-.cc-header { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:10px; padding-bottom:10px; border-bottom:1px solid var(--border); }
-.cc-name { font-size:14px; font-weight:700; }
-.cc-sub  { font-size:11px; color:var(--text-2); margin-top:2px; }
-.cc-settle { font-size:9px; font-weight:700; padding:1px 5px; border-radius:3px; background:var(--bg-subtle); color:var(--text-3); border:1px solid var(--border); margin-left:4px; vertical-align:middle; }
-.cc-settle-noaa { background:#eff6ff; color:#1d4ed8; border-color:#bfdbfe; }
-.cc-temp { font-size:34px; font-weight:700; font-family:var(--mono); letter-spacing:-1.5px; line-height:1; color:var(--text); }
-.cc-range { font-size:11px; color:var(--text-3); font-family:var(--mono); margin-top:3px; min-height:14px; }
-.cc-metar { font-size:12px; color:var(--accent); font-weight:600; margin-top:8px; min-height:16px; }
-.cc-edge  { font-size:12px; margin-top:5px; min-height:16px; }
-.cc-edge-yes { color:#065f46; font-weight:700; }
-.cc-edge-no  { color:#b91c1c; font-weight:700; }
-.cc-hint { font-size:10px; color:var(--text-3); margin-top:8px; text-align:right; }
+.cc { background:var(--bg-card); border:1px solid var(--border); border-radius:10px; padding:14px 16px 0; box-shadow:var(--shadow); cursor:pointer; transition:box-shadow .2s,border-color .2s,transform .15s; display:flex; flex-direction:column; overflow:hidden; }
+.cc:hover { box-shadow:var(--shadow-md); border-color:var(--accent); transform:translateY(-2px); }
+.cc-header { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:10px; }
+.cc-name { font-size:13px; font-weight:700; letter-spacing:-.1px; }
+.cc-sub  { font-size:10px; color:var(--text-2); margin-top:2px; }
+.cc-settle { font-size:8px; font-weight:700; padding:1px 4px; border-radius:3px; background:var(--bg-subtle); color:var(--text-3); border:1px solid var(--border); margin-left:3px; vertical-align:middle; }
+.cc-settle-noaa { background:var(--blue-dim); color:var(--blue); border-color:var(--blue-dim); }
+.cc-temp { font-size:36px; font-weight:700; font-family:var(--mono); letter-spacing:-2px; line-height:1; color:var(--text); }
+.cc-range { font-size:10px; color:var(--text-3); font-family:var(--mono); margin-top:4px; min-height:13px; }
+.cc-metar { font-size:11px; color:var(--accent); font-weight:600; margin-top:6px; min-height:15px; }
+.cc-edge  { font-size:11px; margin-top:4px; min-height:15px; }
+.cc-edge-yes { color:var(--green); font-weight:700; }
+.cc-edge-no  { color:var(--red); font-weight:700; }
+.cc-hint { font-size:9px; color:var(--text-3); margin-top:6px; text-align:right; padding-bottom:10px; }
 .cc-unc  { font-size:10px; margin-top:5px; min-height:14px; }
-.cc-unc-high { border-left:3px solid #ef4444 !important; }
-.cc-unc-med  { border-left:3px solid #f59e0b !important; }
-.cc-unc-low  { border-left:3px solid #10b981 !important; }
-.cc-unc-badge-high { color:#dc2626; font-weight:700; }
-.cc-unc-badge-med  { color:#d97706; font-weight:600; }
-.cc-unc-badge-low  { color:#059669; font-weight:600; }
+/* Güven barı — kartın en altında 3px renkli çizgi */
+.cc-conf-bar { height:3px; margin:10px -16px 0; flex-shrink:0; }
+.cc-unc-high .cc-conf-bar { background:var(--red); }
+.cc-unc-med  .cc-conf-bar { background:var(--amber); }
+.cc-unc-low  .cc-conf-bar { background:var(--green); }
+/* Metin rozeti renkleri */
+.cc-unc-badge-high { color:var(--red); font-weight:700; }
+.cc-unc-badge-med  { color:var(--amber); font-weight:600; }
+.cc-unc-badge-low  { color:var(--green); font-weight:600; }
 
 /* Paper Trading Panel */
 .pt-box { background:var(--bg-card); border:1px solid var(--border); border-radius:14px; padding:20px 24px; margin-top:10px; box-shadow:var(--shadow); }
@@ -522,6 +525,7 @@ input.thresh-slider {
     <div class="cc-metar" id="cc-metar-eglc"></div>
     <div class="cc-edge"  id="cc-edge-eglc"></div>
     <div class="cc-hint">Detay için tıkla ↗</div>
+    <div class="cc-conf-bar"></div>
   </div>
   <div class="cc" id="cc-ltac" onclick="openModal('ltac')">
     <div class="cc-header"><div><div class="cc-name">🇹🇷 LTAC</div><div class="cc-sub">Ankara Esenboğa <span class="cc-settle">WU</span></div></div><div id="cc-bias-ltac"></div></div>
@@ -531,6 +535,7 @@ input.thresh-slider {
     <div class="cc-metar" id="cc-metar-ltac"></div>
     <div class="cc-edge"  id="cc-edge-ltac"></div>
     <div class="cc-hint">Detay için tıkla ↗</div>
+    <div class="cc-conf-bar"></div>
   </div>
   <div class="cc" id="cc-limc" onclick="openModal('limc')">
     <div class="cc-header"><div><div class="cc-name">🇮🇹 LIMC</div><div class="cc-sub">Milano Malpensa <span class="cc-settle">WU</span></div></div><div id="cc-bias-limc"></div></div>
@@ -540,6 +545,7 @@ input.thresh-slider {
     <div class="cc-metar" id="cc-metar-limc"></div>
     <div class="cc-edge"  id="cc-edge-limc"></div>
     <div class="cc-hint">Detay için tıkla ↗</div>
+    <div class="cc-conf-bar"></div>
   </div>
   <div class="cc" id="cc-ltfm" onclick="openModal('ltfm')">
     <div class="cc-header"><div><div class="cc-name">🇹🇷 LTFM</div><div class="cc-sub">İstanbul Havalimanı <span class="cc-settle cc-settle-noaa">NOAA</span></div></div><div id="cc-bias-ltfm"></div></div>
@@ -549,6 +555,7 @@ input.thresh-slider {
     <div class="cc-metar" id="cc-metar-ltfm"></div>
     <div class="cc-edge"  id="cc-edge-ltfm"></div>
     <div class="cc-hint">Detay için tıkla ↗</div>
+    <div class="cc-conf-bar"></div>
   </div>
   <div class="cc" id="cc-lemd" onclick="openModal('lemd')">
     <div class="cc-header"><div><div class="cc-name">🇪🇸 LEMD</div><div class="cc-sub">Madrid Barajas <span class="cc-settle">WU</span></div></div><div id="cc-bias-lemd"></div></div>
@@ -558,6 +565,7 @@ input.thresh-slider {
     <div class="cc-metar" id="cc-metar-lemd"></div>
     <div class="cc-edge"  id="cc-edge-lemd"></div>
     <div class="cc-hint">Detay için tıkla ↗</div>
+    <div class="cc-conf-bar"></div>
   </div>
   <div class="cc" id="cc-lfpg" onclick="openModal('lfpg')">
     <div class="cc-header"><div><div class="cc-name">🇫🇷 LFPG</div><div class="cc-sub">Paris CDG <span class="cc-settle">WU</span></div></div><div id="cc-bias-lfpg"></div></div>
@@ -567,6 +575,7 @@ input.thresh-slider {
     <div class="cc-metar" id="cc-metar-lfpg"></div>
     <div class="cc-edge"  id="cc-edge-lfpg"></div>
     <div class="cc-hint">Detay için tıkla ↗</div>
+    <div class="cc-conf-bar"></div>
   </div>
 </div>
 
