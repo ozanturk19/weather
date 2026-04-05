@@ -1,7 +1,9 @@
 import asyncio
 import json
+import math
 import os
 import re
+import statistics
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -45,8 +47,13 @@ MODEL_WEIGHTS = {
     "meteofrance": 1.0,
 }
 
-# Basit ortalamadan bu kadar sapan model outlier sayılır
-OUTLIER_THRESHOLD = 5.0
+# Horizon bazlı belirsizlik eşikleri (ağırlıklı std için)
+# D+0 daha sıkı, D+2 daha toleranslı — her gün için (düşük_sınır, orta_sınır)
+UNCERTAINTY_THRESHOLDS = {
+    0: (0.6, 1.2),   # Bugün   — spread < 0.6 = Düşük, < 1.2 = Orta
+    1: (0.8, 1.5),   # Yarın   — spread < 0.8 = Düşük, < 1.5 = Orta
+    2: (1.1, 1.8),   # Öbür gün — toleranslı ama gerçek ayrışmayı yakalar
+}
 
 # Bias düzeltmesi için minimum gün sayısı
 BIAS_MIN_DAYS = 7
@@ -82,8 +89,14 @@ def parse_hourly(data: dict) -> dict:
     return result
 
 
-def blend_day(models_data: dict) -> dict:
-    """Ağırlıklı blend; outlier modeller otomatik hariç tutulur."""
+def blend_day(models_data: dict, horizon: int = 1) -> dict:
+    """
+    Ağırlıklı blend — 4 iyileştirme:
+    1) Adaptif outlier tespiti (2× std, sabit 5°C değil)
+    2) Ağırlıklı standart sapma (hi-lo range değil)
+    3) Horizon-aware eşikler (D+0/1/2 için farklı tolerans)
+    4) Konsensüs skoru (±1°C içindeki model oranı)
+    """
     model_maxes = {
         name: v["max_temp"]
         for name, v in models_data.items()
@@ -94,36 +107,63 @@ def blend_day(models_data: dict) -> dict:
             "max_temp": None, "min_max": None, "max_max": None,
             "spread": None, "uncertainty": "?",
             "outliers_removed": [], "models_used": [],
+            "consensus_ratio": None, "horizon": horizon,
         }
 
     values = list(model_maxes.values())
+    n_models = len(values)
 
-    # 1. Adım: outlier tespiti için basit ortalama
-    simple_mean = sum(values) / len(values)
+    # ── Adım 1: Adaptif outlier tespiti ─────────────────────────────────
+    # Sabit 5°C yerine: 2 × (modeller arası std), minimum 2.0°C
+    simple_mean = sum(values) / n_models
+    if n_models > 2:
+        raw_std = statistics.stdev(values)
+        dynamic_threshold = max(2.0, 2.0 * raw_std)
+    else:
+        dynamic_threshold = 3.0   # az model varsa sabit güvenlik sınırı
 
-    # 2. Adım: OUTLIER_THRESHOLD°C'den fazla sapan modelleri çıkar
-    filtered = {k: v for k, v in model_maxes.items() if abs(v - simple_mean) < OUTLIER_THRESHOLD}
+    filtered = {k: v for k, v in model_maxes.items()
+                if abs(v - simple_mean) < dynamic_threshold}
     if not filtered:
-        filtered = model_maxes  # güvenlik: hepsini çıkarma
+        filtered = model_maxes   # güvenlik: hepsini çıkarma
     outliers_removed = [k for k in model_maxes if k not in filtered]
 
-    # 3. Adım: ECMWF 2x ağırlıklı ortalama
+    # ── Adım 2: Ağırlıklı blend ─────────────────────────────────────────
     total_w = sum(MODEL_WEIGHTS.get(k, 1.0) for k in filtered)
     blend   = round(sum(v * MODEL_WEIGHTS.get(k, 1.0) for k, v in filtered.items()) / total_w, 1)
 
-    lo     = round(min(filtered.values()), 1)
-    hi     = round(max(filtered.values()), 1)
-    spread = round(hi - lo, 1)
+    lo = round(min(filtered.values()), 1)
+    hi = round(max(filtered.values()), 1)
 
-    if spread < 1.0:
+    # ── Adım 3: Ağırlıklı standart sapma (hi-lo range değil) ────────────
+    # Eski: spread = hi - lo  (tek outlier tüm metriği bozar)
+    # Yeni: ECMWF 2x ağırlıklı, gerçek istatistiksel dağılım
+    if len(filtered) > 1:
+        variance = sum(
+            MODEL_WEIGHTS.get(k, 1.0) * (v - blend) ** 2
+            for k, v in filtered.items()
+        ) / total_w
+        spread = round(math.sqrt(variance), 2)
+    else:
+        spread = 0.0
+
+    # ── Adım 4: Horizon-aware belirsizlik eşiği ─────────────────────────
+    # D+2 için D+1'den farklı tolerans — atmosfer fiziğini yansıtır
+    low_t, mid_t = UNCERTAINTY_THRESHOLDS.get(min(horizon, 2), (0.8, 1.5))
+    if spread < low_t:
         uncertainty = "Düşük"
-    elif spread < 2.0:
+    elif spread < mid_t:
         uncertainty = "Orta"
     else:
         uncertainty = "Yüksek"
 
-    # Saatlik ağırlıklı blend (outlier modeller hariç)
-    all_hours: dict = {}  # hour -> list of (temp, weight)
+    # ── Konsensüs skoru (bonus metrik) ──────────────────────────────────
+    # Kaç model blend'den ±1°C içinde? 1.0 = tam konsensüs
+    consensus_count = sum(1 for v in filtered.values() if abs(v - blend) < 1.0)
+    consensus_ratio = round(consensus_count / len(filtered), 2)
+
+    # ── Saatlik ağırlıklı blend (outlier modeller hariç) ────────────────
+    all_hours: dict = {}
     for model_name, model_day in models_data.items():
         if model_name in outliers_removed:
             continue
@@ -151,6 +191,8 @@ def blend_day(models_data: dict) -> dict:
         "hours":            hourly_blend,
         "outliers_removed": outliers_removed,
         "models_used":      list(filtered.keys()),
+        "consensus_ratio":  consensus_ratio,
+        "horizon":          horizon,
     }
 
 
@@ -191,7 +233,7 @@ async def get_weather(station: str):
     all_dates = sorted({d for days in model_days.values() for d in days})
 
     days_result = {}
-    for date in all_dates:
+    for i, date in enumerate(all_dates):
         per_model = {
             name: days[date]
             for name, days in model_days.items()
@@ -199,7 +241,7 @@ async def get_weather(station: str):
         }
         days_result[date] = {
             "models": per_model,
-            "blend":  blend_day(per_model),
+            "blend":  blend_day(per_model, horizon=min(i, 2)),
         }
 
     # Bias düzeltmesi: predictions.json'dan sistematik hatayı hesapla
