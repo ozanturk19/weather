@@ -1398,173 +1398,164 @@ function renderDailyReport() {
   const today = dates[0];
   const tomorrow = dates[1];
   const now = new Date().toLocaleString('tr-TR', { dateStyle: 'long', timeStyle: 'short' });
+  const SN = { eglc:'EGLC · Londra', ltac:'LTAC · Ankara', limc:'LIMC · Milano', ltfm:'LTFM · İstanbul', lemd:'LEMD · Madrid', lfpg:'LFPG · Paris' };
+  const FL = { eglc:'🇬🇧', ltac:'🇹🇷', limc:'🇮🇹', ltfm:'🇹🇷', lemd:'🇪🇸', lfpg:'🇫🇷' };
+  const ST = { eglc:'WU', ltac:'WU', limc:'WU', ltfm:'NOAA', lemd:'WU', lfpg:'WU' };
 
-  const STATION_NAMES = {
-    eglc: 'EGLC · Londra', ltac: 'LTAC · Ankara', limc: 'LIMC · Milano',
-    ltfm: 'LTFM · İstanbul', lemd: 'LEMD · Madrid', lfpg: 'LFPG · Paris'
-  };
-  const FLAGS = { eglc:'🇬🇧', ltac:'🇹🇷', limc:'🇮🇹', ltfm:'🇹🇷', lemd:'🇪🇸', lfpg:'🇫🇷' };
-  const SETTLE = { eglc:'WU', ltac:'WU', limc:'WU', ltfm:'NOAA', lemd:'WU', lfpg:'WU' };
-
-  // --- BÖLÜM 1: Model Doğruluk Tablosu ---
-  let accRows = '';
-  for (const id of STATIONS) {
-    const b = biasCache[id];
-    if (!b || b.count < 1) {
-      accRows += `<tr><td>${FLAGS[id]} ${STATION_NAMES[id]}</td><td class="r" colspan="4" style="color:var(--text-3)">Veri yok (${b?.count||0} gün)</td></tr>`;
-      continue;
-    }
-    const mae = b.mae;
-    const bias = b.bias_7d;
-    const n = b.count;
-    const accCls = mae < 0.5 ? 'report-acc-good' : mae < 1.5 ? 'report-acc-mid' : 'report-acc-bad';
-    const biasDir = Math.abs(bias) < 0.3 ? '≈0' : bias > 0 ? `+${bias.toFixed(1)}°C ↑` : `${bias.toFixed(1)}°C ↓`;
-    const activeLabel = b.bias_active ? '<span style="color:#15803d;font-size:10px">✓ aktif</span>' : `<span style="color:#6b7280;font-size:10px">${n}/7g</span>`;
-    accRows += `<tr>
-      <td>${FLAGS[id]} ${STATION_NAMES[id]}</td>
-      <td class="r"><span class="report-acc-badge ${accCls}">MAE ${mae.toFixed(2)}°C</span></td>
-      <td class="r" style="font-family:var(--mono)">${biasDir}</td>
-      <td class="r">${n}g</td>
-      <td class="r">${activeLabel}</td>
-    </tr>`;
-  }
-
-  // --- BÖLÜM 2: Bugün PM Fırsatları ---
-  const edgeRows = { today: '', tomorrow: '' };
-  for (const [dayIdx, dateKey, label] of [[0, today, 'Bugün'], [1, tomorrow, 'Yarın']]) {
+  // Fırsat hesaplayıcı — her iki gün için
+  function calcEdges(dateKey) {
     const rows = [];
     for (const id of STATIONS) {
       const pm = pmCache[id]?.[dateKey];
       if (!pm?.buckets?.length) continue;
-      const dayData = cache[id]?.days?.[dateKey] || {};
-      const rawMaxes = ensCache[id]?.days?.[dateKey]?.member_maxes || [];
-      const maxes = censorEnsemble(id, rawMaxes);
+      const dayData   = cache[id]?.days?.[dateKey] || {};
+      const blendObj  = dayData.blend;
+      const rawMaxes  = ensCache[id]?.days?.[dateKey]?.member_maxes || [];
+      const maxes     = censorEnsemble(id, rawMaxes);
       const modelDist = modelDistribution(dayData.models || {});
-      const bias = getEffectiveBias(id);
-      const blendObj = dayData.blend;
+      const bias      = getEffectiveBias(id);
       const blendDisplay = (blendObj?.bias_active && blendObj?.bias_corrected_blend != null)
         ? blendObj.bias_corrected_blend : blendObj?.max_temp;
-      const liq = pm.liquidity || 0;
-
+      const spread = blendObj?.spread;
+      const highUnc = spread != null && spread >= 3;
       for (const b of pm.buckets) {
         const ensPr = ensBucketProb(maxes, b, modelDist, bias);
         if (ensPr == null || b.yes_price == null) continue;
         const edge = ensPr - b.yes_price;
         if (Math.abs(edge) < 0.05) continue;
-        rows.push({ id, b, edge, ensPr, blendDisplay, liq, settle: SETTLE[id] });
+        rows.push({ id, b, edge, ensPr, blendDisplay, liq: pm.liquidity || 0, settle: ST[id], highUnc, spread });
       }
     }
     rows.sort((a, b) => Math.abs(b.edge) - Math.abs(a.edge));
-    const top = rows.slice(0, 8);
-    if (!top.length) {
-      edgeRows[dayIdx === 0 ? 'today' : 'tomorrow'] = '<div style="color:var(--text-3);font-size:13px;padding:8px 0">Anlamlı edge bulunamadı.</div>';
-      continue;
-    }
-    edgeRows[dayIdx === 0 ? 'today' : 'tomorrow'] = top.map(r => {
-      const edgePct = (r.edge * 100).toFixed(0);
-      const edgeCls = r.edge > 0 ? 'report-edge-pos' : 'report-edge-neg';
-      const side = r.edge > 0 ? 'YES' : 'NO';
-      const pmPct = Math.round(r.b.yes_price * 100);
-      const ensPct = Math.round(r.ensPr * 100);
-      const star = Math.abs(r.edge) > 0.15 ? '<span class="report-star">★</span> ' : '';
-      const wuWarn = r.settle === 'WU' && r.blendDisplay != null && Math.abs(r.blendDisplay - Math.round(r.blendDisplay)) > 0.25 ? ' ⚠' : '';
-      return `<tr>
-        <td>${star}${FLAGS[r.id]} ${STATION_NAMES[r.id]}</td>
-        <td>${r.b.title}</td>
-        <td class="r"><span class="report-acc-badge" style="background:#e0f2fe;color:#0369a1">${side}</span></td>
-        <td class="r" style="font-family:var(--mono)">PM: ${pmPct}%</td>
-        <td class="r" style="font-family:var(--mono)">Model: ${ensPct}%</td>
-        <td class="r"><span class="${edgeCls}">${r.edge>0?'+':''}${edgePct}%</span>${wuWarn}</td>
-        <td class="r" style="color:var(--text-3);font-size:11px">$${(r.liq/1000).toFixed(0)}K</td>
-      </tr>`;
-    }).join('');
+    return rows;
   }
 
-  // --- BÖLÜM 3: Model Spread Uyarıları ---
-  let warnHtml = '';
-  for (const id of STATIONS) {
-    const blend = cache[id]?.days?.[today]?.blend;
-    if (!blend) continue;
-    if (blend.outliers_removed?.length > 0) {
-      warnHtml += `<div class="report-warn">⚠ <strong>${FLAGS[id]} ${STATION_NAMES[id]}</strong> — Bugün <strong>${blend.outliers_removed.join(', ')}</strong> modeli outlier olarak hariç tutuldu (>5°C sapma). Kalan ${blend.models_used?.length} model ile blend: <strong>${blend.max_temp}°C</strong></div>`;
-    }
-    if (blend.spread >= 3) {
-      warnHtml += `<div class="report-warn" style="border-color:#fca5a5;background:#fef2f2;color:#7f1d1d">🔴 <strong>${FLAGS[id]} ${STATION_NAMES[id]}</strong> — Model spread <strong>${blend.spread}°C</strong> (yüksek belirsizlik)</div>`;
-    }
+  // Fırsat kartı HTML
+  function edgeCard(r, rank) {
+    const side    = r.edge > 0 ? 'YES' : 'NO';
+    const edgePct = Math.round(Math.abs(r.edge) * 100);
+    const pmPct   = Math.round(r.b.yes_price * 100);
+    const ensPct  = Math.round(r.ensPr * 100);
+    const liqK    = r.liq ? '$' + (r.liq/1000).toFixed(0) + 'K' : '—';
+    const wuWarn  = r.settle === 'WU' && r.blendDisplay != null && Math.abs(r.blendDisplay - Math.round(r.blendDisplay)) > 0.25 ? '<span title="WU Fahrenheit sınır riski" style="color:var(--amber);margin-left:4px">⚠</span>' : '';
+    const uncTag  = r.highUnc ? `<span style="font-size:9px;color:var(--red);font-weight:700;margin-left:6px">⚠ yüksek spread</span>` : '';
+    const sideCls = side === 'YES' ? 'color:var(--green)' : 'color:var(--red)';
+    const edgeCls = edgePct >= 15 ? 'color:var(--accent);font-weight:800' : 'color:var(--text);font-weight:700';
+    const rankLabel = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : `#${rank}`;
+    return `<div style="background:var(--bg-subtle);border:1px solid var(--border);border-radius:8px;padding:12px 14px;display:flex;align-items:center;gap:14px;margin-bottom:8px">
+      <div style="font-size:18px;flex-shrink:0">${rankLabel}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${FL[r.id]} ${SN[r.id]} · <span style="font-family:var(--mono);font-size:12px">${r.b.title.replace(' or higher','≥').replace(' or below','≤')}</span>${uncTag}${wuWarn}</div>
+        <div style="font-size:11px;color:var(--text-2);margin-top:3px;font-family:var(--mono)">PM <strong>${pmPct}%</strong> → Model <strong>${ensPct}%</strong> · Blend <strong>${r.blendDisplay != null ? r.blendDisplay.toFixed(1) + '°C' : '—'}</strong> · Likidite ${liqK}</div>
+      </div>
+      <div style="flex-shrink:0;text-align:right">
+        <div style="font-size:15px;${sideCls};font-weight:700">${side}</div>
+        <div style="font-size:20px;${edgeCls};font-family:var(--mono)">+${edgePct}%</div>
+      </div>
+    </div>`;
   }
-  if (!warnHtml) warnHtml = '<div style="color:var(--text-3);font-size:13px;padding:4px 0">Bugün için anlamlı model uyarısı yok.</div>';
 
-  // --- BÖLÜM 4: Dün Aktüel vs Tahmin ---
-  let histRows = '';
-  const allBiasEntries = [];
-  for (const id of STATIONS) {
+  // Model sağlık dot skalası
+  function modelDots(id) {
     const b = biasCache[id];
-    if (!b?.entries?.length) continue;
-    const last = b.entries[b.entries.length - 1];
-    if (!last) continue;
-    allBiasEntries.push({ id, ...last });
+    if (!b || b.count < 1) return '<span style="color:var(--text-3);font-size:11px">veri yok</span>';
+    const mae = b.mae;
+    const score = mae < 0.5 ? 4 : mae < 1.0 ? 3 : mae < 1.5 ? 2 : 1;
+    const col   = score >= 4 ? 'var(--green)' : score === 3 ? 'var(--accent)' : score === 2 ? 'var(--amber)' : 'var(--red)';
+    const dots  = [1,2,3,4].map(i => `<span style="color:${i<=score?col:'var(--border)'}">●</span>`).join('');
+    const biasStr = Math.abs(b.bias_7d) >= 0.3 ? ` ${b.bias_7d > 0 ? '+' : ''}${b.bias_7d.toFixed(1)}°` : '';
+    const activeStr = b.bias_active ? '<span style="color:var(--green);font-size:9px">BC</span>' : '';
+    return `<span style="font-family:var(--mono);font-size:13px;letter-spacing:2px">${dots}</span><span style="font-size:10px;color:var(--text-2);margin-left:6px">MAE ${mae.toFixed(1)}°${biasStr}</span> ${activeStr}`;
   }
-  allBiasEntries.sort((a, b) => Math.abs(b.error) - Math.abs(a.error));
-  if (allBiasEntries.length) {
-    histRows = allBiasEntries.map(e => {
-      const errCls = Math.abs(e.error) < 0.5 ? 'report-edge-pos' : Math.abs(e.error) < 1.5 ? '' : 'report-edge-neg';
-      const errStr = e.error > 0 ? `+${e.error.toFixed(1)}` : e.error.toFixed(1);
-      return `<tr>
-        <td>${FLAGS[e.id]} ${STATION_NAMES[e.id]}</td>
-        <td class="r">${e.date}</td>
-        <td class="r">${e.blend.toFixed(1)}°C</td>
-        <td class="r"><strong>${e.actual.toFixed(0)}°C</strong></td>
-        <td class="r"><span class="${errCls}">${errStr}°C</span></td>
-      </tr>`;
-    }).join('');
-  } else {
-    histRows = '<tr><td colspan="5" style="color:var(--text-3)">Aktüel veri yok</td></tr>';
+
+  // Dün ne oldu
+  function yesterdaySummary() {
+    const entries = [];
+    for (const id of STATIONS) {
+      const b = biasCache[id];
+      if (!b?.entries?.length) continue;
+      const last = b.entries[b.entries.length - 1];
+      if (last) entries.push({ id, ...last });
+    }
+    if (!entries.length) return '<span style="color:var(--text-3)">Henüz aktüel veri yok.</span>';
+    entries.sort((a,b) => Math.abs(b.error) - Math.abs(a.error));
+    const best  = entries[entries.length - 1];
+    const worst = entries[0];
+    const avgErr = (entries.reduce((s,e) => s + Math.abs(e.error), 0) / entries.length).toFixed(1);
+    let html = `<div style="font-size:13px;color:var(--text);line-height:1.9">`;
+    html += `<div>📊 <strong>${entries.length} istasyon</strong> için ortalama hata: <strong style="font-family:var(--mono)">${avgErr}°C</strong></div>`;
+    html += `<div>✅ En iyi: <strong>${FL[best.id]} ${SN[best.id]}</strong> — tahmin <span style="font-family:var(--mono)">${best.blend.toFixed(1)}°C</span>, gerçek <span style="font-family:var(--mono);font-weight:700">${best.actual.toFixed(0)}°C</span> <span style="color:var(--green)">(hata ${best.error > 0 ? '+' : ''}${best.error.toFixed(1)}°C)</span></div>`;
+    if (entries.length > 1) {
+      const worstCls = Math.abs(worst.error) >= 2 ? 'color:var(--red)' : 'color:var(--amber)';
+      html += `<div>⚠️ En kötü: <strong>${FL[worst.id]} ${SN[worst.id]}</strong> — tahmin <span style="font-family:var(--mono)">${worst.blend.toFixed(1)}°C</span>, gerçek <span style="font-family:var(--mono);font-weight:700">${worst.actual.toFixed(0)}°C</span> <span style="${worstCls}">(hata ${worst.error > 0 ? '+' : ''}${worst.error.toFixed(1)}°C)</span></div>`;
+    }
+    html += `</div>`;
+    return html;
   }
+
+  // Model uyarıları
+  function buildWarnings() {
+    const warns = [];
+    for (const id of STATIONS) {
+      const blend = cache[id]?.days?.[today]?.blend;
+      if (!blend) continue;
+      if (blend.outliers_removed?.length > 0)
+        warns.push(`<div style="padding:8px 12px;background:var(--amber);background:rgba(245,158,11,.12);border:1px solid var(--amber);border-radius:7px;font-size:12px;margin-bottom:6px">⚠️ <strong>${FL[id]} ${SN[id]}</strong> — ${blend.outliers_removed.join(', ')} modeli outlier (>5°C). ${blend.models_used?.length} model ile blend: <strong>${blend.max_temp}°C</strong></div>`);
+      if (blend.spread >= 3)
+        warns.push(`<div style="padding:8px 12px;background:rgba(239,68,68,.1);border:1px solid var(--red);border-radius:7px;font-size:12px;margin-bottom:6px">🔴 <strong>${FL[id]} ${SN[id]}</strong> — Model spread <strong style="font-family:var(--mono)">${blend.spread}°C</strong> — yüksek belirsizlik, trade atla</div>`);
+    }
+    return warns.length ? warns.join('') : '';
+  }
+
+  // Tüm hesaplamalar
+  const todayEdges    = calcEdges(today);
+  const tomorrowEdges = calcEdges(tomorrow);
+  const top3Today     = todayEdges.slice(0, 3);
+  const top3Tomorrow  = tomorrowEdges.slice(0, 3);
+  const warnings      = buildWarnings();
 
   el.innerHTML = `
-    <div class="report-title">📋 Günlük Hava & Polymarket Raporu</div>
-    <div class="report-meta">Oluşturulma: ${now} · ${today} (Bugün) · ${tomorrow} (Yarın)</div>
+  <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:8px">
+    <div style="font-size:18px;font-weight:700">📋 Günlük Rapor</div>
+    <div style="font-size:11px;color:var(--text-3);font-family:var(--mono)">${now}</div>
+  </div>
 
-    <div class="report-section">
-      <h3>🎯 Model Doğruluk & Bias Durumu</h3>
-      <table class="report-table">
-        <tr><th>İstasyon</th><th class="r">MAE</th><th class="r">Sistematik Bias</th><th class="r">Veri</th><th class="r">Düzeltme</th></tr>
-        ${accRows}
-      </table>
+  ${warnings ? `
+  <div style="margin-bottom:20px">
+    <div style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">⚡ Model Uyarıları</div>
+    ${warnings}
+  </div>` : ''}
+
+  <div style="margin-bottom:24px">
+    <div style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">🔥 Bugün En İyi Fırsatlar <span style="font-weight:400;color:var(--text-3)">(${today})</span></div>
+    ${top3Today.length ? top3Today.map((r,i) => edgeCard(r, i+1)).join('') : '<div style="color:var(--text-3);font-size:13px;padding:8px">Anlamlı fırsat bulunamadı (edge < %5).</div>'}
+    ${todayEdges.length > 3 ? `<div style="font-size:11px;color:var(--text-3);margin-top:4px">+${todayEdges.length-3} fırsat daha · Detay için istasyon kartlarına tıkla</div>` : ''}
+  </div>
+
+  <div style="margin-bottom:24px">
+    <div style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">🌅 Yarın Fırsatları <span style="font-weight:400;color:var(--text-3)">(${tomorrow})</span></div>
+    ${top3Tomorrow.length ? top3Tomorrow.map((r,i) => edgeCard(r, i+1)).join('') : '<div style="color:var(--text-3);font-size:13px;padding:8px">Anlamlı fırsat bulunamadı.</div>'}
+    ${tomorrowEdges.length > 3 ? `<div style="font-size:11px;color:var(--text-3);margin-top:4px">+${tomorrowEdges.length-3} fırsat daha</div>` : ''}
+  </div>
+
+  <div style="margin-bottom:24px">
+    <div style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">📅 Dün Ne Oldu?</div>
+    ${yesterdaySummary()}
+  </div>
+
+  <div style="margin-bottom:8px">
+    <div style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">🎯 Model Sağlık Durumu</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px">
+      ${STATIONS.map(id => `
+      <div style="background:var(--bg-subtle);border:1px solid var(--border);border-radius:7px;padding:10px 12px;display:flex;align-items:center;justify-content:space-between">
+        <span style="font-size:13px;font-weight:600">${FL[id]} ${SN[id]}</span>
+        <span>${modelDots(id)}</span>
+      </div>`).join('')}
     </div>
-
-    <div class="report-section">
-      <h3>📊 Son Aktüel vs Tahmin</h3>
-      <table class="report-table">
-        <tr><th>İstasyon</th><th class="r">Tarih</th><th class="r">Blend</th><th class="r">Aktüel</th><th class="r">Hata</th></tr>
-        ${histRows}
-      </table>
-    </div>
-
-    <div class="report-section">
-      <h3>⚡ Model Uyarıları — Bugün</h3>
-      ${warnHtml}
-    </div>
-
-    <div class="report-section">
-      <h3>💰 Polymarket Edge — Bugün (${today})</h3>
-      <table class="report-table">
-        <tr><th>İstasyon</th><th>Bucket</th><th class="r">Taraf</th><th class="r">PM</th><th class="r">Model</th><th class="r">Edge</th><th class="r">Likiditie</th></tr>
-        ${edgeRows.today}
-      </table>
-    </div>
-
-    <div class="report-section">
-      <h3>💰 Polymarket Edge — Yarın (${tomorrow})</h3>
-      <table class="report-table">
-        <tr><th>İstasyon</th><th>Bucket</th><th class="r">Taraf</th><th class="r">PM</th><th class="r">Model</th><th class="r">Edge</th><th class="r">Likidite</th></tr>
-        ${edgeRows.tomorrow}
-      </table>
-    </div>
-
-    <div class="report-note">★ = edge >15% · ⚠ = WU Fahrenheit sınır riski · Bias düzeltmesi ≥7 gün veri sonrası aktif olur</div>
-  `;
+    <div style="font-size:10px;color:var(--text-3);margin-top:8px">BC = Bias düzeltmesi aktif · ●●●● = mükemmel, ●●●○ = iyi, ●●○○ = orta, ●○○○ = zayıf · Eşik: &lt;0.5°, &lt;1.0°, &lt;1.5°C MAE</div>
+  </div>`;
 }
+
 
 function toggleModels(id) {
   const el   = document.getElementById('models-' + id);
