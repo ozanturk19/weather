@@ -395,8 +395,10 @@ input.thresh-slider {
 .cc-unc  { font-size:10px; margin-top:5px; min-height:14px; }
 .cc-unc-high { border-left:3px solid #ef4444 !important; }
 .cc-unc-med  { border-left:3px solid #f59e0b !important; }
+.cc-unc-low  { border-left:3px solid #10b981 !important; }
 .cc-unc-badge-high { color:#dc2626; font-weight:700; }
 .cc-unc-badge-med  { color:#d97706; font-weight:600; }
+.cc-unc-badge-low  { color:#059669; font-weight:600; }
 
 /* Paper Trading Panel */
 .pt-box { background:var(--bg-card); border:1px solid var(--border); border-radius:14px; padding:20px 24px; margin-top:10px; box-shadow:var(--shadow); }
@@ -962,7 +964,7 @@ function renderCompact(id) {
   if (uncEl && blendObj?.spread != null) {
     const s = blendObj.spread;
     const outlierW = blendObj.outliers_removed?.length ? ' · model çıkarıldı' : '';
-    card.classList.remove('cc-unc-high','cc-unc-med');
+    card.classList.remove('cc-unc-high','cc-unc-med','cc-unc-low');
     if (s >= 3) {
       uncEl.innerHTML = `<span class="cc-unc-badge-high">⚠ yüksek belirsizlik ±${s.toFixed(1)}°${outlierW}</span>`;
       card.classList.add('cc-unc-high');
@@ -970,7 +972,8 @@ function renderCompact(id) {
       uncEl.innerHTML = `<span class="cc-unc-badge-med">~ orta belirsizlik ±${s.toFixed(1)}°${outlierW}</span>`;
       card.classList.add('cc-unc-med');
     } else {
-      uncEl.innerHTML = outlierW ? `<span style="color:var(--text-3)">model çıkarıldı</span>` : '';
+      uncEl.innerHTML = `<span class="cc-unc-badge-low">✓ yüksek güven ±${s.toFixed(1)}°${outlierW}</span>`;
+      card.classList.add('cc-unc-low');
     }
   } else if (uncEl) { uncEl.innerHTML = ''; }
 
