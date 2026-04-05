@@ -6,7 +6,7 @@
 <title>Polymarket Hava Analizi</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
 /* ===== MIRA — Soft Pro ===== */
 :root {
@@ -28,7 +28,7 @@
   --text-2:    #64748b;
   --text-3:    #94a3b8;
   --mono:      'JetBrains Mono', monospace;
-  --sans:      'Space Grotesk', sans-serif;
+  --sans:      'Inter', sans-serif;
   --shadow:    0 1px 3px rgba(15,23,42,.08), 0 1px 2px rgba(15,23,42,.05);
   --shadow-md: 0 4px 6px rgba(15,23,42,.07), 0 2px 4px rgba(15,23,42,.05);
   --surface:   #ffffff;
@@ -473,6 +473,64 @@ input.thresh-slider {
 .modal-col-left  { display:flex; flex-direction:column; gap:12px; }
 .modal-col-right { display:flex; flex-direction:column; gap:8px; }
 .modal-section-label { font-size:10px; font-weight:700; color:var(--text-3); text-transform:uppercase; letter-spacing:1px; margin-bottom:4px; }
+
+/* ===== MİKRO ANİMASYONLAR ===== */
+@keyframes fadeInUp {
+  from { opacity:0; transform:translateY(6px); }
+  to   { opacity:1; transform:translateY(0); }
+}
+@keyframes shimmer {
+  0%   { background-position:-600px 0; }
+  100% { background-position:600px 0; }
+}
+@keyframes numberPop {
+  0%   { opacity:.4; transform:scale(.96); }
+  100% { opacity:1;  transform:scale(1); }
+}
+
+/* Loading skeleton */
+.loading {
+  display:inline-block;
+  background: linear-gradient(90deg, var(--bg-subtle) 25%, var(--border) 50%, var(--bg-subtle) 75%);
+  background-size:600px 100%;
+  animation:shimmer 1.4s infinite;
+  border-radius:4px;
+  color:transparent !important;
+  min-width:80px;
+  height:14px;
+}
+
+/* Kart grid giriş animasyonu */
+.cc { animation:fadeInUp .3s ease both; }
+.cc:nth-child(2) { animation-delay:.05s; }
+.cc:nth-child(3) { animation-delay:.10s; }
+.cc:nth-child(4) { animation-delay:.15s; }
+.cc:nth-child(5) { animation-delay:.20s; }
+.cc:nth-child(6) { animation-delay:.25s; }
+
+/* Sıcaklık değeri güncellenince */
+.cc-temp { transition:opacity .2s; }
+
+/* Buton */
+.btn { transition:transform .15s, box-shadow .15s, background .15s; }
+.btn:hover { transform:translateY(-1px); box-shadow:var(--shadow-md); }
+.btn:active { transform:translateY(0); }
+.btn-primary { transition:transform .15s, box-shadow .15s, filter .15s; }
+.btn-primary:hover { filter:brightness(1.1); transform:translateY(-1px); }
+
+/* Modal açılış */
+@keyframes modalIn {
+  from { opacity:0; transform:scale(.97); }
+  to   { opacity:1; transform:scale(1); }
+}
+.modal-box { animation:modalIn .2s cubic-bezier(.2,.8,.4,1) both; }
+
+/* Tema geçişi */
+body { transition:background .25s, color .2s; }
+.cc, .card, .report-box, .pt-box, .top-trades-box,
+.modal-box, .positions-box, .portfolio-box {
+  transition:background .25s, border-color .25s, box-shadow .2s, transform .15s;
+}
 </style>
 </head>
 <body>
