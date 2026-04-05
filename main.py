@@ -113,19 +113,23 @@ def blend_day(models_data: dict, horizon: int = 1) -> dict:
     values = list(model_maxes.values())
     n_models = len(values)
 
-    # ── Adım 1: Adaptif outlier tespiti ─────────────────────────────────
-    # Sabit 5°C yerine: 2 × (modeller arası std), minimum 2.0°C
-    simple_mean = sum(values) / n_models
+    # ── Adım 1: Median + MAD tabanlı adaptif outlier tespiti ────────────
+    # Neden MAD? Klasik mean+std kendi kendini besler: büyük outlier stdev'i
+    # şişirir → threshold büyür → outlier içeride kalır (kısır döngü).
+    # Median ve MAD outlier'a karşı sağlam (robust statistics).
+    sorted_vals = sorted(values)
+    anchor = statistics.median(sorted_vals)         # medyan: outlier etkilemez
     if n_models > 2:
-        raw_std = statistics.stdev(values)
-        dynamic_threshold = max(2.0, 2.0 * raw_std)
+        mads = [abs(v - anchor) for v in sorted_vals]
+        mad = statistics.median(mads) or 0          # median absolute deviation
+        dynamic_threshold = max(2.0, 2.5 * mad)     # 2.5×MAD ≈ Tukey 1.5×IQR
     else:
         dynamic_threshold = 3.0   # az model varsa sabit güvenlik sınırı
 
     filtered = {k: v for k, v in model_maxes.items()
-                if abs(v - simple_mean) < dynamic_threshold}
-    if not filtered:
-        filtered = model_maxes   # güvenlik: hepsini çıkarma
+                if abs(v - anchor) < dynamic_threshold}
+    if len(filtered) < 2:
+        filtered = model_maxes   # güvenlik: en az 2 model kalsın
     outliers_removed = [k for k in model_maxes if k not in filtered]
 
     # ── Adım 2: Ağırlıklı blend ─────────────────────────────────────────
