@@ -214,21 +214,42 @@ async def get_weather(station: str):
         f"&timezone={s['tz']}&forecast_days=3"
     )
 
-    async with httpx.AsyncClient(timeout=15) as client:
+    # İlk deneme: tüm modellere paralel istek
+    async def fetch_model(client: httpx.AsyncClient, model_id: str):
+        try:
+            return await client.get(base + f"&models={model_id}")
+        except Exception:
+            return None
+
+    model_days: dict = {}  # model_name -> {date -> {hours, max_temp}}
+
+    async with httpx.AsyncClient(timeout=25) as client:
         responses = await asyncio.gather(
-            *[client.get(base + f"&models={model_id}") for model_id in MODELS.values()],
+            *[fetch_model(client, model_id) for model_id in MODELS.values()],
             return_exceptions=True,
         )
 
-    # Her model için parse et
-    model_days: dict = {}  # model_name -> {date -> {hours, max_temp}}
-    for model_name, resp in zip(MODELS.keys(), responses):
-        if isinstance(resp, Exception) or not resp.is_success:
-            continue
-        try:
-            model_days[model_name] = parse_hourly(resp.json())
-        except Exception:
-            continue
+        # Her model için parse et
+        failed_models = []
+        for model_name, model_id, resp in zip(MODELS.keys(), MODELS.values(), responses):
+            if isinstance(resp, Exception) or resp is None or not resp.is_success:
+                failed_models.append((model_name, model_id))
+                continue
+            try:
+                model_days[model_name] = parse_hourly(resp.json())
+            except Exception:
+                failed_models.append((model_name, model_id))
+                continue
+
+        # Başarısız modeller için tek tek retry (timeout=30s)
+        if failed_models and not model_days:
+            for model_name, model_id in failed_models:
+                try:
+                    r = await client.get(base + f"&models={model_id}", timeout=30)
+                    if r.is_success:
+                        model_days[model_name] = parse_hourly(r.json())
+                except Exception:
+                    continue
 
     if not model_days:
         raise HTTPException(status_code=502, detail="Hiçbir modelden veri alınamadı")

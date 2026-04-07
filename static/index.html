@@ -909,12 +909,15 @@ let dates        = [];
 let activeDay    = 0;
 
 // Fetch with timeout — "yükleniyor" kalmayı önler
-function fetchJSON(url, timeoutMs = 18000) {
+function fetchJSON(url, timeoutMs = 25000) {
   return new Promise((resolve, reject) => {
     const ctrl = new AbortController();
     const tid  = setTimeout(() => { ctrl.abort(); reject(new Error('timeout')); }, timeoutMs);
     fetch(url, { signal: ctrl.signal })
-      .then(r => r.json())
+      .then(r => {
+        if (!r.ok) return r.json().then(d => { throw new Error(d.detail || `HTTP ${r.status}`); });
+        return r.json();
+      })
       .then(d => { clearTimeout(tid); resolve(d); })
       .catch(e => { clearTimeout(tid); reject(e); });
   });
