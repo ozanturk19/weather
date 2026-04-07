@@ -67,7 +67,7 @@ def parse_hourly(data: dict) -> dict:
     times = h.get("time", [])
     temps  = h.get("temperature_2m", [None] * len(times))
     precip = h.get("precipitation_probability", [None] * len(times))
-    wind   = h.get("windspeed_10m", [None] * len(times))
+    wind   = h.get("wind_speed_10m", h.get("windspeed_10m", [None] * len(times)))
 
     days: dict = {}
     for i, t in enumerate(times):
@@ -210,7 +210,7 @@ async def get_weather(station: str):
     base = (
         f"https://api.open-meteo.com/v1/forecast"
         f"?latitude={s['lat']}&longitude={s['lon']}"
-        f"&hourly=temperature_2m,precipitation_probability,windspeed_10m"
+        f"&hourly=temperature_2m,precipitation_probability,wind_speed_10m"
         f"&timezone={s['tz']}&forecast_days=3"
     )
 
