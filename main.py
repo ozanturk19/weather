@@ -4,6 +4,7 @@ import math
 import os
 import re
 import statistics
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -19,6 +20,12 @@ from pydantic import BaseModel
 load_dotenv()
 
 app = FastAPI(title="Polymarket Hava Analizi")
+
+# ── Weather cache: Open-Meteo rate limit koruması ───────────────────────────
+# 6 istasyon × 5 model = 30 eşzamanlı istek → HTTP 429.
+# Her istasyon sonucunu 10 dk cache'le; ?refresh=true ile bypass edilebilir.
+_weather_cache: dict = {}   # {station: {"ts": float, "data": dict}}
+CACHE_TTL = 600             # saniye (10 dakika)
 
 STATIONS = {
     "eglc": {"lat": 51.505, "lon": 0.055,  "tz": "Europe/London",   "label": "EGLC (Londra City)",     "pm_query": "London"},
@@ -201,10 +208,16 @@ def blend_day(models_data: dict, horizon: int = 1) -> dict:
 
 
 @app.get("/api/weather")
-async def get_weather(station: str):
+async def get_weather(station: str, refresh: bool = False):
     station = station.lower()
     if station not in STATIONS:
         raise HTTPException(status_code=404, detail="Bilinmeyen istasyon")
+
+    # ── Cache kontrolü ──────────────────────────────────────────────────
+    now = time.monotonic()
+    cached = _weather_cache.get(station)
+    if not refresh and cached and (now - cached["ts"]) < CACHE_TTL:
+        return cached["data"]
 
     s = STATIONS[station]
     base = (
@@ -295,7 +308,19 @@ async def get_weather(station: str):
         else:
             b["bias_corrected_blend"] = None
 
-    return {"station": station, "days": days_result}
+    result = {"station": station, "days": days_result}
+    _weather_cache[station] = {"ts": time.monotonic(), "data": result}
+    return result
+
+
+@app.get("/api/weather/cache-clear")
+async def clear_weather_cache(station: str = ""):
+    """Cache'i temizle — tüm istasyonlar veya tek istasyon."""
+    if station:
+        _weather_cache.pop(station.lower(), None)
+        return {"cleared": station}
+    _weather_cache.clear()
+    return {"cleared": "all"}
 
 
 @app.get("/api/ensemble")

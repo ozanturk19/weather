@@ -605,7 +605,7 @@ body { transition:background .25s, color .2s; }
       <span class="tab-label">📊 Paper Trading</span>
     </button>
   </div>
-  <button class="btn btn-primary" id="refreshBtn" onclick="loadAll()">↻ Yenile</button>
+  <button class="btn btn-primary" id="refreshBtn" onclick="loadAll(true)">↻ Yenile</button>
   <button class="btn" id="themeBtn" onclick="toggleTheme()" title="Tema değiştir" style="font-size:15px;padding:7px 11px">🌙</button>
 </div>
 
@@ -2178,9 +2178,10 @@ function renderMetar(id) {
 }
 
 // --- VERİ ÇEKME ---
-async function loadStation(id) {
+async function loadStation(id, forceRefresh = false) {
+  const weatherUrl = forceRefresh ? `/api/weather?station=${id}&refresh=true` : `/api/weather?station=${id}`;
   const [weatherRes, tafRes, ensRes, metarRes, histRes, biasRes] = await Promise.allSettled([
-    fetchJSON(`/api/weather?station=${id}`),
+    fetchJSON(weatherUrl),
     fetchJSON(`/api/taf?icao=${id.toUpperCase()}`, 8000),
     fetchJSON(`/api/ensemble?station=${id}`, 25000),
     fetchJSON(`/api/metar?station=${id}`, 10000),
@@ -2257,7 +2258,8 @@ async function loadStation(id) {
 
 // --- PROGRESS BAR ---
 let _progressInterval = null;
-let _isLoading = false;
+let _isLoading    = false;
+let _forceRefresh = false;
 
 function startProgress() {
   const wrap = document.getElementById('progress-bar-wrap');
@@ -2284,9 +2286,10 @@ function finishProgress() {
   setTimeout(() => { wrap.style.opacity = '0'; setTimeout(() => { bar.style.width = '0%'; }, 400); }, 400);
 }
 
-async function loadAll() {
-  if (_isLoading) return;           // çift tıklamaya karşı lock
-  _isLoading = true;
+async function loadAll(forceRefresh = false) {
+  if (_isLoading) return;
+  _isLoading    = true;
+  _forceRefresh = forceRefresh;
   cache        = {};
   ensCache     = {};
   metarCache   = {};
@@ -2317,18 +2320,20 @@ async function loadAll() {
       const cce = document.getElementById('cc-edge-' + id);
       if (cce) cce.innerHTML = '<span class="loading" style="font-size:11px">yükleniyor...</span>';
     });
-    // Batch yükleme: 4'er 4'er — VPS'i ve dış API'leri bunaltmaz
-    const BATCH = 4;
+    // Batch yükleme: 2'şer 2'şer + 400ms ara — rate limit koruması
+    // 6 istasyon × 5 model = 30 paralel req → HTTP 429. BATCH=2 → max 10/batch.
+    // Backend cache (10dk) sayesinde sonraki yüklemeler anlık döner.
+    const BATCH = 2;
     for (let i = 0; i < STATIONS.length; i += BATCH) {
       await Promise.all(
         STATIONS.slice(i, i + BATCH).map(id =>
-          loadStation(id).then(() => {
-            // Her istasyon gelince hemen render et
+          loadStation(id, _forceRefresh).then(() => {
             try { renderStation(id); renderMetar(id); renderEnsemble(id); renderBias(id); renderSummary(id); }
             catch(e) { console.error('[render]', id, e); }
           })
         )
       );
+      if (i + BATCH < STATIONS.length) await new Promise(r => setTimeout(r, 400));
     }
     // PM hafif istek — hepsini paralel çek
     await Promise.all(STATIONS.map(id => loadPolymarket(id)));
