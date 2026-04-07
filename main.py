@@ -27,6 +27,10 @@ app = FastAPI(title="Polymarket Hava Analizi")
 _weather_cache: dict = {}   # {station: {"ts": float, "data": dict}}
 CACHE_TTL = 600             # saniye (10 dakika)
 
+# Open-Meteo eşzamanlı istek sınırı: 6 istasyon × 5 model = 30 req → HTTP 429.
+# Semaphore ile aynı anda max 6 istek → rate limit aşılmaz.
+_openmeteo_sem = asyncio.Semaphore(6)
+
 STATIONS = {
     "eglc": {"lat": 51.505, "lon": 0.055,  "tz": "Europe/London",   "label": "EGLC (Londra City)",     "pm_query": "London"},
     "ltac": {"lat": 40.128, "lon": 32.995, "tz": "Europe/Istanbul", "label": "LTAC (Ankara Esenboğa)", "pm_query": "Ankara"},
@@ -227,14 +231,15 @@ async def get_weather(station: str, refresh: bool = False):
         f"&timezone={s['tz']}&forecast_days=3"
     )
 
-    # İlk deneme: tüm modellere paralel istek
+    # Semaphore ile korunan model çekme — eşzamanlı Open-Meteo isteklerini sınırlar
     async def fetch_model(client: httpx.AsyncClient, model_id: str):
-        try:
-            return await client.get(base + f"&models={model_id}")
-        except Exception:
-            return None
+        async with _openmeteo_sem:
+            try:
+                return await client.get(base + f"&models={model_id}")
+            except Exception:
+                return None
 
-    model_days: dict = {}  # model_name -> {date -> {hours, max_temp}}
+    model_days: dict = {}
 
     async with httpx.AsyncClient(timeout=25) as client:
         responses = await asyncio.gather(
@@ -242,7 +247,7 @@ async def get_weather(station: str, refresh: bool = False):
             return_exceptions=True,
         )
 
-        # Her model için parse et
+        # Her model için parse et; başarısız olanları kaydet
         failed_models = []
         for model_name, model_id, resp in zip(MODELS.keys(), MODELS.values(), responses):
             if isinstance(resp, Exception) or resp is None or not resp.is_success:
@@ -252,17 +257,18 @@ async def get_weather(station: str, refresh: bool = False):
                 model_days[model_name] = parse_hourly(resp.json())
             except Exception:
                 failed_models.append((model_name, model_id))
-                continue
 
-        # Başarısız modeller için tek tek retry (timeout=30s)
-        if failed_models and not model_days:
+        # Başarısız modelleri 1s bekleyip tek tek retry (429 sonrası)
+        if failed_models:
+            await asyncio.sleep(1.0)
             for model_name, model_id in failed_models:
-                try:
-                    r = await client.get(base + f"&models={model_id}", timeout=30)
-                    if r.is_success:
-                        model_days[model_name] = parse_hourly(r.json())
-                except Exception:
-                    continue
+                async with _openmeteo_sem:
+                    try:
+                        r = await client.get(base + f"&models={model_id}", timeout=30)
+                        if r.is_success:
+                            model_days[model_name] = parse_hourly(r.json())
+                    except Exception:
+                        continue
 
     if not model_days:
         raise HTTPException(status_code=502, detail="Hiçbir modelden veri alınamadı")
