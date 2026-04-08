@@ -1719,16 +1719,15 @@ function renderStation(id) {
       ? `${blend.min_max} – ${blend.max_max}°C · ${(blend.models_used || Object.keys(models)).length} model${outlierBadge}${wuRisk}`
       : '';
 
-  // Ensemble P50 ile blend arasındaki uyumsuzluk uyarısı
+  // Belirsizlik rozeti: summary-box'ta zaten var (tek kaynak) — burada tekrar göstermiyoruz.
+  // Sadece blend↔ensemble uyumsuzluk sinyalini (anlamlı uyarı) gösteriyoruz.
   const ensP50 = ensCache[id]?.days?.[date]?.p50;
   const divergence = (ensP50 != null && blend.max_temp != null) ? Math.abs(ensP50 - blend.max_temp) : 0;
   const divHtml = divergence >= 0.7
     ? `<span class="unc-badge unc-high" title="5 model blend: ${blend.max_temp?.toFixed(1)}°C — ECMWF ensemble P50: ${ensP50}°C. Bu fark yüksek belirsizlik sinyalidir.">⚡ blend↔ens +${divergence.toFixed(1)}°C</span>`
     : '';
 
-  document.getElementById('unc-' + id).innerHTML = (blend.uncertainty !== '?'
-    ? `<span class="unc-badge ${uncClass(blend.uncertainty)}">${blend.uncertainty} belirsizlik</span>`
-    : '') + divHtml;
+  document.getElementById('unc-' + id).innerHTML = divHtml;
 
   // Saatlik bar chart
   const keyHours = (blend.hours || []).filter(h => KEY_HOURS.includes(h.hour));
