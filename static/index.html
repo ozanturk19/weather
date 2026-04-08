@@ -949,14 +949,21 @@ function dayName(iso) {
   return ['Pazar','Pazartesi','Salı','Çarşamba','Perşembe','Cuma','Cumartesi'][date.getDay()];
 }
 
-// Modal'dan Saatlik + Ensemble bölümlerini gizle
+// Modal'dan teknik bölümleri gizle
 // (Veriler arka planda hesaplama için hâlâ yüklenir, sadece UI'dan kaldırılır)
 function hideModalSections() {
   STATIONS.forEach(id => {
+    // Saatlik + Ensemble: 1 seviye yukarı
     ['h-', 'ens-'].forEach(prefix => {
       const el = document.getElementById(prefix + id);
       if (el?.parentElement) el.parentElement.style.display = 'none';
     });
+    // Blend Tahmini: blend-temp → blend-block → section wrapper (2 seviye)
+    const blendEl = document.getElementById('blend-' + id);
+    if (blendEl?.parentElement?.parentElement) blendEl.parentElement.parentElement.style.display = 'none';
+    // 5 model detayı: model-grid → section wrapper (1 seviye)
+    const modelsEl = document.getElementById('models-' + id);
+    if (modelsEl?.parentElement) modelsEl.parentElement.style.display = 'none';
   });
 }
 
