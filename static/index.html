@@ -213,6 +213,9 @@ h1::before {
 .ens-prob.low  { color:var(--red); }
 .ens-prob-wu { font-size:11px; color:var(--blue); font-weight:600; margin-top:2px; display:block; font-family:var(--mono); }
 
+/* Context signal (dün / yarın) */
+.cc-ctx { font-size:10px; color:var(--text-3); margin-top:4px; min-height:13px; font-family:var(--mono); letter-spacing:-.2px; }
+
 /* METAR */
 .metar-row { display:flex; gap:14px; align-items:baseline; margin-bottom:5px; flex-wrap:wrap; }
 .metar-now { font-size:22px; font-weight:700; color:var(--accent); font-family:var(--mono); }
@@ -617,9 +620,10 @@ body { transition:background .25s, color .2s; }
     <div class="cc-temp" id="cc-blend-eglc">—</div>
     <div class="cc-range" id="cc-range-eglc"></div>
     <div class="cc-unc"   id="cc-unc-eglc"></div>
+    <div class="cc-ctx"   id="cc-ctx-eglc"></div>
     <div class="cc-metar" id="cc-metar-eglc"></div>
     <div class="cc-edge"  id="cc-edge-eglc"></div>
-    <div class="cc-hint">Detay için tıkla ↗</div>
+    <div class="cc-hint">Detay ↗ <span id="cc-pm-eglc"></span></div>
     <div class="cc-conf-bar"></div>
   </div>
   <div class="cc" id="cc-ltac" onclick="openModal('ltac')">
@@ -627,9 +631,10 @@ body { transition:background .25s, color .2s; }
     <div class="cc-temp" id="cc-blend-ltac">—</div>
     <div class="cc-range" id="cc-range-ltac"></div>
     <div class="cc-unc"   id="cc-unc-ltac"></div>
+    <div class="cc-ctx"   id="cc-ctx-ltac"></div>
     <div class="cc-metar" id="cc-metar-ltac"></div>
     <div class="cc-edge"  id="cc-edge-ltac"></div>
-    <div class="cc-hint">Detay için tıkla ↗</div>
+    <div class="cc-hint">Detay ↗ <span id="cc-pm-ltac"></span></div>
     <div class="cc-conf-bar"></div>
   </div>
   <div class="cc" id="cc-limc" onclick="openModal('limc')">
@@ -637,9 +642,10 @@ body { transition:background .25s, color .2s; }
     <div class="cc-temp" id="cc-blend-limc">—</div>
     <div class="cc-range" id="cc-range-limc"></div>
     <div class="cc-unc"   id="cc-unc-limc"></div>
+    <div class="cc-ctx"   id="cc-ctx-limc"></div>
     <div class="cc-metar" id="cc-metar-limc"></div>
     <div class="cc-edge"  id="cc-edge-limc"></div>
-    <div class="cc-hint">Detay için tıkla ↗</div>
+    <div class="cc-hint">Detay ↗ <span id="cc-pm-limc"></span></div>
     <div class="cc-conf-bar"></div>
   </div>
   <div class="cc" id="cc-ltfm" onclick="openModal('ltfm')">
@@ -647,9 +653,10 @@ body { transition:background .25s, color .2s; }
     <div class="cc-temp" id="cc-blend-ltfm">—</div>
     <div class="cc-range" id="cc-range-ltfm"></div>
     <div class="cc-unc"   id="cc-unc-ltfm"></div>
+    <div class="cc-ctx"   id="cc-ctx-ltfm"></div>
     <div class="cc-metar" id="cc-metar-ltfm"></div>
     <div class="cc-edge"  id="cc-edge-ltfm"></div>
-    <div class="cc-hint">Detay için tıkla ↗</div>
+    <div class="cc-hint">Detay ↗ <span id="cc-pm-ltfm"></span></div>
     <div class="cc-conf-bar"></div>
   </div>
   <div class="cc" id="cc-lemd" onclick="openModal('lemd')">
@@ -657,9 +664,10 @@ body { transition:background .25s, color .2s; }
     <div class="cc-temp" id="cc-blend-lemd">—</div>
     <div class="cc-range" id="cc-range-lemd"></div>
     <div class="cc-unc"   id="cc-unc-lemd"></div>
+    <div class="cc-ctx"   id="cc-ctx-lemd"></div>
     <div class="cc-metar" id="cc-metar-lemd"></div>
     <div class="cc-edge"  id="cc-edge-lemd"></div>
-    <div class="cc-hint">Detay için tıkla ↗</div>
+    <div class="cc-hint">Detay ↗ <span id="cc-pm-lemd"></span></div>
     <div class="cc-conf-bar"></div>
   </div>
   <div class="cc" id="cc-lfpg" onclick="openModal('lfpg')">
@@ -667,9 +675,10 @@ body { transition:background .25s, color .2s; }
     <div class="cc-temp" id="cc-blend-lfpg">—</div>
     <div class="cc-range" id="cc-range-lfpg"></div>
     <div class="cc-unc"   id="cc-unc-lfpg"></div>
+    <div class="cc-ctx"   id="cc-ctx-lfpg"></div>
     <div class="cc-metar" id="cc-metar-lfpg"></div>
     <div class="cc-edge"  id="cc-edge-lfpg"></div>
-    <div class="cc-hint">Detay için tıkla ↗</div>
+    <div class="cc-hint">Detay ↗ <span id="cc-pm-lfpg"></span></div>
     <div class="cc-conf-bar"></div>
   </div>
 </div>
@@ -940,6 +949,17 @@ function dayName(iso) {
   return ['Pazar','Pazartesi','Salı','Çarşamba','Perşembe','Cuma','Cumartesi'][date.getDay()];
 }
 
+// Modal'dan Saatlik + Ensemble bölümlerini gizle
+// (Veriler arka planda hesaplama için hâlâ yüklenir, sadece UI'dan kaldırılır)
+function hideModalSections() {
+  STATIONS.forEach(id => {
+    ['h-', 'ens-'].forEach(prefix => {
+      const el = document.getElementById(prefix + id);
+      if (el?.parentElement) el.parentElement.style.display = 'none';
+    });
+  });
+}
+
 function initDates() {
   dates = [isoDate(0), isoDate(1), isoDate(2)];
   dates.forEach((iso, i) => {
@@ -1166,6 +1186,36 @@ function renderCompact(id) {
       edgeEl.innerHTML = `<span class="${cls}">${bestBucket.title.replace(' or higher','≥').replace(' or below','≤')} ${side} +${pct}%</span>${liq}`;
     } else {
       edgeEl.innerHTML = '<span style="color:var(--text-3);font-size:11px">edge yok</span>';
+    }
+  }
+
+  // Context signal: dün max + yarın tahmin
+  const ctxEl = document.getElementById('cc-ctx-' + id);
+  if (ctxEl) {
+    const hist = historyCache[id];
+    const d1Blend = cache[id]?.days?.[dates[1]]?.blend;
+    const ctxParts = [];
+    if (hist?.daily_maxes?.length) {
+      const todayDate = dates[0];
+      const yday = hist.daily_maxes.filter(d => d.date < todayDate).slice(-1)[0];
+      if (yday?.max_temp != null) ctxParts.push(`dün ${Math.round(yday.max_temp)}°`);
+    }
+    if (d1Blend?.max_temp != null) {
+      const c = (d1Blend.bias_active && d1Blend.bias_corrected_blend != null)
+        ? d1Blend.bias_corrected_blend : d1Blend.max_temp;
+      ctxParts.push(`yarın ${c.toFixed(1)}°`);
+    }
+    ctxEl.textContent = ctxParts.join(' · ');
+  }
+
+  // PM link
+  const pmLinkEl = document.getElementById('cc-pm-' + id);
+  if (pmLinkEl) {
+    const eventUrl = pmCache[id]?.[date]?.event_url;
+    if (eventUrl) {
+      pmLinkEl.innerHTML = `· <a href="${eventUrl}" target="_blank" onclick="event.stopPropagation()" style="color:var(--accent);text-decoration:none">PM ↗</a>`;
+    } else {
+      pmLinkEl.textContent = '';
     }
   }
 
@@ -2773,6 +2823,7 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal()
 // --- BAŞLAT ---
 initTheme();
 initDates();
+hideModalSections();
 loadAll();
 
 // Kaydedilmiş cüzdan varsa yükle
