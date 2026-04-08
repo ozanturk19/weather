@@ -1,0 +1,3 @@
+# Data files - backtest sonuçları çok büyük olabilir, opt-in commit
+data/*.json
+!data/.gitkeep
