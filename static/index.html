@@ -1110,32 +1110,44 @@ function selectModalDay(idx) {
 function renderCompact(id) {
   const date = dates[activeDay];
 
-  // Blend
+  // Blend — divergence > 2.5°C ise ensemble P50 otorite
   const blendObj = cache[id]?.days?.[date]?.blend;
-  const corrBlend = (blendObj?.bias_active && blendObj?.bias_corrected_blend != null)
-    ? blendObj.bias_corrected_blend : blendObj?.max_temp;
-  const blendEl = document.getElementById('cc-blend-' + id);
-  if (blendEl) blendEl.textContent = corrBlend != null ? corrBlend.toFixed(1) + '°C' : '—';
-
-  // Range
-  const rangeEl = document.getElementById('cc-range-' + id);
-  if (rangeEl && blendObj?.min_max != null) {
-    const outW = blendObj.outliers_removed?.length ? ' ⚠' : '';
-    const unc  = blendObj.spread != null ? ` ±${blendObj.spread.toFixed(1)}°` : '';
-    rangeEl.textContent = blendObj.min_max + '–' + blendObj.max_max + '°C' + unc + outW;
+  const auth     = authorityTemp(id, date);
+  const blendEl  = document.getElementById('cc-blend-' + id);
+  if (blendEl) {
+    if (auth.temp != null) {
+      blendEl.textContent = auth.temp.toFixed(1) + '°C';
+    } else {
+      blendEl.textContent = '—';
+    }
   }
 
-  // Uncertainty badge — backendden gelen uncertainty string kullan (sayısal eşik değil)
-  // spread artık ağırlıklı std; uncertainty horizon-aware backend'de hesaplandı
+  // Range + divergence uyarısı
+  const rangeEl = document.getElementById('cc-range-' + id);
+  if (rangeEl) {
+    if (auth.source === 'ensemble' && blendObj?.max_temp != null) {
+      // Blend güvenilmez: ensemble'ı göster, blend'i paranteze al
+      rangeEl.innerHTML = `<span style="color:var(--amber);font-weight:700" title="Blend (${blendObj.max_temp.toFixed(1)}°C) ensemble P50'den ${auth.divergence.toFixed(1)}°C uzak — ensemble otorite alındı">⚡ ens P50 · blend ${blendObj.max_temp.toFixed(1)}° (~${auth.divergence.toFixed(0)}° fark)</span>`;
+    } else if (blendObj?.min_max != null) {
+      const outW = blendObj.outliers_removed?.length ? ' ⚠' : '';
+      const unc  = blendObj.spread != null ? ` ±${blendObj.spread.toFixed(1)}°` : '';
+      rangeEl.textContent = blendObj.min_max + '–' + blendObj.max_max + '°C' + unc + outW;
+    }
+  }
+
+  // Uncertainty badge — ensemble override varsa önce onu kontrol et
   const uncEl = document.getElementById('cc-unc-' + id);
   const card  = document.getElementById('cc-' + id);
-  if (uncEl && blendObj?.spread != null) {
+  card.classList.remove('cc-unc-high','cc-unc-med','cc-unc-low');
+  if (auth.source === 'ensemble') {
+    // Ensemble otorite → kart amber (uyarı ama felaket değil)
+    if (uncEl) uncEl.innerHTML = `<span class="cc-unc-badge-med">⚡ ens override ±${auth.divergence.toFixed(1)}° fark</span>`;
+    card.classList.add('cc-unc-med');
+  } else if (uncEl && blendObj?.spread != null) {
     const s   = blendObj.spread;
     const u   = blendObj.uncertainty || '';
-    const h   = blendObj.horizon ?? 1;
     const con = blendObj.consensus_ratio != null ? ` · ${Math.round(blendObj.consensus_ratio*100)}% konsensüs` : '';
     const outlierW = blendObj.outliers_removed?.length ? ' · model çıkarıldı' : '';
-    card.classList.remove('cc-unc-high','cc-unc-med','cc-unc-low');
     if (u === 'Yüksek') {
       uncEl.innerHTML = `<span class="cc-unc-badge-high">⚠ yüksek belirsizlik ±${s.toFixed(2)}°${outlierW}</span>`;
       card.classList.add('cc-unc-high');
@@ -1166,7 +1178,7 @@ function renderCompact(id) {
     const dayData   = cache[id]?.days?.[date] || {};
     const rawMaxes  = ensCache[id]?.days?.[date]?.member_maxes || [];
     const maxes     = censorEnsemble(id, rawMaxes);
-    const modelDist = modelDistribution(dayData.models || {});
+    const modelDist = bestDistribution(id, date);
     const bias      = getEffectiveBias(id);
 
     let bestAbs = 0, bestBucket = null, bestEns = null;
@@ -1293,7 +1305,7 @@ async function ptScanSignals() {
       const dayData  = cache[id]?.days?.[date] || {};
       const rawMaxes = ensCache[id]?.days?.[date]?.member_maxes || [];
       const maxes    = censorEnsemble(id, rawMaxes);
-      const modelDist = modelDistribution(dayData.models || {});
+      const modelDist = bestDistribution(id, date);
       const bias     = getEffectiveBias(id);
 
       for (const b of pm.buckets) {
@@ -1507,7 +1519,7 @@ function renderDailyReport() {
       const blendObj  = dayData.blend;
       const rawMaxes  = ensCache[id]?.days?.[dateKey]?.member_maxes || [];
       const maxes     = censorEnsemble(id, rawMaxes);
-      const modelDist = modelDistribution(dayData.models || {});
+      const modelDist = bestDistribution(id, dateKey);
       const bias      = getEffectiveBias(id);
       const blendDisplay = (blendObj?.bias_active && blendObj?.bias_corrected_blend != null)
         ? blendObj.bias_corrected_blend : blendObj?.max_temp;
@@ -1691,8 +1703,17 @@ function renderStation(id) {
     ? blend.bias_corrected_blend : null;
   const displayBlend = corrBlend ?? blend.max_temp;
 
+  // Blend↔Ensemble divergence kontrolü — modal'daki otorite kararı
+  const authM = authorityTemp(id, date);
+  const ensUnreliable = authM.source === 'ensemble';
+
   if (blend.max_temp != null) {
-    if (corrBlend != null && Math.abs(corrBlend - blend.max_temp) >= 0.2) {
+    if (ensUnreliable) {
+      // Blend güvenilmez → ensemble P50 otorite, blend grileşir
+      document.getElementById('blend-' + id).innerHTML =
+        `<span style="color:var(--text-3);text-decoration:line-through;font-size:22px">${blend.max_temp.toFixed(1)}°C</span>` +
+        `<span style="color:var(--amber);font-size:28px;margin-left:8px" title="Blend güvenilmez (±${authM.divergence.toFixed(1)}°C fark). Ensemble P50 kullanılıyor.">⚡ ${authM.temp.toFixed(1)}°C</span>`;
+    } else if (corrBlend != null && Math.abs(corrBlend - blend.max_temp) >= 0.2) {
       document.getElementById('blend-' + id).innerHTML =
         `${blend.max_temp.toFixed(1)}°C <span style="font-size:13px;color:${corrBlend>blend.max_temp?'#1d4ed8':'#b91c1c'};font-family:var(--mono)" title="Bias düzeltmeli tahmin (${blend.bias_count}g veri)">→ ${corrBlend.toFixed(1)}°C</span>`;
     } else {
@@ -1704,27 +1725,28 @@ function renderStation(id) {
 
   // Outlier uyarısı
   const outlierBadge = (blend.outliers_removed?.length > 0)
-    ? ` · <span style="color:#b45309;font-size:11px" title="${blend.outliers_removed.join(', ')} hariç tutuldu (${OUTLIER_THRESHOLD || 5}°C+ sapma)">⚠ ${blend.outliers_removed.join('+')} outlier</span>`
+    ? ` · <span style="color:#b45309;font-size:11px" title="${blend.outliers_removed.join(', ')} hariç tutuldu">⚠ ${blend.outliers_removed.join('+')} outlier</span>`
     : '';
 
-  // WU yuvarlama riski: blend tam sayıya 0.3°C'den fazla yakınsa
+  // WU yuvarlama riski
   const settlement = SETTLEMENT_SRC?.[id] || 'WU';
   const wuRisk = settlement === 'WU' && displayBlend != null
     && Math.abs(displayBlend - Math.round(displayBlend)) > 0.25
-    ? ` · <span style="color:#92400e;font-size:11px" title="WU Fahrenheit→Celsius dönüşümü ±0.3°C belirsizlik yaratabilir">⚠ WU sınır</span>`
+    ? ` · <span style="color:#92400e;font-size:11px">⚠ WU sınır</span>`
     : '';
 
   document.getElementById('range-' + id).innerHTML =
-    blend.min_max != null
-      ? `${blend.min_max} – ${blend.max_max}°C · ${(blend.models_used || Object.keys(models)).length} model${outlierBadge}${wuRisk}`
-      : '';
+    ensUnreliable
+      ? `<span style="color:var(--amber);font-size:11px">⚡ Blend güvenilmez — ensemble otorite (±${authM.divergence.toFixed(1)}°C fark · blend: ${blend.max_temp?.toFixed(1)}°C)</span>`
+      : (blend.min_max != null
+          ? `${blend.min_max} – ${blend.max_max}°C · ${(blend.models_used || Object.keys(models)).length} model${outlierBadge}${wuRisk}`
+          : '');
 
-  // Belirsizlik rozeti: summary-box'ta zaten var (tek kaynak) — burada tekrar göstermiyoruz.
-  // Sadece blend↔ensemble uyumsuzluk sinyalini (anlamlı uyarı) gösteriyoruz.
+  // Divergence badge — sadece küçük farklar için (büyük fark zaten yukarıda gösterildi)
   const ensP50 = ensCache[id]?.days?.[date]?.p50;
   const divergence = (ensP50 != null && blend.max_temp != null) ? Math.abs(ensP50 - blend.max_temp) : 0;
-  const divHtml = divergence >= 0.7
-    ? `<span class="unc-badge unc-high" title="5 model blend: ${blend.max_temp?.toFixed(1)}°C — ECMWF ensemble P50: ${ensP50}°C. Bu fark yüksek belirsizlik sinyalidir.">⚡ blend↔ens +${divergence.toFixed(1)}°C</span>`
+  const divHtml = (!ensUnreliable && divergence >= 0.7)
+    ? `<span class="unc-badge unc-high" title="5 model blend: ${blend.max_temp?.toFixed(1)}°C — Ensemble P50: ${ensP50}°C">⚡ blend↔ens +${divergence.toFixed(1)}°C</span>`
     : '';
 
   document.getElementById('unc-' + id).innerHTML = divHtml;
@@ -1905,7 +1927,7 @@ function synthesizeStation(id) {
   const pm        = pmCache[id]?.[date];
   const maxes     = ens.member_maxes || [];
   const dayData   = cache[id]?.days?.[date] || {};
-  const modelDist = modelDistribution(dayData.models || {});
+  const modelDist = bestDistribution(id, date);
   let bestTrade   = null;
   if (pm?.buckets) {
     for (let i = 0; i < pm.buckets.length; i++) {
@@ -2029,7 +2051,7 @@ function computeTopTrades() {
     const dayData   = cache[id]?.days?.[date] || {};
     const rawMaxes  = ensCache[id]?.days?.[date]?.member_maxes || [];
     const maxes     = censorEnsemble(id, rawMaxes);   // İyileştirme #4
-    const modelDist = modelDistribution(dayData.models || {});
+    const modelDist = bestDistribution(id, date);
     const bias      = getEffectiveBias(id);
     const lockedMax = getLockedMax(id);
 
@@ -2504,6 +2526,45 @@ function modelDistribution(models) {
   return { mean, std: Math.max(std, 0.5) };  // min 0.5°C std
 }
 
+// Ensemble P50/IQR'den Gaussian dağılım — 5 model blend'den DAHA güvenilir
+// IQR → sigma: normal dağılımda IQR ≈ 1.35σ
+// Neden: model blend outlier filtresi çoğunluk yanlışsa başarısız olur;
+// ensemble 30-40 üye ile istatistiksel olarak daha sağlam.
+function ensembleDistribution(id, date) {
+  const ens = ensCache[id]?.days?.[date];
+  if (!ens?.p50 || ens.p25 == null || ens.p75 == null) return null;
+  const iqr = ens.p75 - ens.p25;
+  return { mean: ens.p50, std: Math.max(iqr / 1.35, 0.5), source: 'ensemble' };
+}
+
+// Blend↔Ensemble uyumsuzluk eşiği
+const ENS_DIVERGENCE_THRESHOLD = 2.5;
+
+// İstasyon + gün için otoriter sıcaklık kaynağı
+// |blend - ens_p50| ≥ 2.5°C → ensemble kazanır (outlier filtresi başarısız olmuş olabilir)
+function authorityTemp(id, date) {
+  const blendObj = cache[id]?.days?.[date]?.blend;
+  const ensP50   = ensCache[id]?.days?.[date]?.p50;
+  const blendMax = blendObj
+    ? ((blendObj.bias_active && blendObj.bias_corrected_blend != null)
+        ? blendObj.bias_corrected_blend : blendObj.max_temp)
+    : null;
+  if (ensP50 != null && blendMax != null) {
+    const div = Math.abs(ensP50 - blendMax);
+    if (div >= ENS_DIVERGENCE_THRESHOLD) {
+      return { temp: ensP50, source: 'ensemble', divergence: div };
+    }
+    return { temp: blendMax, source: 'blend', divergence: div };
+  }
+  return { temp: blendMax, source: 'blend', divergence: 0 };
+}
+
+// Tercih sırası: ensemble dağılımı > 5 model dağılımı
+// Ensemble yoksa veya tek üye varsa 5 model Gaussian'a düş
+function bestDistribution(id, date) {
+  return ensembleDistribution(id, date) || modelDistribution(cache[id]?.days?.[date]?.models || {});
+}
+
 function renderMarkets(id) {
   const el = document.getElementById('pm-markets-' + id);
   if (!el) return;
@@ -2523,11 +2584,9 @@ function renderMarkets(id) {
   const rawMaxes  = ens?.member_maxes || [];
   const maxes     = censorEnsemble(id, rawMaxes);   // İyileştirme #4
   const dayData   = cache[id]?.days?.[date] || {};
-  const blendRaw  = dayData.blend?.max_temp;
-  // Bias düzeltmeli blend varsa onu kullan, yoksa ham blend
-  const blendMax  = (dayData.blend?.bias_active && dayData.blend?.bias_corrected_blend != null)
-    ? dayData.blend.bias_corrected_blend : blendRaw;
-  const modelDist = modelDistribution(dayData.models || {});
+  const auth      = authorityTemp(id, date);
+  const blendMax  = auth.temp;
+  const modelDist = bestDistribution(id, date);
   const bias      = getEffectiveBias(id);
 
   const lockedMax = getLockedMax(id);
