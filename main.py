@@ -49,13 +49,16 @@ MODELS = {
     "meteofrance": "meteofrance_seamless",
 }
 
-# Model ağırlıkları: ECMWF küresel en doğru, GFS Asya'da zayıf
+# Model ağırlıkları — 60 günlük backtest MAE⁻¹ normalize (D+1, 6 istasyon)
+# Önceki: ECMWF=2.0, ICON=1.0, UKMO=0.9 (varsayım bazlı)
+# Backtest sonucu: ICON D+1 MAE=1.08 (en iyi), UKMO=1.80 (en kötü), ECMWF=1.20
+# UKMO LTFM'de özellikle kötü: 3.22°C MAE — ağırlığı yarıya indirildi
 MODEL_WEIGHTS = {
-    "ecmwf":       2.0,
-    "icon":        1.0,
-    "gfs":         0.8,
-    "ukmo":        0.9,
-    "meteofrance": 1.0,
+    "ecmwf":       1.5,
+    "icon":        1.8,
+    "gfs":         1.0,
+    "ukmo":        0.5,
+    "meteofrance": 0.9,
 }
 
 # Horizon bazlı belirsizlik eşikleri (ağırlıklı std için)
