@@ -22,3 +22,4 @@ predictions.json
 # IDE
 .vscode/
 .idea/
+bot/paper_trades.json
