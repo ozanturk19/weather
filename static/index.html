@@ -462,6 +462,14 @@ input.thresh-slider {
 .cc-unc-med  .cc-conf-bar { background:var(--amber); }
 .cc-unc-low  .cc-conf-bar { background:var(--green); }
 
+/* Ucuz top-pick bucket — satın alma fırsatı */
+.cc-cheap      { box-shadow:0 0 0 2px rgba(16,185,129,.45), var(--shadow); }
+.cc-very-cheap { box-shadow:0 0 0 3px rgba(245,158,11,.6),  var(--shadow); animation:pulse-cheap 2s infinite; }
+@keyframes pulse-cheap {
+  0%,100% { box-shadow:0 0 0 3px rgba(245,158,11,.6), var(--shadow); }
+  50%      { box-shadow:0 0 0 5px rgba(245,158,11,.2), var(--shadow); }
+}
+
 /* Metin rozeti renkleri */
 .cc-unc-badge-high { color:var(--red); font-weight:700; }
 .cc-unc-badge-med  { color:var(--amber); font-weight:600; }
@@ -1287,34 +1295,77 @@ function renderCompact(id) {
     }
   }
 
-  // Best PM edge
+  // Top Pick + Edge — PM sinyal bloğu
   const pm = pmCache[id]?.[date];
   const edgeEl = document.getElementById('cc-edge-' + id);
-  if (edgeEl && pm?.buckets?.length) {
-    const dayData   = cache[id]?.days?.[date] || {};
-    const rawMaxes  = ensCache[id]?.days?.[date]?.member_maxes || [];
-    const maxes     = censorEnsemble(id, rawMaxes);
-    const modelDist = bestDistribution(id, date);
-    const bias      = getEffectiveBias(id);
+  card.classList.remove('cc-cheap', 'cc-very-cheap');
 
+  if (edgeEl) {
+    const topPick   = auth.temp != null ? Math.round(auth.temp) : null;
+    const pickBucket = pm?.buckets?.length ? topPickBucket(pm.buckets, topPick) : null;
+
+    // Edge analizi (olasılık karşılaştırması)
     let bestAbs = 0, bestBucket = null, bestEns = null;
-    for (const b of pm.buckets) {
-      const ensPr = ensBucketProb(maxes, b, modelDist, bias);
-      if (ensPr == null || b.yes_price == null) continue;
-      const edgeAbs = Math.abs(ensPr - b.yes_price);
-      if (edgeAbs > bestAbs) { bestAbs = edgeAbs; bestBucket = b; bestEns = ensPr; }
+    if (pm?.buckets?.length) {
+      const rawMaxes  = ensCache[id]?.days?.[date]?.member_maxes || [];
+      const maxes     = censorEnsemble(id, rawMaxes);
+      const modelDist = bestDistribution(id, date);
+      const bias      = getEffectiveBias(id);
+      for (const b of pm.buckets) {
+        const ensPr = ensBucketProb(maxes, b, modelDist, bias);
+        if (ensPr == null || b.yes_price == null) continue;
+        const edgeAbs = Math.abs(ensPr - b.yes_price);
+        if (edgeAbs > bestAbs) { bestAbs = edgeAbs; bestBucket = b; bestEns = ensPr; }
+      }
     }
 
-    if (bestBucket && bestAbs > 0.04) {
+    const lines = [];
+
+    // ── 1. TOP PICK: en olası settlement ──────────────────────────────────
+    if (pickBucket?.yes_price != null && topPick != null) {
+      const price    = pickBucket.yes_price;
+      const pricePct = Math.round(price * 100);
+      const title    = pickBucket.title.replace(' or higher','≥').replace(' or below','≤');
+      const liq      = pm.liquidity ? ' $' + Math.round(pm.liquidity / 1000) + 'K' : '';
+
+      // Edge bilgisi aynı bucket ise ekle
+      let edgeSuffix = '';
+      if (bestBucket && bestBucket.title === pickBucket.title && bestAbs > 0.04) {
+        const side = (bestEns - bestBucket.yes_price) > 0 ? 'YES' : 'NO';
+        const pct  = Math.round(bestAbs * 100);
+        const cls  = (bestEns - bestBucket.yes_price) > 0 ? 'cc-edge-yes' : 'cc-edge-no';
+        edgeSuffix = ` <span class="${cls}" style="font-size:10px">${side} +${pct}%</span>`;
+      }
+
+      if (price < 0.20) {
+        // Çok ucuz — büyük fırsat
+        card.classList.add('cc-very-cheap');
+        lines.push(`<span style="color:var(--amber);font-weight:800;font-size:13px">🎯 ${topPick}°C @ ${pricePct}¢ 💰${edgeSuffix}</span>`);
+      } else if (price < 0.50) {
+        // Ucuz — al sinyali
+        card.classList.add('cc-cheap');
+        lines.push(`<span style="color:var(--green);font-weight:700">🎯 ${topPick}°C @ ${pricePct}¢ ←${edgeSuffix}</span>`);
+      } else {
+        // Market zaten pahalı fiyatlamış
+        lines.push(`<span style="color:var(--text-2);font-size:11px">🎯 ${topPick}°C @ ${pricePct}¢${liq}${edgeSuffix}</span>`);
+      }
+    } else if (topPick != null && pm?.buckets?.length) {
+      lines.push(`<span style="color:var(--text-3);font-size:11px">🎯 ${topPick}°C — bucket yok</span>`);
+    }
+
+    // ── 2. BEST EDGE — farklı bucket varsa ayrı satır ─────────────────────
+    if (bestBucket && bestAbs > 0.04 && bestBucket.title !== pickBucket?.title) {
       const edge = bestEns - bestBucket.yes_price;
       const side = edge > 0 ? 'YES' : 'NO';
       const cls  = edge > 0 ? 'cc-edge-yes' : 'cc-edge-no';
       const pct  = Math.round(bestAbs * 100);
-      const liq  = pm.liquidity ? ' · $' + Math.round(pm.liquidity / 1000) + 'K' : '';
-      edgeEl.innerHTML = `<span class="${cls}">${bestBucket.title.replace(' or higher','≥').replace(' or below','≤')} ${side} +${pct}%</span>${liq}`;
-    } else {
-      edgeEl.innerHTML = '<span style="color:var(--text-3);font-size:11px">edge yok</span>';
+      const liq  = pm?.liquidity && lines.length === 0 ? ' · $' + Math.round(pm.liquidity / 1000) + 'K' : '';
+      lines.push(`<span class="${cls}" style="font-size:11px">${bestBucket.title.replace(' or higher','≥').replace(' or below','≤')} ${side} +${pct}%${liq}</span>`);
     }
+
+    edgeEl.innerHTML = lines.length
+      ? lines.join('<br>')
+      : '<span style="color:var(--text-3);font-size:11px">PM yükleniyor…</span>';
   }
 
   // Context signal: dün max + yarın tahmin
@@ -2588,6 +2639,24 @@ function gaussianCDF(x, mean, std) { return 0.5*(1+erf((x-mean)/(std*Math.SQRT2)
 // bias: son 7 gün model hatası (pozitif = model sıcak tahmin ediyor → maxes'i düşür)
 // ICON seamless ensemble maks üye sayısı
 const ICON_TOTAL = 40;
+
+// Top pick için PM bucket'ı bul — round(blend) hangi bucket'a denk geliyor?
+function topPickBucket(buckets, tempCelsius) {
+  if (!buckets?.length || tempCelsius == null) return null;
+  const pick = Math.round(tempCelsius);
+  for (const b of buckets) {
+    const title = b.title || '';
+    const higherM = title.match(/(-?\d+(?:\.\d+)?)\s*(?:°C)?\s*or higher/i);
+    const belowM  = title.match(/(-?\d+(?:\.\d+)?)\s*(?:°C)?\s*or below/i);
+    const rangeM  = title.match(/(-?\d+(?:\.\d+)?)\s*(?:°C)?\s*to\s*(-?\d+(?:\.\d+)?)/i);
+    const exactM  = title.match(/^(-?\d+(?:\.\d+)?)\s*°?C?$/);
+    if (higherM && pick >= parseFloat(higherM[1])) return b;
+    if (belowM  && pick <= parseFloat(belowM[1]))  return b;
+    if (rangeM  && pick >= parseFloat(rangeM[1]) && pick <= parseFloat(rangeM[2])) return b;
+    if (exactM  && Math.round(parseFloat(exactM[1])) === pick) return b;
+  }
+  return null;
+}
 
 function ensBucketProb(memberMaxes, bucket, modelDist, bias) {
   const t = bucket.threshold;
