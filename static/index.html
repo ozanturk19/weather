@@ -1246,40 +1246,36 @@ function renderCompact(id) {
     }
   }
 
-  // Range + divergence uyarısı
+  // Range
   const rangeEl = document.getElementById('cc-range-' + id);
   if (rangeEl) {
     if (auth.source === 'ensemble' && blendObj?.max_temp != null) {
-      // Blend güvenilmez: ensemble'ı göster, blend'i paranteze al
-      rangeEl.innerHTML = `<span style="color:var(--amber);font-weight:700" title="Blend (${blendObj.max_temp.toFixed(1)}°C) ensemble P50'den ${auth.divergence.toFixed(1)}°C uzak — ensemble otorite alındı">⚡ ens P50 · blend ${blendObj.max_temp.toFixed(1)}° (~${auth.divergence.toFixed(0)}° fark)</span>`;
+      rangeEl.innerHTML = `<span style="color:var(--amber)" title="Ensemble otorite — blend ${blendObj.max_temp.toFixed(1)}°C">⚡ ens · blend ${blendObj.max_temp.toFixed(1)}°</span>`;
     } else if (blendObj?.min_max != null) {
-      const outW = blendObj.outliers_removed?.length ? ' ⚠' : '';
-      const unc  = blendObj.spread != null ? ` ±${blendObj.spread.toFixed(1)}°` : '';
-      rangeEl.textContent = blendObj.min_max + '–' + blendObj.max_max + '°C' + unc + outW;
+      const unc = blendObj.spread != null ? ` ±${blendObj.spread.toFixed(1)}°` : '';
+      rangeEl.textContent = blendObj.min_max + '–' + blendObj.max_max + '°C' + unc;
     }
   }
 
-  // Uncertainty badge — ensemble override varsa önce onu kontrol et
+  // Uncertainty badge — kısa ve temiz
   const uncEl = document.getElementById('cc-unc-' + id);
   const card  = document.getElementById('cc-' + id);
   card.classList.remove('cc-unc-high','cc-unc-med','cc-unc-low');
   if (auth.source === 'ensemble') {
-    // Ensemble otorite → kart amber (uyarı ama felaket değil)
-    if (uncEl) uncEl.innerHTML = `<span class="cc-unc-badge-med">⚡ ens override ±${auth.divergence.toFixed(1)}° fark</span>`;
+    if (uncEl) uncEl.innerHTML = `<span class="cc-unc-badge-med">⚡ ens ±${auth.divergence.toFixed(1)}°</span>`;
     card.classList.add('cc-unc-med');
   } else if (uncEl && blendObj?.spread != null) {
-    const s   = blendObj.spread;
-    const u   = blendObj.uncertainty || '';
+    const s = blendObj.spread;
+    const u = blendObj.uncertainty || '';
     const con = blendObj.consensus_ratio != null ? ` · ${Math.round(blendObj.consensus_ratio*100)}% konsensüs` : '';
-    const outlierW = blendObj.outliers_removed?.length ? ' · model çıkarıldı' : '';
     if (u === 'Yüksek') {
-      uncEl.innerHTML = `<span class="cc-unc-badge-high">⚠ yüksek belirsizlik ±${s.toFixed(2)}°${outlierW}</span>`;
+      uncEl.innerHTML = `<span class="cc-unc-badge-high">⚠ ±${s.toFixed(1)}°</span>`;
       card.classList.add('cc-unc-high');
     } else if (u === 'Orta') {
-      uncEl.innerHTML = `<span class="cc-unc-badge-med">~ orta belirsizlik ±${s.toFixed(2)}°${outlierW}</span>`;
+      uncEl.innerHTML = `<span class="cc-unc-badge-med">~ ±${s.toFixed(1)}°</span>`;
       card.classList.add('cc-unc-med');
     } else {
-      uncEl.innerHTML = `<span class="cc-unc-badge-low">✓ yüksek güven ±${s.toFixed(2)}°${con}${outlierW}</span>`;
+      uncEl.innerHTML = `<span class="cc-unc-badge-low">✓ ±${s.toFixed(1)}°${con}</span>`;
       card.classList.add('cc-unc-low');
     }
   } else if (uncEl) { uncEl.innerHTML = ''; }
@@ -1295,77 +1291,33 @@ function renderCompact(id) {
     }
   }
 
-  // Top Pick + Edge — PM sinyal bloğu
+  // Top Pick sinyal — tek satır, sade
   const pm = pmCache[id]?.[date];
   const edgeEl = document.getElementById('cc-edge-' + id);
   card.classList.remove('cc-cheap', 'cc-very-cheap');
 
   if (edgeEl) {
-    const topPick   = auth.temp != null ? Math.round(auth.temp) : null;
+    const topPick    = auth.temp != null ? Math.round(auth.temp) : null;
     const pickBucket = pm?.buckets?.length ? topPickBucket(pm.buckets, topPick) : null;
 
-    // Edge analizi (olasılık karşılaştırması)
-    let bestAbs = 0, bestBucket = null, bestEns = null;
-    if (pm?.buckets?.length) {
-      const rawMaxes  = ensCache[id]?.days?.[date]?.member_maxes || [];
-      const maxes     = censorEnsemble(id, rawMaxes);
-      const modelDist = bestDistribution(id, date);
-      const bias      = getEffectiveBias(id);
-      for (const b of pm.buckets) {
-        const ensPr = ensBucketProb(maxes, b, modelDist, bias);
-        if (ensPr == null || b.yes_price == null) continue;
-        const edgeAbs = Math.abs(ensPr - b.yes_price);
-        if (edgeAbs > bestAbs) { bestAbs = edgeAbs; bestBucket = b; bestEns = ensPr; }
-      }
-    }
-
-    const lines = [];
-
-    // ── 1. TOP PICK: en olası settlement ──────────────────────────────────
     if (pickBucket?.yes_price != null && topPick != null) {
       const price    = pickBucket.yes_price;
       const pricePct = Math.round(price * 100);
-      const title    = pickBucket.title.replace(' or higher','≥').replace(' or below','≤');
-      const liq      = pm.liquidity ? ' $' + Math.round(pm.liquidity / 1000) + 'K' : '';
-
-      // Edge bilgisi aynı bucket ise ekle
-      let edgeSuffix = '';
-      if (bestBucket && bestBucket.title === pickBucket.title && bestAbs > 0.04) {
-        const side = (bestEns - bestBucket.yes_price) > 0 ? 'YES' : 'NO';
-        const pct  = Math.round(bestAbs * 100);
-        const cls  = (bestEns - bestBucket.yes_price) > 0 ? 'cc-edge-yes' : 'cc-edge-no';
-        edgeSuffix = ` <span class="${cls}" style="font-size:10px">${side} +${pct}%</span>`;
-      }
 
       if (price < 0.20) {
-        // Çok ucuz — büyük fırsat
         card.classList.add('cc-very-cheap');
-        lines.push(`<span style="color:var(--amber);font-weight:800;font-size:13px">🎯 ${topPick}°C @ ${pricePct}¢ 💰${edgeSuffix}</span>`);
+        edgeEl.innerHTML = `<span style="color:var(--amber);font-weight:800">🎯 ${topPick}°C @ ${pricePct}¢ 💰</span>`;
       } else if (price < 0.50) {
-        // Ucuz — al sinyali
         card.classList.add('cc-cheap');
-        lines.push(`<span style="color:var(--green);font-weight:700">🎯 ${topPick}°C @ ${pricePct}¢ ←${edgeSuffix}</span>`);
+        edgeEl.innerHTML = `<span style="color:var(--green);font-weight:700">🎯 ${topPick}°C @ ${pricePct}¢</span>`;
       } else {
-        // Market zaten pahalı fiyatlamış
-        lines.push(`<span style="color:var(--text-2);font-size:11px">🎯 ${topPick}°C @ ${pricePct}¢${liq}${edgeSuffix}</span>`);
+        edgeEl.innerHTML = `<span style="color:var(--text-3);font-size:11px">🎯 ${topPick}°C @ ${pricePct}¢</span>`;
       }
-    } else if (topPick != null && pm?.buckets?.length) {
-      lines.push(`<span style="color:var(--text-3);font-size:11px">🎯 ${topPick}°C — bucket yok</span>`);
+    } else if (!pm?.buckets?.length) {
+      edgeEl.innerHTML = '';
+    } else {
+      edgeEl.innerHTML = `<span style="color:var(--text-3);font-size:11px">🎯 ${topPick ?? '—'}°C</span>`;
     }
-
-    // ── 2. BEST EDGE — farklı bucket varsa ayrı satır ─────────────────────
-    if (bestBucket && bestAbs > 0.04 && bestBucket.title !== pickBucket?.title) {
-      const edge = bestEns - bestBucket.yes_price;
-      const side = edge > 0 ? 'YES' : 'NO';
-      const cls  = edge > 0 ? 'cc-edge-yes' : 'cc-edge-no';
-      const pct  = Math.round(bestAbs * 100);
-      const liq  = pm?.liquidity && lines.length === 0 ? ' · $' + Math.round(pm.liquidity / 1000) + 'K' : '';
-      lines.push(`<span class="${cls}" style="font-size:11px">${bestBucket.title.replace(' or higher','≥').replace(' or below','≤')} ${side} +${pct}%${liq}</span>`);
-    }
-
-    edgeEl.innerHTML = lines.length
-      ? lines.join('<br>')
-      : '<span style="color:var(--text-3);font-size:11px">PM yükleniyor…</span>';
   }
 
   // Context signal: dün max + yarın tahmin
