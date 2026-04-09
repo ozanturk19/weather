@@ -1161,6 +1161,13 @@ const MODAL_TITLES = {
 };
 
 function openModal(id) {
+  // Başka bir modal açıksa önce panelini geri koy (kapatma animasyonu yok)
+  if (currentModalStation && currentModalStation !== id) {
+    document.getElementById('station-panels').appendChild(
+      document.getElementById('panel-' + currentModalStation)
+    );
+  }
+
   // Move station panel into modal body
   const panel = document.getElementById('panel-' + id);
   const body  = document.getElementById('modal-body');
