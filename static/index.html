@@ -2638,6 +2638,10 @@ function topPickBucket(buckets, tempCelsius) {
   return null;
 }
 
+// Kalibrasyon faktörü — backtest: 40-60% bin model=%48 gerçek=%24 (2x overconfident)
+// 1.8x inflate → merkez bucket ~%27'ye iner, 60-80% bin ~%38'e iner
+const CALIB_STD_FACTOR = 1.8;
+
 function ensBucketProb(memberMaxes, bucket, modelDist, bias) {
   const t = bucket.threshold;
   if (t == null) return null;
@@ -2646,11 +2650,11 @@ function ensBucketProb(memberMaxes, bucket, modelDist, bias) {
   const CAP_LO = 0.03, CAP_HI = 0.97;
   const cap = p => Math.min(CAP_HI, Math.max(CAP_LO, p));
 
-  // Gaussian olasılık (bias düzeltmeli mean)
+  // Gaussian olasılık — kalibre edilmiş std (backtest faktörü)
   function gaussProb() {
     if (!modelDist) return null;
     const mean = modelDist.mean - b;
-    const std  = Math.max(modelDist.std, 0.5);
+    const std  = Math.max(modelDist.std, 0.5) * CALIB_STD_FACTOR;
     if (bucket.is_below) return cap(gaussianCDF(t + 0.5, mean, std));
     if (bucket.is_above) return cap(1 - gaussianCDF(t - 0.5, mean, std));
     return cap(Math.max(0, gaussianCDF(t + 0.5, mean, std) - gaussianCDF(t - 0.5, mean, std)));
@@ -2770,7 +2774,15 @@ function renderMarkets(id) {
     <table class="bucket-table">
       <tr><th>°C</th><th>PM%</th><th>Ens%</th><th>Edge</th><th></th></tr>`;
 
+  // Blend ±7°C dışındaki orta bucket'ları gizle (tail bucket'lar hep göster)
+  const BUCKET_WINDOW = 7;
+
   const rows = buckets.map((b, i) => {
+    // Filtre: tail dışı, settled değil, blend'den uzak → gizle
+    if (!b.is_below && !b.is_above && lockedMax === null
+        && blendMax != null && b.threshold != null
+        && Math.abs(b.threshold - blendMax) > BUCKET_WINDOW) return '';
+
     let ensPr = ensBucketProb(maxes, b, modelDist, bias);
 
     // Locked-day: gözlenen bucket → %100, diğerleri → %0
