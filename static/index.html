@@ -516,6 +516,8 @@ input.thresh-slider {
 .modal-tab.active { background:var(--accent); color:#fff; font-weight:700; }
 .modal-close { width:30px; height:30px; border-radius:50%; border:1px solid var(--border); background:var(--bg-card); cursor:pointer; font-size:16px; display:flex; align-items:center; justify-content:center; color:var(--text-2); transition:all .15s; flex-shrink:0; }
 .modal-close:hover { background:var(--red-dim); color:var(--red); border-color:rgba(239,68,68,.3); }
+.modal-nav { width:30px; height:30px; border-radius:50%; border:1px solid var(--border); background:var(--bg-card); cursor:pointer; font-size:20px; line-height:1; display:flex; align-items:center; justify-content:center; color:var(--text-2); transition:all .15s; flex-shrink:0; }
+.modal-nav:hover { background:var(--accent-dim); color:var(--accent); border-color:var(--accent); }
 .modal-body { overflow-y:auto; -webkit-overflow-scrolling:touch; scroll-behavior:smooth; padding:20px; display:grid; grid-template-columns:1fr 1fr; gap:20px; flex:1; min-height:0; }
 @media (max-width:700px) { .modal-body { grid-template-columns:1fr; } }
 .modal-col-left  { display:flex; flex-direction:column; gap:12px; }
@@ -937,12 +939,14 @@ body { transition:background .25s, color .2s; }
 <div class="modal-overlay" id="modal-overlay" style="display:none" onclick="closeModalOutside(event)">
   <div class="modal-box" id="modal-box">
     <div class="modal-hdr">
+      <button class="modal-nav" id="modal-prev" onclick="modalNav(-1)" title="Önceki istasyon (←)">‹</button>
       <div class="modal-station-title" id="modal-station-title">—</div>
       <div class="modal-tabs">
         <button class="modal-tab active" id="mtab-0" onclick="selectModalDay(0)">Bugün<br><span style="font-size:10px;opacity:.7;font-family:var(--mono)" id="mlabel-0"></span></button>
         <button class="modal-tab" id="mtab-1" onclick="selectModalDay(1)">Yarın<br><span style="font-size:10px;opacity:.7;font-family:var(--mono)" id="mlabel-1"></span></button>
         <button class="modal-tab" id="mtab-2" onclick="selectModalDay(2)">Öbür<br><span style="font-size:10px;opacity:.7;font-family:var(--mono)" id="mlabel-2"></span></button>
       </div>
+      <button class="modal-nav" id="modal-next" onclick="modalNav(+1)" title="Sonraki istasyon (→)">›</button>
       <button class="modal-close" onclick="closeModal()">✕</button>
     </div>
     <div class="modal-body" id="modal-body">
@@ -1197,6 +1201,13 @@ function openModal(id) {
   renderBias(id);
   renderSummary(id);
   renderMarkets(id);
+}
+
+function modalNav(dir) {
+  if (!currentModalStation) return;
+  const idx = STATIONS.indexOf(currentModalStation);
+  const next = STATIONS[(idx + dir + STATIONS.length) % STATIONS.length];
+  openModal(next);
 }
 
 function closeModal() {
@@ -3030,7 +3041,12 @@ function renderPortfolio() {
     </div>`;
 }
 
-document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+document.addEventListener('keydown', e => {
+  if (!currentModalStation) return;
+  if (e.key === 'Escape')     { closeModal(); }
+  if (e.key === 'ArrowLeft')  { modalNav(-1); }
+  if (e.key === 'ArrowRight') { modalNav(+1); }
+});
 
 // --- BAŞLAT ---
 initTheme();
