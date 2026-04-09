@@ -681,6 +681,54 @@ body { transition:background .25s, color .2s; }
     <div class="cc-hint">Detay ↗ <span id="cc-pm-lfpg"></span></div>
     <div class="cc-conf-bar"></div>
   </div>
+
+  <div class="cc" id="cc-eham" onclick="openModal('eham')">
+    <div class="cc-header"><div><div class="cc-name">🇳🇱 EHAM</div><div class="cc-sub">Amsterdam Schiphol <span class="cc-settle">WU</span></div></div><div id="cc-bias-eham"></div></div>
+    <div class="cc-temp" id="cc-blend-eham">—</div>
+    <div class="cc-range" id="cc-range-eham"></div>
+    <div class="cc-unc"   id="cc-unc-eham"></div>
+    <div class="cc-ctx"   id="cc-ctx-eham"></div>
+    <div class="cc-metar" id="cc-metar-eham"></div>
+    <div class="cc-edge"  id="cc-edge-eham"></div>
+    <div class="cc-hint">Detay ↗ <span id="cc-pm-eham"></span></div>
+    <div class="cc-conf-bar"></div>
+  </div>
+
+  <div class="cc" id="cc-eddm" onclick="openModal('eddm')">
+    <div class="cc-header"><div><div class="cc-name">🇩🇪 EDDM</div><div class="cc-sub">Münih <span class="cc-settle">WU</span></div></div><div id="cc-bias-eddm"></div></div>
+    <div class="cc-temp" id="cc-blend-eddm">—</div>
+    <div class="cc-range" id="cc-range-eddm"></div>
+    <div class="cc-unc"   id="cc-unc-eddm"></div>
+    <div class="cc-ctx"   id="cc-ctx-eddm"></div>
+    <div class="cc-metar" id="cc-metar-eddm"></div>
+    <div class="cc-edge"  id="cc-edge-eddm"></div>
+    <div class="cc-hint">Detay ↗ <span id="cc-pm-eddm"></span></div>
+    <div class="cc-conf-bar"></div>
+  </div>
+
+  <div class="cc" id="cc-epwa" onclick="openModal('epwa')">
+    <div class="cc-header"><div><div class="cc-name">🇵🇱 EPWA</div><div class="cc-sub">Varşova Chopin <span class="cc-settle">WU</span></div></div><div id="cc-bias-epwa"></div></div>
+    <div class="cc-temp" id="cc-blend-epwa">—</div>
+    <div class="cc-range" id="cc-range-epwa"></div>
+    <div class="cc-unc"   id="cc-unc-epwa"></div>
+    <div class="cc-ctx"   id="cc-ctx-epwa"></div>
+    <div class="cc-metar" id="cc-metar-epwa"></div>
+    <div class="cc-edge"  id="cc-edge-epwa"></div>
+    <div class="cc-hint">Detay ↗ <span id="cc-pm-epwa"></span></div>
+    <div class="cc-conf-bar"></div>
+  </div>
+
+  <div class="cc" id="cc-efhk" onclick="openModal('efhk')">
+    <div class="cc-header"><div><div class="cc-name">🇫🇮 EFHK</div><div class="cc-sub">Helsinki Vantaa <span class="cc-settle">WU</span></div></div><div id="cc-bias-efhk"></div></div>
+    <div class="cc-temp" id="cc-blend-efhk">—</div>
+    <div class="cc-range" id="cc-range-efhk"></div>
+    <div class="cc-unc"   id="cc-unc-efhk"></div>
+    <div class="cc-ctx"   id="cc-ctx-efhk"></div>
+    <div class="cc-metar" id="cc-metar-efhk"></div>
+    <div class="cc-edge"  id="cc-edge-efhk"></div>
+    <div class="cc-hint">Detay ↗ <span id="cc-pm-efhk"></span></div>
+    <div class="cc-conf-bar"></div>
+  </div>
 </div>
 
 <!-- EN İYİ İŞLEMLER -->
@@ -796,6 +844,74 @@ body { transition:background .25s, color .2s; }
     </div>
   </div>
 
+  <div id="panel-eham">
+    <div class="modal-col-left">
+      <div><div id="bias-eham"></div><div class="summary-box" id="summary-eham"><span class="loading">yükleniyor...</span></div></div>
+      <div><div class="modal-section-label">Blend Tahmini</div>
+        <div class="blend-block"><div class="blend-temp" id="blend-eham">—</div><div class="blend-range" id="range-eham"></div><div id="unc-eham"></div></div></div>
+      <div><div class="modal-section-label">Saatlik Tahmin</div><div id="h-eham"><span class="loading">yükleniyor...</span></div></div>
+      <div><div class="modal-section-label">ICON Ensemble <span id="ens-label-eham" style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">ICON · — üye</span></div><div id="ens-eham"><span class="loading">yükleniyor...</span></div></div>
+      <div><div class="modal-section-label">METAR Gözlem</div><div id="metar-eham"><span class="loading">yükleniyor...</span></div>
+        <div class="wu-badge"><span>⚖️ WU settlement:</span> <a href="https://www.wunderground.com/history/daily/nl/amsterdam/EHAM" target="_blank">EHAM · tam °C</a></div></div>
+      <div><div class="model-toggle" onclick="toggleModels('eham')"><span id="toggle-icon-eham">▸</span> 5 model detayı</div><div class="model-grid" id="models-eham"></div></div>
+    </div>
+    <div class="modal-col-right">
+      <div class="modal-section-label">Polymarket Buckets</div>
+      <div id="pm-markets-eham"><span class="loading">yükleniyor...</span></div>
+    </div>
+  </div>
+
+  <div id="panel-eddm">
+    <div class="modal-col-left">
+      <div><div id="bias-eddm"></div><div class="summary-box" id="summary-eddm"><span class="loading">yükleniyor...</span></div></div>
+      <div><div class="modal-section-label">Blend Tahmini</div>
+        <div class="blend-block"><div class="blend-temp" id="blend-eddm">—</div><div class="blend-range" id="range-eddm"></div><div id="unc-eddm"></div></div></div>
+      <div><div class="modal-section-label">Saatlik Tahmin</div><div id="h-eddm"><span class="loading">yükleniyor...</span></div></div>
+      <div><div class="modal-section-label">ICON Ensemble <span id="ens-label-eddm" style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">ICON · — üye</span></div><div id="ens-eddm"><span class="loading">yükleniyor...</span></div></div>
+      <div><div class="modal-section-label">METAR Gözlem</div><div id="metar-eddm"><span class="loading">yükleniyor...</span></div>
+        <div class="wu-badge"><span>⚖️ WU settlement:</span> <a href="https://www.wunderground.com/history/daily/de/munich/EDDM" target="_blank">EDDM · tam °C</a></div></div>
+      <div><div class="model-toggle" onclick="toggleModels('eddm')"><span id="toggle-icon-eddm">▸</span> 5 model detayı</div><div class="model-grid" id="models-eddm"></div></div>
+    </div>
+    <div class="modal-col-right">
+      <div class="modal-section-label">Polymarket Buckets</div>
+      <div id="pm-markets-eddm"><span class="loading">yükleniyor...</span></div>
+    </div>
+  </div>
+
+  <div id="panel-epwa">
+    <div class="modal-col-left">
+      <div><div id="bias-epwa"></div><div class="summary-box" id="summary-epwa"><span class="loading">yükleniyor...</span></div></div>
+      <div><div class="modal-section-label">Blend Tahmini</div>
+        <div class="blend-block"><div class="blend-temp" id="blend-epwa">—</div><div class="blend-range" id="range-epwa"></div><div id="unc-epwa"></div></div></div>
+      <div><div class="modal-section-label">Saatlik Tahmin</div><div id="h-epwa"><span class="loading">yükleniyor...</span></div></div>
+      <div><div class="modal-section-label">ICON Ensemble <span id="ens-label-epwa" style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">ICON · — üye</span></div><div id="ens-epwa"><span class="loading">yükleniyor...</span></div></div>
+      <div><div class="modal-section-label">METAR Gözlem</div><div id="metar-epwa"><span class="loading">yükleniyor...</span></div>
+        <div class="wu-badge"><span>⚖️ WU settlement:</span> <a href="https://www.wunderground.com/history/daily/pl/warsaw/EPWA" target="_blank">EPWA · tam °C</a></div></div>
+      <div><div class="model-toggle" onclick="toggleModels('epwa')"><span id="toggle-icon-epwa">▸</span> 5 model detayı</div><div class="model-grid" id="models-epwa"></div></div>
+    </div>
+    <div class="modal-col-right">
+      <div class="modal-section-label">Polymarket Buckets</div>
+      <div id="pm-markets-epwa"><span class="loading">yükleniyor...</span></div>
+    </div>
+  </div>
+
+  <div id="panel-efhk">
+    <div class="modal-col-left">
+      <div><div id="bias-efhk"></div><div class="summary-box" id="summary-efhk"><span class="loading">yükleniyor...</span></div></div>
+      <div><div class="modal-section-label">Blend Tahmini</div>
+        <div class="blend-block"><div class="blend-temp" id="blend-efhk">—</div><div class="blend-range" id="range-efhk"></div><div id="unc-efhk"></div></div></div>
+      <div><div class="modal-section-label">Saatlik Tahmin</div><div id="h-efhk"><span class="loading">yükleniyor...</span></div></div>
+      <div><div class="modal-section-label">ICON Ensemble <span id="ens-label-efhk" style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">ICON · — üye</span></div><div id="ens-efhk"><span class="loading">yükleniyor...</span></div></div>
+      <div><div class="modal-section-label">METAR Gözlem</div><div id="metar-efhk"><span class="loading">yükleniyor...</span></div>
+        <div class="wu-badge"><span>⚖️ WU settlement:</span> <a href="https://www.wunderground.com/history/daily/fi/helsinki/EFHK" target="_blank">EFHK · tam °C</a></div></div>
+      <div><div class="model-toggle" onclick="toggleModels('efhk')"><span id="toggle-icon-efhk">▸</span> 5 model detayı</div><div class="model-grid" id="models-efhk"></div></div>
+    </div>
+    <div class="modal-col-right">
+      <div class="modal-section-label">Polymarket Buckets</div>
+      <div id="pm-markets-efhk"><span class="loading">yükleniyor...</span></div>
+    </div>
+  </div>
+
 </div>
 
 <!-- Selected markets (keep) -->
@@ -902,7 +1018,7 @@ function toggleTheme() {
   document.getElementById('themeBtn').textContent = isDark ? '☀️' : '🌙';
 }
 
-const STATIONS = ['eglc', 'ltac', 'limc', 'ltfm', 'lemd', 'lfpg'];
+const STATIONS = ['eglc', 'ltac', 'limc', 'ltfm', 'lemd', 'lfpg', 'eham', 'eddm', 'epwa', 'efhk'];
 const KEY_HOURS = ['06:00', '09:00', '12:00', '15:00', '18:00'];
 const MODEL_LABELS = { gfs: 'GFS', ecmwf: 'ECMWF', icon: 'ICON', ukmo: 'UKMO', meteofrance: 'MF' };
 

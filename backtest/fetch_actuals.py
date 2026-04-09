@@ -38,6 +38,10 @@ STATIONS = {
     "ltfm": {"icao": "LTFM", "tz": "Europe/Istanbul"},
     "lemd": {"icao": "LEMD", "tz": "Europe/Madrid"},
     "lfpg": {"icao": "LFPG", "tz": "Europe/Paris"},
+    "eham": {"icao": "EHAM", "tz": "Europe/Amsterdam"},
+    "eddm": {"icao": "EDDM", "tz": "Europe/Berlin"},
+    "epwa": {"icao": "EPWA", "tz": "Europe/Warsaw"},
+    "efhk": {"icao": "EFHK", "tz": "Europe/Helsinki"},
 }
 
 IEM_URL = "https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py"

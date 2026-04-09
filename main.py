@@ -32,12 +32,16 @@ CACHE_TTL = 600             # saniye (10 dakika)
 _openmeteo_sem = asyncio.Semaphore(6)
 
 STATIONS = {
-    "eglc": {"lat": 51.505, "lon": 0.055,  "tz": "Europe/London",   "label": "EGLC (Londra City)",     "pm_query": "London"},
-    "ltac": {"lat": 40.128, "lon": 32.995, "tz": "Europe/Istanbul", "label": "LTAC (Ankara Esenboğa)", "pm_query": "Ankara"},
-    "limc": {"lat": 45.627, "lon": 8.723,  "tz": "Europe/Rome",     "label": "LIMC (Milano Malpensa)", "pm_query": "Milan"},
-    "ltfm": {"lat": 41.262, "lon": 28.742, "tz": "Europe/Istanbul", "label": "LTFM (İstanbul)",        "pm_query": "Istanbul"},
-    "lemd": {"lat": 40.472, "lon": -3.561,  "tz": "Europe/Madrid",   "label": "LEMD (Madrid)",   "pm_query": "Madrid",  "settlement": "wu"},
-    "lfpg": {"lat": 49.009, "lon": 2.547,  "tz": "Europe/Paris",    "label": "LFPG (Paris)",    "pm_query": "Paris",   "settlement": "wu"},
+    "eglc": {"lat": 51.505, "lon": 0.055,  "tz": "Europe/London",      "label": "EGLC (Londra City)",        "pm_query": "London"},
+    "ltac": {"lat": 40.128, "lon": 32.995, "tz": "Europe/Istanbul",    "label": "LTAC (Ankara Esenboğa)",    "pm_query": "Ankara"},
+    "limc": {"lat": 45.627, "lon": 8.723,  "tz": "Europe/Rome",        "label": "LIMC (Milano Malpensa)",    "pm_query": "Milan"},
+    "ltfm": {"lat": 41.262, "lon": 28.742, "tz": "Europe/Istanbul",    "label": "LTFM (İstanbul)",           "pm_query": "Istanbul"},
+    "lemd": {"lat": 40.472, "lon": -3.561, "tz": "Europe/Madrid",      "label": "LEMD (Madrid)",             "pm_query": "Madrid",    "settlement": "wu"},
+    "lfpg": {"lat": 49.009, "lon": 2.547,  "tz": "Europe/Paris",       "label": "LFPG (Paris)",              "pm_query": "Paris",     "settlement": "wu"},
+    "eham": {"lat": 52.308, "lon": 4.764,  "tz": "Europe/Amsterdam",   "label": "EHAM (Amsterdam Schiphol)", "pm_query": "Amsterdam", "settlement": "wu"},
+    "eddm": {"lat": 48.354, "lon": 11.786, "tz": "Europe/Berlin",      "label": "EDDM (Münih)",              "pm_query": "Munich",    "settlement": "wu"},
+    "epwa": {"lat": 52.166, "lon": 20.967, "tz": "Europe/Warsaw",      "label": "EPWA (Varşova Chopin)",     "pm_query": "Warsaw",    "settlement": "wu"},
+    "efhk": {"lat": 60.317, "lon": 24.963, "tz": "Europe/Helsinki",    "label": "EFHK (Helsinki Vantaa)",    "pm_query": "Helsinki",  "settlement": "wu"},
 }
 
 # Her model için Open-Meteo model adı

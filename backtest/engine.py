@@ -25,7 +25,7 @@ from pathlib import Path
 
 DATA = Path(__file__).parent / "data"
 MODELS = ["gfs", "ecmwf", "icon", "ukmo", "meteofrance"]
-STATIONS = ["eglc", "ltac", "limc", "ltfm", "lemd", "lfpg"]
+STATIONS = ["eglc", "ltac", "limc", "ltfm", "lemd", "lfpg", "eham", "eddm", "epwa", "efhk"]
 STATION_NAMES = {
     "eglc": "EGLC · Londra",
     "ltac": "LTAC · Ankara",
@@ -33,6 +33,10 @@ STATION_NAMES = {
     "ltfm": "LTFM · İstanbul",
     "lemd": "LEMD · Madrid",
     "lfpg": "LFPG · Paris",
+    "eham": "EHAM · Amsterdam",
+    "eddm": "EDDM · Münih",
+    "epwa": "EPWA · Varşova",
+    "efhk": "EFHK · Helsinki",
 }
 # Model ağırlıkları (mevcut production değerleri — backtest sonrası güncellenecek)
 CURRENT_WEIGHTS = {
