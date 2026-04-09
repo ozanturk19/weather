@@ -2641,19 +2641,29 @@ function gaussianCDF(x, mean, std) { return 0.5*(1+erf((x-mean)/(std*Math.SQRT2)
 const ICON_TOTAL = 40;
 
 // Top pick için PM bucket'ı bul — round(blend) hangi bucket'a denk geliyor?
+// threshold alanını öncelikli kullanır (title parsing'den daha sağlam)
 function topPickBucket(buckets, tempCelsius) {
   if (!buckets?.length || tempCelsius == null) return null;
   const pick = Math.round(tempCelsius);
   for (const b of buckets) {
-    const title = b.title || '';
-    const higherM = title.match(/(-?\d+(?:\.\d+)?)\s*(?:°C)?\s*or higher/i);
-    const belowM  = title.match(/(-?\d+(?:\.\d+)?)\s*(?:°C)?\s*or below/i);
-    const rangeM  = title.match(/(-?\d+(?:\.\d+)?)\s*(?:°C)?\s*to\s*(-?\d+(?:\.\d+)?)/i);
-    const exactM  = title.match(/^(-?\d+(?:\.\d+)?)\s*°?C?$/);
-    if (higherM && pick >= parseFloat(higherM[1])) return b;
-    if (belowM  && pick <= parseFloat(belowM[1]))  return b;
-    if (rangeM  && pick >= parseFloat(rangeM[1]) && pick <= parseFloat(rangeM[2])) return b;
-    if (exactM  && Math.round(parseFloat(exactM[1])) === pick) return b;
+    const t = b.threshold;
+    if (t != null) {
+      // Threshold bazlı eşleştirme (API'dan geliyor, güvenilir)
+      if (b.is_below && pick <= t)  return b;
+      if (b.is_above && pick >= t)  return b;
+      if (!b.is_below && !b.is_above && Math.round(t) === pick) return b;
+    } else {
+      // Fallback: title parsing
+      const title = b.title || '';
+      const higherM = title.match(/(-?\d+(?:\.\d+)?)\s*(?:°C)?\s*or higher/i);
+      const belowM  = title.match(/(-?\d+(?:\.\d+)?)\s*(?:°C)?\s*or below/i);
+      const rangeM  = title.match(/(-?\d+(?:\.\d+)?)\s*(?:°C)?\s*to\s*(-?\d+(?:\.\d+)?)/i);
+      const exactM  = title.match(/^(-?\d+(?:\.\d+)?)\s*°?C?$/);
+      if (higherM && pick >= parseFloat(higherM[1])) return b;
+      if (belowM  && pick <= parseFloat(belowM[1]))  return b;
+      if (rangeM  && pick >= parseFloat(rangeM[1]) && pick <= parseFloat(rangeM[2])) return b;
+      if (exactM  && Math.round(parseFloat(exactM[1])) === pick) return b;
+    }
   }
   return null;
 }
