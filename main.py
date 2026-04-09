@@ -3,6 +3,7 @@ import json
 import math
 import os
 import re
+import subprocess
 import statistics
 import time
 from datetime import datetime, timezone
@@ -728,6 +729,67 @@ async def get_portfolio(address: str):
         reverse=True,
     )
     return {"positions": weather, "address": address, "total_markets": len(all_pos)}
+
+
+BOT_TRADES_FILE = Path("bot/paper_trades.json")
+
+def _load_bot_trades() -> list:
+    if BOT_TRADES_FILE.exists():
+        return json.loads(BOT_TRADES_FILE.read_text(encoding="utf-8"))
+    return []
+
+def _save_bot_trades(trades: list):
+    BOT_TRADES_FILE.parent.mkdir(exist_ok=True)
+    BOT_TRADES_FILE.write_text(
+        json.dumps(trades, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+
+@app.get("/api/bot-trades")
+async def get_bot_trades():
+    """Paper trading bot geçmişini döndür."""
+    trades = _load_bot_trades()
+    closed = [t for t in trades if t.get("status") == "closed"]
+    open_t = [t for t in trades if t.get("status") == "open"]
+    wins   = [t for t in closed if t.get("result") == "WIN"]
+    total_pnl = sum(t.get("pnl", 0) or 0 for t in closed)
+    return {
+        "trades":    trades,
+        "stats": {
+            "total":     len(trades),
+            "open":      len(open_t),
+            "closed":    len(closed),
+            "wins":      len(wins),
+            "losses":    len(closed) - len(wins),
+            "win_rate":  round(len(wins) / len(closed) * 100, 1) if closed else None,
+            "total_pnl": round(total_pnl, 1),
+        }
+    }
+
+@app.post("/api/bot-trades/scan")
+async def bot_scan():
+    """Bot taramasını tetikle (scanner.py scan)."""
+    try:
+        result = await asyncio.to_thread(
+            subprocess.run,
+            ["python3", "bot/scanner.py", "scan"],
+            capture_output=True, text=True, timeout=120
+        )
+        return {"ok": True, "output": result.stdout + result.stderr}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/bot-trades/settle")
+async def bot_settle():
+    """Dünkü pozisyonları settle et (scanner.py settle)."""
+    try:
+        result = await asyncio.to_thread(
+            subprocess.run,
+            ["python3", "bot/scanner.py", "settle"],
+            capture_output=True, text=True, timeout=120
+        )
+        return {"ok": True, "output": result.stdout + result.stderr}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/", include_in_schema=False)

@@ -965,46 +965,38 @@ body { transition:background .25s, color .2s; }
 <!-- PAPER TRADING -->
 <div id="paper-trading-panel" style="display:none">
   <div class="pt-box">
+    <!-- Başlık + Butonlar -->
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px">
       <div>
-        <div style="font-size:16px;font-weight:700">📊 Paper Trading</div>
-        <div style="font-size:12px;color:var(--text-3);margin-top:2px">Gerçek para yok — sadece model doğruluğunu test ediyoruz</div>
+        <div style="font-size:16px;font-weight:700">🤖 Bot Paper Trading</div>
+        <div style="font-size:12px;color:var(--text-3);margin-top:2px">Sanal $50/trade · Top Pick Stratejisi · Otomatik 06:00 / 12:00 / 18:00</div>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn btn-primary" onclick="ptScanSignals()">⚡ Sinyal Tara</button>
-        <button class="btn" onclick="ptSettleAll()">✓ Sonuçları Kontrol Et</button>
-        <button class="btn" style="color:var(--red);border-color:rgba(239,68,68,.3)" onclick="ptReset()">Sıfırla</button>
+        <button class="btn btn-primary" onclick="ptBotScan()" id="pt-scan-btn">⚡ Şimdi Tara</button>
+        <button class="btn" onclick="ptBotSettle()" id="pt-settle-btn">✓ Settle Et</button>
+        <button class="btn" onclick="ptBotLoad()">↺ Yenile</button>
       </div>
     </div>
 
     <!-- İstatistikler -->
-    <div class="pt-stats" id="pt-stats">
-      <div class="pt-stat"><div class="pt-stat-val" id="pt-s-total">0</div><div class="pt-stat-lbl">Toplam İşlem</div></div>
-      <div class="pt-stat"><div class="pt-stat-val pt-stat-green" id="pt-s-wins">0</div><div class="pt-stat-lbl">Kazanan</div></div>
-      <div class="pt-stat"><div class="pt-stat-val pt-stat-red" id="pt-s-losses">0</div><div class="pt-stat-lbl">Kaybeden</div></div>
-      <div class="pt-stat"><div class="pt-stat-val" id="pt-s-wr">—</div><div class="pt-stat-lbl">Kazanma Oranı</div></div>
-      <div class="pt-stat"><div class="pt-stat-val pt-stat-blue" id="pt-s-pnl">$0</div><div class="pt-stat-lbl">Toplam P&L ($100 pozisyon)</div></div>
+    <div class="pt-stats">
+      <div class="pt-stat"><div class="pt-stat-val" id="pt-s-total">—</div><div class="pt-stat-lbl">Toplam Trade</div></div>
+      <div class="pt-stat"><div class="pt-stat-val pt-stat-green" id="pt-s-wins">—</div><div class="pt-stat-lbl">Kazanan</div></div>
+      <div class="pt-stat"><div class="pt-stat-val pt-stat-red" id="pt-s-losses">—</div><div class="pt-stat-lbl">Kaybeden</div></div>
+      <div class="pt-stat"><div class="pt-stat-val" id="pt-s-wr">—</div><div class="pt-stat-lbl">İsabet Oranı</div></div>
+      <div class="pt-stat"><div class="pt-stat-val pt-stat-blue" id="pt-s-pnl">—</div><div class="pt-stat-lbl">Net P&L (sanal $50)</div></div>
     </div>
 
-    <!-- Kontroller -->
-    <div class="pt-controls">
-      <label>Min Edge %:</label>
-      <input type="number" id="pt-min-edge" value="8" min="1" max="50">
-      <label>Max Spread (std) °C:</label>
-      <input type="number" id="pt-max-spread" value="1.2" min="0.3" max="3" step="0.1">
-    </div>
+    <!-- Log -->
+    <div id="pt-log" style="display:none;background:var(--bg-subtle);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin:12px 0;font-family:var(--mono);font-size:11px;color:var(--text-2);white-space:pre-wrap;max-height:180px;overflow-y:auto"></div>
 
     <!-- Açık Pozisyonlar -->
     <div class="pt-section-title">Açık Pozisyonlar <span id="pt-open-count" style="font-weight:400;color:var(--text-3);font-size:11px"></span></div>
-    <div id="pt-open-body">
-      <div class="pt-empty">Henüz açık pozisyon yok — "Sinyal Tara" butonuna bas</div>
-    </div>
+    <div id="pt-open-body"><div class="pt-empty">Yükleniyor…</div></div>
 
     <!-- Kapalı İşlemler -->
     <div class="pt-section-title" style="margin-top:24px">Kapalı İşlemler <span id="pt-closed-count" style="font-weight:400;color:var(--text-3);font-size:11px"></span></div>
-    <div id="pt-closed-body">
-      <div class="pt-empty">Henüz sonuçlanan işlem yok</div>
-    </div>
+    <div id="pt-closed-body"><div class="pt-empty">Yükleniyor…</div></div>
   </div>
 </div>
 
@@ -1382,13 +1374,131 @@ function renderCompact(id) {
 }
 
 // ===== PAPER TRADING =====
-const PT_KEY = 'pt_trades_v1';
+// ── Bot Paper Trading ─────────────────────────────────────────────────────
+const PT_STATION_LABELS = {
+  eglc:'🇬🇧 EGLC · Londra', lfpg:'🇫🇷 LFPG · Paris',  limc:'🇮🇹 LIMC · Milano',
+  lemd:'🇪🇸 LEMD · Madrid', ltfm:'🇹🇷 LTFM · İstanbul', ltac:'🇹🇷 LTAC · Ankara',
+  eham:'🇳🇱 EHAM · Amsterdam', eddm:'🇩🇪 EDDM · Münih',
+  epwa:'🇵🇱 EPWA · Varşova',   efhk:'🇫🇮 EFHK · Helsinki',
+};
 
-function ptLoad() {
-  try { return JSON.parse(localStorage.getItem(PT_KEY) || '[]'); } catch(e) { return []; }
+async function ptBotLoad() {
+  try {
+    const r = await fetch('/api/bot-trades');
+    const d = await r.json();
+    ptRender(d);
+  } catch(e) {
+    document.getElementById('pt-open-body').innerHTML =
+      '<div class="pt-empty">API bağlantı hatası</div>';
+  }
 }
-function ptSave(trades) {
-  localStorage.setItem(PT_KEY, JSON.stringify(trades));
+
+async function ptBotScan() {
+  const btn = document.getElementById('pt-scan-btn');
+  const log = document.getElementById('pt-log');
+  btn.disabled = true; btn.textContent = '⏳ Taranıyor…';
+  log.style.display = 'block'; log.textContent = 'Tarama başladı…\n';
+  try {
+    const r = await fetch('/api/bot-trades/scan', { method: 'POST' });
+    const d = await r.json();
+    log.textContent = d.output || '(çıktı yok)';
+    await ptBotLoad();
+  } catch(e) { log.textContent = 'Hata: ' + e; }
+  btn.disabled = false; btn.textContent = '⚡ Şimdi Tara';
+}
+
+async function ptBotSettle() {
+  const btn = document.getElementById('pt-settle-btn');
+  const log = document.getElementById('pt-log');
+  btn.disabled = true; btn.textContent = '⏳ Settle ediliyor…';
+  log.style.display = 'block'; log.textContent = 'Settle başladı…\n';
+  try {
+    const r = await fetch('/api/bot-trades/settle', { method: 'POST' });
+    const d = await r.json();
+    log.textContent = d.output || '(çıktı yok)';
+    await ptBotLoad();
+  } catch(e) { log.textContent = 'Hata: ' + e; }
+  btn.disabled = false; btn.textContent = '✓ Settle Et';
+}
+
+function ptRender(data) {
+  const { trades = [], stats = {} } = data;
+
+  // İstatistikler
+  document.getElementById('pt-s-total').textContent  = stats.total ?? '—';
+  document.getElementById('pt-s-wins').textContent   = stats.wins  ?? '—';
+  document.getElementById('pt-s-losses').textContent = stats.losses ?? '—';
+  document.getElementById('pt-s-wr').textContent     = stats.win_rate != null ? stats.win_rate + '%' : '—';
+  const pnlEl = document.getElementById('pt-s-pnl');
+  const pnl = stats.total_pnl ?? 0;
+  pnlEl.textContent = (pnl >= 0 ? '+' : '') + '$' + pnl;
+  pnlEl.className = 'pt-stat-val ' + (pnl > 0 ? 'pt-stat-green' : pnl < 0 ? 'pt-stat-red' : 'pt-stat-blue');
+
+  const open   = trades.filter(t => t.status === 'open');
+  const closed = [...trades.filter(t => t.status === 'closed')].reverse();
+
+  document.getElementById('pt-open-count').textContent   = open.length   ? `(${open.length})` : '';
+  document.getElementById('pt-closed-count').textContent = closed.length ? `(${closed.length})` : '';
+
+  // Açık pozisyonlar
+  const openEl = document.getElementById('pt-open-body');
+  if (!open.length) {
+    openEl.innerHTML = '<div class="pt-empty">Açık pozisyon yok — "Şimdi Tara" ile fırsat ara</div>';
+  } else {
+    openEl.innerHTML = `<table class="pt-table">
+      <thead><tr>
+        <th>İstasyon</th><th>Tarih</th><th>Top Pick</th>
+        <th class="r">Bucket</th><th class="r">Giriş</th>
+        <th class="r">Pot. Kazanç</th><th class="r">Belirsizlik</th>
+      </tr></thead><tbody>` +
+      open.map(t => {
+        const lbl   = PT_STATION_LABELS[t.station] || t.station.toUpperCase();
+        const price = Math.round((t.entry_price || 0) * 100);
+        const cheap = t.entry_price < 0.20 ? '💰' : t.entry_price < 0.50 ? '←' : '';
+        const uncCls = t.uncertainty === 'Yüksek' ? 'color:var(--red)' :
+                       t.uncertainty === 'Orta'   ? 'color:var(--amber)' : 'color:var(--green)';
+        return `<tr>
+          <td style="font-weight:600">${lbl}</td>
+          <td style="font-family:var(--mono);font-size:11px">${t.date}</td>
+          <td style="font-family:var(--mono);font-weight:700">🎯 ${t.top_pick}°C</td>
+          <td class="r" style="font-size:11px">${t.bucket_title}</td>
+          <td class="r" style="font-family:var(--mono)">${price}¢ ${cheap}</td>
+          <td class="r" style="font-family:var(--mono);color:var(--green);font-weight:700">+$${t.potential_win}</td>
+          <td class="r" style="font-size:10px;${uncCls}">±${t.spread ?? '?'}°</td>
+        </tr>`;
+      }).join('') + '</tbody></table>';
+  }
+
+  // Kapalı işlemler
+  const closedEl = document.getElementById('pt-closed-body');
+  if (!closed.length) {
+    closedEl.innerHTML = '<div class="pt-empty">Henüz sonuçlanan işlem yok</div>';
+  } else {
+    closedEl.innerHTML = `<table class="pt-table">
+      <thead><tr>
+        <th>İstasyon</th><th>Tarih</th><th>Top Pick</th>
+        <th class="r">Gerçek</th><th class="r">Bucket</th>
+        <th class="r">Giriş</th><th class="r">Sonuç</th><th class="r">P&L</th>
+      </tr></thead><tbody>` +
+      closed.map(t => {
+        const lbl    = PT_STATION_LABELS[t.station] || t.station.toUpperCase();
+        const won    = t.result === 'WIN';
+        const price  = Math.round((t.entry_price || 0) * 100);
+        const resCls = won ? 'pt-win' : 'pt-loss';
+        const pnlCls = (t.pnl || 0) > 0 ? 'pt-win' : 'pt-loss';
+        const hit    = t.actual_temp === t.top_pick ? '✓' : '✗';
+        return `<tr>
+          <td style="font-weight:600">${lbl}</td>
+          <td style="font-family:var(--mono);font-size:11px">${t.date}</td>
+          <td style="font-family:var(--mono)">🎯 ${t.top_pick}°C</td>
+          <td class="r" style="font-family:var(--mono)">${t.actual_temp ?? '—'}°C ${hit}</td>
+          <td class="r" style="font-size:11px">${t.bucket_title}</td>
+          <td class="r" style="font-family:var(--mono)">${price}¢</td>
+          <td class="r ${resCls}">${won ? 'KAZANDI' : 'KAYBETTİ'}</td>
+          <td class="r ${pnlCls}" style="font-family:var(--mono);font-weight:700">${(t.pnl||0)>=0?'+':''}$${t.pnl ?? 0}</td>
+        </tr>`;
+      }).join('') + '</tbody></table>';
+  }
 }
 
 function selectPaperTrading() {
@@ -1398,243 +1508,7 @@ function selectPaperTrading() {
   document.getElementById('top-trades-box').style.display = 'none';
   document.getElementById('daily-report-panel').style.display = 'none';
   document.getElementById('paper-trading-panel').style.display = '';
-  ptRender();
-}
-
-async function ptScanSignals() {
-  const minEdge = parseFloat(document.getElementById('pt-min-edge').value) / 100 || 0.08;
-  const maxSpread = parseFloat(document.getElementById('pt-max-spread').value) || 3;
-  const trades = ptLoad();
-  const STATION_NAMES = {
-    eglc:'EGLC · Londra', ltac:'LTAC · Ankara', limc:'LIMC · Milano',
-    ltfm:'LTFM · İstanbul', lemd:'LEMD · Madrid', lfpg:'LFPG · Paris'
-  };
-  let added = 0;
-
-  // Bugün ve yarın için PM verisi yükle
-  const datesNeeded = [dates[0], dates[1]].filter(Boolean);
-  const pmLoads = [];
-  for (const id of STATIONS) {
-    for (const d of datesNeeded) {
-      if (!pmCache[id]?.[d] || pmCache[id][d].error) {
-        pmLoads.push(
-          fetch(`/api/polymarket?station=${id}&date=${d}`)
-            .then(r => r.json())
-            .then(data => { if (!pmCache[id]) pmCache[id] = {}; pmCache[id][d] = data.detail ? {error:data.detail} : data; })
-            .catch(() => {})
-        );
-      }
-    }
-  }
-  await Promise.all(pmLoads);
-
-  for (const id of STATIONS) {
-    for (const date of datesNeeded) {
-      const blendObj = cache[id]?.days?.[date]?.blend;
-      if (!blendObj) continue;
-      // Belirsizlik filtresi: hem backend uncertainty hem numeric maxSpread kontrol
-      if (blendObj.uncertainty === 'Yüksek') continue;
-      if (blendObj.spread != null && blendObj.spread >= maxSpread) continue;
-
-      const pm = pmCache[id]?.[date];
-      if (!pm?.buckets?.length) continue;
-
-      const dayData  = cache[id]?.days?.[date] || {};
-      const rawMaxes = ensCache[id]?.days?.[date]?.member_maxes || [];
-      const maxes    = censorEnsemble(id, rawMaxes);
-      const modelDist = bestDistribution(id, date);
-      const bias     = getEffectiveBias(id);
-
-      for (const b of pm.buckets) {
-        const ensPr = ensBucketProb(maxes, b, modelDist, bias);
-        if (ensPr == null || b.yes_price == null) continue;
-        const edge = ensPr - b.yes_price;
-        if (Math.abs(edge) < minEdge) continue;
-
-        // Aynı market/bucket zaten açık mı?
-        const alreadyOpen = trades.some(t =>
-          t.station === id && t.date === date &&
-          t.bucket === b.title && t.status === 'open'
-        );
-        if (alreadyOpen) continue;
-
-        const side = edge > 0 ? 'YES' : 'NO';
-        const ourProb = edge > 0 ? ensPr : (1 - ensPr);
-        const mktPrice = edge > 0 ? b.yes_price : (1 - b.yes_price);
-
-        trades.push({
-          id: Date.now() + '_' + Math.random().toString(36).slice(2,6),
-          station: id,
-          stationName: STATION_NAMES[id] || id,
-          date,
-          bucket: b.title,
-          side,
-          ourProb: Math.round(ourProb * 100),
-          mktPrice: Math.round(mktPrice * 100),
-          edge: Math.round(Math.abs(edge) * 100),
-          spread: blendObj.spread?.toFixed(1) || '?',
-          openedAt: new Date().toISOString(),
-          status: 'open',
-          result: null,
-          pnl: null
-        });
-        added++;
-      }
-    }
-  }
-
-  ptSave(trades);
-  ptRender();
-  if (added > 0) {
-    document.getElementById('pt-open-count').textContent = `(${added} yeni sinyal eklendi)`;
-    setTimeout(() => ptRender(), 2000);
-  } else {
-    document.getElementById('pt-open-count').textContent = '(yeni sinyal bulunamadı)';
-  }
-}
-
-async function ptSettleAll() {
-  const trades = ptLoad();
-  const open = trades.filter(t => t.status === 'open');
-  if (!open.length) { alert('Açık pozisyon yok.'); return; }
-
-  let settled = 0;
-  for (const t of open) {
-    // METAR verisinden gerçek sıcaklık al
-    const metar = metarCache[t.station];
-    // Tarihe göre gerçek settlement al (predictions.json'dan)
-    let actualMax = null;
-    try {
-      const resp = await fetch(`/api/prediction-bias?station=${t.station}`);
-      const data = await resp.json();
-      const hist = data.history || [];
-      const entry = hist.find(h => h.date === t.date);
-      if (entry?.actual != null) actualMax = entry.actual;
-    } catch(e) {}
-
-    if (actualMax == null) continue; // sonuç henüz yok
-
-    // Bucket kontrolü: "X or higher" → actual >= X, "X or below" → actual <= X, "X to Y" → X <= actual <= Y
-    const title = t.bucket;
-    let outcome = null;
-    const higherM = title.match(/(\d+(?:\.\d+)?)\s*(?:°C)?\s*or higher/i);
-    const belowM  = title.match(/(\d+(?:\.\d+)?)\s*(?:°C)?\s*or below/i);
-    const rangeM  = title.match(/(\d+(?:\.\d+)?)\s*(?:°C)?\s*to\s*(\d+(?:\.\d+)?)/i);
-    if (higherM) outcome = actualMax >= parseFloat(higherM[1]);
-    else if (belowM) outcome = actualMax <= parseFloat(belowM[1]);
-    else if (rangeM) outcome = actualMax >= parseFloat(rangeM[1]) && actualMax <= parseFloat(rangeM[2]);
-
-    if (outcome === null) continue;
-
-    // YES tarafındaysa outcome=true kazanır, NO tarafındaysa outcome=false kazanır
-    const win = (t.side === 'YES' && outcome) || (t.side === 'NO' && !outcome);
-    // $100 pozisyon varsayımı: kazanınca (100/mktPrice*100 - 100), kaybedince -100
-    const pnl = win ? Math.round((100 / (t.mktPrice / 100)) - 100) : -100;
-
-    t.status = 'closed';
-    t.result = win ? 'WIN' : 'LOSS';
-    t.actualMax = actualMax;
-    t.pnl = pnl;
-    t.closedAt = new Date().toISOString();
-    settled++;
-  }
-
-  ptSave(trades);
-  ptRender();
-  if (settled === 0) {
-    alert('Sonuçlanacak pozisyon bulunamadı. Piyasalar henüz settlement olmamış olabilir.');
-  }
-}
-
-function ptReset() {
-  if (!confirm('Tüm paper trading geçmişi silinsin mi?')) return;
-  localStorage.removeItem(PT_KEY);
-  ptRender();
-}
-
-function ptRender() {
-  const trades = ptLoad();
-  const open   = trades.filter(t => t.status === 'open');
-  const closed = trades.filter(t => t.status === 'closed');
-  const wins   = closed.filter(t => t.result === 'WIN').length;
-  const losses = closed.filter(t => t.result === 'LOSS').length;
-  const totalPnl = closed.reduce((s, t) => s + (t.pnl || 0), 0);
-  const wr = closed.length ? Math.round(wins / closed.length * 100) : null;
-
-  document.getElementById('pt-s-total').textContent  = trades.length;
-  document.getElementById('pt-s-wins').textContent   = wins;
-  document.getElementById('pt-s-losses').textContent = losses;
-  document.getElementById('pt-s-wr').textContent     = wr != null ? wr + '%' : '—';
-  const pnlEl = document.getElementById('pt-s-pnl');
-  pnlEl.textContent = (totalPnl >= 0 ? '+' : '') + '$' + totalPnl;
-  pnlEl.className   = 'pt-stat-val ' + (totalPnl > 0 ? 'pt-stat-green' : totalPnl < 0 ? 'pt-stat-red' : 'pt-stat-blue');
-
-  document.getElementById('pt-open-count').textContent = open.length ? `(${open.length} pozisyon)` : '';
-
-  // Açık pozisyonlar tablosu
-  const openEl = document.getElementById('pt-open-body');
-  if (open.length === 0) {
-    openEl.innerHTML = '<div class="pt-empty">Henüz açık pozisyon yok — "Sinyal Tara" butonuna bas</div>';
-  } else {
-    openEl.innerHTML = `<table class="pt-table">
-      <thead><tr>
-        <th>İstasyon</th><th>Tarih</th><th>Bucket</th>
-        <th class="r">Taraf</th><th class="r">Model %</th><th class="r">Market %</th>
-        <th class="r">Edge %</th><th class="r">Spread</th><th class="r">Açılış</th>
-        <th></th>
-      </tr></thead><tbody>` +
-      open.map(t => `<tr>
-        <td>${t.stationName}</td>
-        <td style="font-family:var(--mono);font-size:11px">${t.date}</td>
-        <td>${t.bucket}</td>
-        <td class="r ${t.side === 'YES' ? 'pt-side-yes' : 'pt-side-no'}">${t.side}</td>
-        <td class="r">${t.ourProb}%</td>
-        <td class="r">${t.mktPrice}%</td>
-        <td class="r" style="font-weight:700;color:var(--accent)">+${t.edge}%</td>
-        <td class="r"><span class="${parseFloat(t.spread) >= 1.5 ? 'pt-badge-high' : parseFloat(t.spread) >= 0.8 ? 'pt-badge-med' : ''}">±${t.spread}°</span></td>
-        <td class="r" style="font-size:10px;color:var(--text-3)">${t.openedAt.slice(0,10)}</td>
-        <td class="r"><button class="btn" style="font-size:10px;padding:3px 8px;color:var(--red)" onclick="ptClose('${t.id}')">Kapat</button></td>
-      </tr>`).join('') +
-      '</tbody></table>';
-  }
-
-  // Kapalı işlemler tablosu
-  const closedEl = document.getElementById('pt-closed-body');
-  document.getElementById('pt-closed-count').textContent = closed.length ? `(${closed.length} işlem)` : '';
-  if (closed.length === 0) {
-    closedEl.innerHTML = '<div class="pt-empty">Henüz sonuçlanan işlem yok</div>';
-  } else {
-    const sorted = [...closed].reverse();
-    closedEl.innerHTML = `<table class="pt-table">
-      <thead><tr>
-        <th>İstasyon</th><th>Tarih</th><th>Bucket</th>
-        <th class="r">Taraf</th><th class="r">Edge %</th>
-        <th class="r">Gerçek Max</th><th class="r">Sonuç</th><th class="r">P&L</th>
-      </tr></thead><tbody>` +
-      sorted.map(t => `<tr>
-        <td>${t.stationName}</td>
-        <td style="font-family:var(--mono);font-size:11px">${t.date}</td>
-        <td>${t.bucket}</td>
-        <td class="r ${t.side === 'YES' ? 'pt-side-yes' : 'pt-side-no'}">${t.side}</td>
-        <td class="r">+${t.edge}%</td>
-        <td class="r" style="font-family:var(--mono)">${t.actualMax != null ? t.actualMax + '°C' : '—'}</td>
-        <td class="r ${t.result === 'WIN' ? 'pt-win' : 'pt-loss'}">${t.result === 'WIN' ? 'KAZANDI' : 'KAYBETTİ'}</td>
-        <td class="r ${t.pnl > 0 ? 'pt-win' : 'pt-loss'}" style="font-family:var(--mono)">${t.pnl > 0 ? '+' : ''}$${t.pnl}</td>
-      </tr>`).join('') +
-      '</tbody></table>';
-  }
-}
-
-function ptClose(id) {
-  const trades = ptLoad();
-  const t = trades.find(x => x.id === id);
-  if (!t) return;
-  t.status = 'closed';
-  t.result = 'MANUAL';
-  t.pnl = 0;
-  t.closedAt = new Date().toISOString();
-  ptSave(trades);
-  ptRender();
+  ptBotLoad();
 }
 
 function renderDailyReport() {
