@@ -246,6 +246,8 @@ def edge_simulation(fc: dict, pm: dict, ac: dict, min_edge: float = 0.08):
 
                 side = "YES" if edge > 0 else "NO"
                 price = pm_yes if side == "YES" else (1 - pm_yes)
+                if price < 0.02:   # fiyat sıfıra çok yakınsa skip (resolved bucket)
+                    continue
                 realized = _bucket_outcome(b, actual)
                 if realized is None:
                     continue
