@@ -66,7 +66,7 @@ async def fetch_station(
         "missing":  "M",
         "trace":    "T",
         "direct":   "no",
-        "report_type": "1",          # sadece METAR (routine + special)
+        "report_type": "1,3",        # METAR routine + special obs
         "year1":  date_start.year,
         "month1": date_start.month,
         "day1":   date_start.day,
