@@ -398,13 +398,15 @@ def status():
 
     print(f"\n  📊 Açık: {len(open_t)} | "
           f"Kapalı: {len(closed)} ({len(wins)} kazanç) | "
-          f"P&L: ${'+'if pnl>=0 else ''}{pnl:.0f}\n")
+          f"P&L: ${'+'if pnl>=0 else ''}{pnl:.2f}\n")
 
-    for t in sorted(open_t, key=lambda x: x["date"]):
-        label = STATION_LABELS.get(t["station"], t["station"].upper())
+    for t in sorted(open_t, key=lambda x: (x["date"], x["station"])):
+        label  = STATION_LABELS.get(t["station"], t["station"].upper())
+        shares = t.get("shares", SHARES)
+        cost   = t.get("cost_usd") or t.get("size_usd", 0)
         print(f"  📂 {t['station'].upper()} {label}  "
               f"{t['date']}  🎯{t['top_pick']}°C @ {round(t['entry_price']*100)}¢  "
-              f"pot. +${t['potential_win']:.0f}")
+              f"{shares} share · risk=${cost:.2f} · pot +${t['potential_win']:.2f}")
     if not open_t:
         print("  Açık pozisyon yok.")
     print()
