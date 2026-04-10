@@ -14,6 +14,7 @@ import httpx
 import json
 import re
 import sys
+from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -62,15 +63,24 @@ def find_top_pick_bucket(buckets: list, top_pick: int) -> dict | None:
             return b
     return None
 
-def bucket_won(title: str, actual: int) -> bool | None:
-    """Verilen bucket başlığına göre actual sıcaklık kazandı mı?"""
-    higher_m = re.search(r'(-?\d+).*or higher', title, re.I)
-    below_m  = re.search(r'(-?\d+).*or below',  title, re.I)
-    exact_m  = re.match(r'^\s*(-?\d+)\s*°?C?\s*$', title.strip())
+def bucket_won(title: str, actual: float) -> bool | None:
+    """Verilen bucket başlığına göre actual sıcaklık kazandı mı?
+    Desteklenen formatlar:
+      "19°C"              → exact match (round(actual) == 19)
+      "25°C or higher"    → actual >= 25
+      "5°C or below"      → actual <= 5
+      "18°C to 20°C"      → 18 <= actual <= 20  (range bucket)
+    """
+    t = title.strip()
+    higher_m = re.search(r'(-?\d+).*or higher', t, re.I)
+    below_m  = re.search(r'(-?\d+).*or below',  t, re.I)
+    range_m  = re.search(r'(-?\d+)[^-\d]+(-?\d+)', t)   # "X to Y" veya "X-Y"
+    exact_m  = re.match(r'^(-?\d+)\s*°?C?$', t)
 
     if higher_m: return actual >= int(higher_m.group(1))
     if below_m:  return actual <= int(below_m.group(1))
-    if exact_m:  return actual == int(exact_m.group(1))
+    if exact_m:  return round(actual) == int(exact_m.group(1))
+    if range_m:  return int(range_m.group(1)) <= actual <= int(range_m.group(2))
     return None
 
 # ── Scan: Fırsat Tara ───────────────────────────────────────────────────────
@@ -117,7 +127,6 @@ def scan():
                 members = []
 
             if members:
-                from collections import Counter
                 counts   = Counter(round(m) for m in members)
                 top_pick = counts.most_common(1)[0][0]
                 mode_pct = round(counts[top_pick] / len(members) * 100)
@@ -125,15 +134,22 @@ def scan():
                 top_pick = round(blend)
                 mode_pct = None
 
-            # Aynı istasyon + tarih için zaten açık pozisyon var mı? (top_pick değişse de)
-            already = any(
-                t["station"] == station and t["date"] == tomorrow and t["status"] == "open"
+            # Aynı station + tarih + top_pick için zaten pozisyon var mı?
+            # top_pick değiştiyse (forecast güncellendiyse) yeni pozisyon açılabilir.
+            already_same = any(
+                t["station"] == station and t["date"] == tomorrow
+                and t["top_pick"] == top_pick and t["status"] == "open"
                 for t in trades
             )
-            if already:
-                prev = next(t for t in trades if t["station"] == station and t["date"] == tomorrow and t["status"] == "open")
-                print(f"  ⬜ {station.upper()} {label}  — {tomorrow} zaten açık ({prev['top_pick']}°C @ {round(prev['entry_price']*100)}¢)")
+            if already_same:
+                print(f"  ⬜ {station.upper()} {label}  — {top_pick}°C zaten açık, pas")
                 continue
+
+            # Farklı top_pick varsa bilgi ver ama devam et
+            prev_open = [t for t in trades if t["station"] == station and t["date"] == tomorrow and t["status"] == "open"]
+            if prev_open:
+                prev_picks = ", ".join(f"{t['top_pick']}°C" for t in prev_open)
+                print(f"  🔄 {station.upper()} {label}  — tahmin değişti ({prev_picks} → {top_pick}°C), yeni pozisyon açılıyor")
 
         except Exception as e:
             print(f"  ❌ {station.upper()} {label}  — hava API hatası: {e}")
