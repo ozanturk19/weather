@@ -105,9 +105,25 @@ def scan():
                 print(f"  ⬜ {station.upper()} {label}  — tahmin yok")
                 continue
 
-            top_pick = round(blend)
-            spread   = blend_obj.get("spread", 0) or 0
-            unc      = blend_obj.get("uncertainty", "?")
+            spread = blend_obj.get("spread", 0) or 0
+            unc    = blend_obj.get("uncertainty", "?")
+
+            # top_pick: ensemble member maxlarının modu, yoksa round(blend)
+            # Böylece 18.6 blend ama üyelerin çoğu 17 diyorsa 17 seçilir
+            try:
+                r_ens = httpx.get(f"{WEATHER_API}/api/ensemble?station={station}", timeout=30)
+                members = r_ens.json().get("days", {}).get(tomorrow, {}).get("member_maxes", [])
+            except Exception:
+                members = []
+
+            if members:
+                from collections import Counter
+                counts   = Counter(round(m) for m in members)
+                top_pick = counts.most_common(1)[0][0]
+                mode_pct = round(counts[top_pick] / len(members) * 100)
+            else:
+                top_pick = round(blend)
+                mode_pct = None
 
             # Aynı istasyon + tarih için zaten açık pozisyon var mı? (top_pick değişse de)
             already = any(
@@ -162,6 +178,7 @@ def scan():
             potential_win = round(shares - BET_SIZE_USD, 1)
             cheap_tag     = "💰" if price < 0.20 else "←"
 
+            mode_tag = f" [ens mode %{mode_pct}]" if mode_pct else ""
             trade = {
                 "id":            f"{station}_{tomorrow}_{datetime.now().strftime('%H%M%S')}",
                 "station":       station,
@@ -170,6 +187,7 @@ def scan():
                 "spread":        round(spread, 2),
                 "uncertainty":   unc,
                 "top_pick":      top_pick,
+                "ens_mode_pct":  mode_pct,
                 "bucket_title":  bucket["title"],
                 "condition_id":  cond_id,
                 "entry_price":   price,
@@ -189,9 +207,8 @@ def scan():
 
             print(
                 f"  ✅ {station.upper()} {label}  "
-                f"🎯{top_pick}°C @ {pct}¢ {cheap_tag}  "
-                f"${BET_SIZE_USD} → +${potential_win:.0f} kazanç pot.  "
-                f"liq=${liq:,.0f}"
+                f"🎯{top_pick}°C (blend={blend:.1f}){mode_tag} @ {pct}¢ {cheap_tag}  "
+                f"${BET_SIZE_USD} → +${potential_win:.0f} kazanç pot."
             )
 
         else:
