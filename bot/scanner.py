@@ -87,16 +87,6 @@ def scan():
     for station in STATIONS:
         label = STATION_LABELS.get(station, station.upper())
 
-        # Bu istasyon için herhangi bir açık pozisyon var mı? (tarihten bağımsız)
-        already = any(
-            t["station"] == station and t["status"] == "open"
-            for t in trades
-        )
-        if already:
-            open_t = next(t for t in trades if t["station"] == station and t["status"] == "open")
-            print(f"  ⬜ {station.upper()} {label}  — açık pozisyon var ({open_t['date']} @ {round(open_t['entry_price']*100)}¢)")
-            continue
-
         try:
             # 1. Hava tahmini çek
             r = httpx.get(f"{WEATHER_API}/api/weather?station={station}", timeout=30)
@@ -118,6 +108,16 @@ def scan():
             top_pick = round(blend)
             spread   = blend_obj.get("spread", 0) or 0
             unc      = blend_obj.get("uncertainty", "?")
+
+            # Aynı istasyon + tarih + top_pick için zaten açık pozisyon var mı?
+            already = any(
+                t["station"] == station and t["date"] == tomorrow
+                and t["top_pick"] == top_pick and t["status"] == "open"
+                for t in trades
+            )
+            if already:
+                print(f"  ⬜ {station.upper()} {label}  — {tomorrow} {top_pick}°C zaten açık")
+                continue
 
         except Exception as e:
             print(f"  ❌ {station.upper()} {label}  — hava API hatası: {e}")
