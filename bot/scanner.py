@@ -109,14 +109,14 @@ def scan():
             spread   = blend_obj.get("spread", 0) or 0
             unc      = blend_obj.get("uncertainty", "?")
 
-            # Aynı istasyon + tarih + top_pick için zaten açık pozisyon var mı?
+            # Aynı istasyon + tarih için zaten açık pozisyon var mı? (top_pick değişse de)
             already = any(
-                t["station"] == station and t["date"] == tomorrow
-                and t["top_pick"] == top_pick and t["status"] == "open"
+                t["station"] == station and t["date"] == tomorrow and t["status"] == "open"
                 for t in trades
             )
             if already:
-                print(f"  ⬜ {station.upper()} {label}  — {tomorrow} {top_pick}°C zaten açık")
+                prev = next(t for t in trades if t["station"] == station and t["date"] == tomorrow and t["status"] == "open")
+                print(f"  ⬜ {station.upper()} {label}  — {tomorrow} zaten açık ({prev['top_pick']}°C @ {round(prev['entry_price']*100)}¢)")
                 continue
 
         except Exception as e:
