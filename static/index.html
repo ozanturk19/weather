@@ -969,7 +969,7 @@ body { transition:background .25s, color .2s; }
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px">
       <div>
         <div style="font-size:16px;font-weight:700">🤖 Bot Paper Trading</div>
-        <div style="font-size:12px;color:var(--text-3);margin-top:2px">Sanal $50/trade · Top Pick Stratejisi · Otomatik 06:00 / 12:00 / 18:00</div>
+        <div style="font-size:12px;color:var(--text-3);margin-top:2px">10 share/trade · Top Pick Stratejisi · Otomatik 04:00 / 10:00 / 16:00 / 22:00</div>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-primary" onclick="ptBotScan()" id="pt-scan-btn">⚡ Şimdi Tara</button>
@@ -984,7 +984,7 @@ body { transition:background .25s, color .2s; }
       <div class="pt-stat"><div class="pt-stat-val pt-stat-green" id="pt-s-wins">—</div><div class="pt-stat-lbl">Kazanan</div></div>
       <div class="pt-stat"><div class="pt-stat-val pt-stat-red" id="pt-s-losses">—</div><div class="pt-stat-lbl">Kaybeden</div></div>
       <div class="pt-stat"><div class="pt-stat-val" id="pt-s-wr">—</div><div class="pt-stat-lbl">İsabet Oranı</div></div>
-      <div class="pt-stat"><div class="pt-stat-val pt-stat-blue" id="pt-s-pnl">—</div><div class="pt-stat-lbl">Net P&L (sanal $50)</div></div>
+      <div class="pt-stat"><div class="pt-stat-val pt-stat-blue" id="pt-s-pnl">—</div><div class="pt-stat-lbl">Net P&L (kapalı)</div></div>
     </div>
 
     <!-- Log -->
@@ -1386,6 +1386,23 @@ async function ptBotLoad() {
   try {
     const r = await fetch('/api/bot-trades');
     const d = await r.json();
+
+    // Açık pozisyonlar için mevcut PM fiyatını çek (unrealized P&L için)
+    const openTrades = (d.trades || []).filter(t => t.status === 'open');
+    const pmFetches  = [];
+    for (const t of openTrades) {
+      if (!pmCache[t.station]) pmCache[t.station] = {};
+      if (!pmCache[t.station][t.date]) {
+        pmFetches.push(
+          fetch(`/api/polymarket?station=${t.station}&date=${t.date}`)
+            .then(r => r.json())
+            .then(pm => { pmCache[t.station][t.date] = pm.detail ? null : pm; })
+            .catch(() => {})
+        );
+      }
+    }
+    if (pmFetches.length) await Promise.all(pmFetches);
+
     ptRender(d);
   } catch(e) {
     document.getElementById('pt-open-body').innerHTML =
@@ -1448,23 +1465,54 @@ function ptRender(data) {
     openEl.innerHTML = `<table class="pt-table">
       <thead><tr>
         <th>İstasyon</th><th>Tarih</th><th>Top Pick</th>
-        <th class="r">Bucket</th><th class="r">Giriş</th>
-        <th class="r">Pot. Kazanç</th><th class="r">Belirsizlik</th>
+        <th class="r">Giriş</th><th class="r">Share/Risk</th>
+        <th class="r">Mevcut</th><th class="r">Unrealized</th>
+        <th class="r">Pot. Max</th>
       </tr></thead><tbody>` +
       open.map(t => {
-        const lbl   = PT_STATION_LABELS[t.station] || t.station.toUpperCase();
-        const price = Math.round((t.entry_price || 0) * 100);
-        const cheap = t.entry_price < 0.20 ? '💰' : t.entry_price < 0.50 ? '←' : '';
-        const uncCls = t.uncertainty === 'Yüksek' ? 'color:var(--red)' :
-                       t.uncertainty === 'Orta'   ? 'color:var(--amber)' : 'color:var(--green)';
+        const lbl      = PT_STATION_LABELS[t.station] || t.station.toUpperCase();
+        const entryPct = Math.round((t.entry_price || 0) * 100);
+        const cheap    = t.entry_price < 0.20 ? '💰' : t.entry_price < 0.50 ? '←' : '';
+        const isNew    = t.cost_usd != null;
+        const shares   = isNew ? t.shares : null;
+        const cost     = isNew ? t.cost_usd : t.size_usd;
+
+        // Mevcut PM fiyatı
+        const pm = pmCache[t.station]?.[t.date];
+        const bucket = pm?.buckets?.find(b => b.title === t.bucket_title);
+        const curPrice = bucket?.yes_price ?? null;
+        const curPct   = curPrice != null ? Math.round(curPrice * 100) : null;
+
+        // Unrealized P&L
+        let unrealizedHtml = '<span style="color:var(--text-3)">—</span>';
+        if (curPrice != null && isNew) {
+          const unreal = ((curPrice - t.entry_price) * t.shares).toFixed(2);
+          const pos    = parseFloat(unreal) >= 0;
+          const col    = parseFloat(unreal) > 0.01 ? 'var(--green)' : parseFloat(unreal) < -0.01 ? 'var(--red)' : 'var(--text-3)';
+          unrealizedHtml = `<span style="color:${col};font-weight:700">${pos?'+':''}$${unreal}</span>`;
+        } else if (curPrice != null) {
+          // eski format: yaklaşık unrealized
+          const unreal = ((curPrice - t.entry_price) * 100).toFixed(0);
+          const col    = parseInt(unreal) > 0 ? 'var(--green)' : parseInt(unreal) < 0 ? 'var(--red)' : 'var(--text-3)';
+          unrealizedHtml = `<span style="color:${col};font-size:10px">${parseInt(unreal)>0?'+':''}${unreal}¢/sh</span>`;
+        }
+
+        const curHtml  = curPct != null
+          ? `<span style="font-family:var(--mono)">${curPct}¢</span>`
+          : '<span style="color:var(--text-3)">—</span>';
+        const shareStr = isNew
+          ? `${shares} sh · $${cost?.toFixed(2)}`
+          : `$${cost} (eski)`;
+
         return `<tr>
           <td style="font-weight:600">${lbl}</td>
           <td style="font-family:var(--mono);font-size:11px">${t.date}</td>
           <td style="font-family:var(--mono);font-weight:700">🎯 ${t.top_pick}°C</td>
-          <td class="r" style="font-size:11px">${t.bucket_title}</td>
-          <td class="r" style="font-family:var(--mono)">${price}¢ ${cheap}</td>
+          <td class="r" style="font-family:var(--mono)">${entryPct}¢ ${cheap}</td>
+          <td class="r" style="font-size:11px;color:var(--text-2)">${shareStr}</td>
+          <td class="r">${curHtml}</td>
+          <td class="r">${unrealizedHtml}</td>
           <td class="r" style="font-family:var(--mono);color:var(--green);font-weight:700">+$${t.potential_win}</td>
-          <td class="r" style="font-size:10px;${uncCls}">±${t.spread ?? '?'}°</td>
         </tr>`;
       }).join('') + '</tbody></table>';
   }
