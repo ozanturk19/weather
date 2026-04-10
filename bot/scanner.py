@@ -33,7 +33,7 @@ STATION_LABELS = {
 }
 
 # Risk parametreleri
-BET_SIZE_USD = 50     # sanal $ per trade
+SHARES       = 10     # her işlemde alınan share adedi (1 share kazanınca $1 öder)
 MIN_PRICE    = 0.05   # çok ucuz → şüpheli likidite, atla
 MAX_PRICE    = 0.50   # bunun altı "ucuz" → al sinyali
 
@@ -190,11 +190,11 @@ def scan():
             print(f"  ⬜ {station.upper()} {label}  🎯{top_pick}°C @ {pct}¢ — çok ucuz, şüpheli")
 
         elif price < MAX_PRICE:
-            shares        = round(BET_SIZE_USD / price, 1)
-            potential_win = round(shares - BET_SIZE_USD, 1)
+            cost          = round(SHARES * price, 2)   # toplam maliyet ($)
+            potential_win = round(SHARES - cost, 2)    # net kazanç ($) eğer WIN
             cheap_tag     = "💰" if price < 0.20 else "←"
+            mode_tag      = f" [ens %{mode_pct}]" if mode_pct else ""
 
-            mode_tag = f" [ens mode %{mode_pct}]" if mode_pct else ""
             trade = {
                 "id":            f"{station}_{tomorrow}_{datetime.now().strftime('%H%M%S')}",
                 "station":       station,
@@ -207,8 +207,8 @@ def scan():
                 "bucket_title":  bucket["title"],
                 "condition_id":  cond_id,
                 "entry_price":   price,
-                "size_usd":      BET_SIZE_USD,
-                "shares":        shares,
+                "shares":        SHARES,
+                "cost_usd":      cost,
                 "potential_win": potential_win,
                 "liquidity":     liq,
                 "status":        "open",
@@ -224,7 +224,7 @@ def scan():
             print(
                 f"  ✅ {station.upper()} {label}  "
                 f"🎯{top_pick}°C (blend={blend:.1f}){mode_tag} @ {pct}¢ {cheap_tag}  "
-                f"${BET_SIZE_USD} → +${potential_win:.0f} kazanç pot."
+                f"{SHARES} share · risk=${cost:.2f} · pot +${potential_win:.2f}"
             )
 
         else:
@@ -276,7 +276,9 @@ def settle():
                 print(f"  ❓ {station.upper()} {label}  — bucket sonuç belirlenemedi")
                 continue
 
-            pnl = trade["potential_win"] if won else -trade["size_usd"]
+            # Eski format uyumluluğu: cost_usd yoksa size_usd'den al
+            cost = trade.get("cost_usd") or trade.get("size_usd", 0)
+            pnl  = round(trade["potential_win"] if won else -cost, 2)
 
             trade.update({
                 "actual_temp": actual,
@@ -318,7 +320,7 @@ def report():
 
     print(f"\n{'='*62}")
     print(f"  📈 PAPER TRADING RAPORU")
-    print(f"  Sanal ${BET_SIZE_USD}/trade")
+    print(f"  {SHARES} share/trade · 1 share = $1 payout")
     print(f"{'='*62}")
 
     if not trades:
@@ -330,15 +332,15 @@ def report():
     wins      = [t for t in closed if t["result"] == "WIN"]
     losses    = [t for t in closed if t["result"] == "LOSS"]
     total_pnl = sum(t["pnl"] for t in closed if t["pnl"] is not None)
-    wr        = len(wins) / len(closed) * 100 if closed else 0
-    invested  = len(closed) * BET_SIZE_USD
-    roi       = total_pnl / invested * 100 if invested > 0 else 0
+    wr           = len(wins) / len(closed) * 100 if closed else 0
+    total_cost   = sum(t.get("cost_usd") or t.get("size_usd", 0) for t in closed)
+    roi          = total_pnl / total_cost * 100 if total_cost > 0 else 0
 
     print(f"\n  Açık pozisyon : {len(open_t)}")
     print(f"  Toplam kapalı : {len(closed)}  ({len(wins)} kazanç / {len(losses)} kayıp)")
     print(f"  İsabet oranı  : {wr:.1f}%")
-    print(f"  Net P&L       : ${'+'if total_pnl>=0 else ''}{total_pnl:.0f}")
-    print(f"  ROI           : {'+'if roi>=0 else ''}{roi:.1f}%  (sanal ${invested} yatırım)")
+    print(f"  Net P&L       : ${'+'if total_pnl>=0 else ''}{total_pnl:.2f}")
+    print(f"  Toplam risk   : ${total_cost:.2f}  →  ROI: {'+'if roi>=0 else ''}{roi:.1f}%")
 
     # İstasyon bazlı özet
     if closed:
@@ -358,12 +360,14 @@ def report():
     # Açık pozisyonlar
     if open_t:
         print(f"\n  AÇIK POZİSYONLAR ({len(open_t)}):")
-        for t in sorted(open_t, key=lambda x: x["date"]):
-            label = STATION_LABELS.get(t["station"], t["station"].upper())
+        for t in sorted(open_t, key=lambda x: (x["date"], x["station"])):
+            label  = STATION_LABELS.get(t["station"], t["station"].upper())
+            shares = t.get("shares", SHARES)
+            cost   = t.get("cost_usd") or t.get("size_usd", 0)
             print(
                 f"  📂 {t['station'].upper()} {label}  {t['date']}  "
                 f"🎯{t['top_pick']}°C @ {round(t['entry_price']*100)}¢  "
-                f"pot. +${t['potential_win']:.0f}"
+                f"{shares} share · risk=${cost:.2f} · pot +${t['potential_win']:.2f}"
             )
 
     # Son 15 kapalı trade
@@ -374,12 +378,13 @@ def report():
             label  = STATION_LABELS.get(t["station"], t["station"].upper())
             emoji  = "🟢" if t["result"] == "WIN" else "🔴"
             pnl    = t["pnl"] or 0
+            shares = t.get("shares", SHARES)
+            cost   = t.get("cost_usd") or t.get("size_usd", 0)
             print(
                 f"  {emoji} {t['station'].upper()} {label}  {t['date']}  "
-                f"tahmin={t['top_pick']}°C  "
-                f"gerçek={t['actual_temp']}°C  "
-                f"@ {round(t['entry_price']*100)}¢  "
-                f"P&L: ${'+'if pnl>=0 else ''}{pnl:.0f}"
+                f"tahmin={t['top_pick']}°C  gerçek={t['actual_temp']}°C  "
+                f"@ {round(t['entry_price']*100)}¢  {shares} share  "
+                f"P&L: ${'+'if pnl>=0 else ''}{pnl:.2f}"
             )
     print()
 
