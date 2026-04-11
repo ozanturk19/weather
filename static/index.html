@@ -1151,9 +1151,11 @@ let currentModalStation = null;
 let modalActiveDay = 0;
 
 const MODAL_TITLES = {
-  eglc:'🇬🇧 EGLC — Londra City', ltac:'🇹🇷 LTAC — Ankara Esenboğa',
-  limc:'🇮🇹 LIMC — Milano Malpensa', ltfm:'🇹🇷 LTFM — İstanbul',
-  lemd:'🇪🇸 LEMD — Madrid', lfpg:'🇫🇷 LFPG — Paris'
+  eglc:'🇬🇧 EGLC — Londra City',      ltac:'🇹🇷 LTAC — Ankara Esenboğa',
+  limc:'🇮🇹 LIMC — Milano Malpensa',   ltfm:'🇹🇷 LTFM — İstanbul',
+  lemd:'🇪🇸 LEMD — Madrid Barajas',    lfpg:'🇫🇷 LFPG — Paris CDG',
+  eham:'🇳🇱 EHAM — Amsterdam Schiphol', eddm:'🇩🇪 EDDM — Münih',
+  epwa:'🇵🇱 EPWA — Varşova Chopin',    efhk:'🇫🇮 EFHK — Helsinki Vantaa',
 };
 
 function openModal(id) {
@@ -1473,9 +1475,10 @@ function ptRender(data) {
         const lbl      = PT_STATION_LABELS[t.station] || t.station.toUpperCase();
         const entryPct = Math.round((t.entry_price || 0) * 100);
         const cheap    = t.entry_price < 0.20 ? '💰' : t.entry_price < 0.50 ? '←' : '';
-        const isNew    = t.cost_usd != null;
-        const shares   = isNew ? t.shares : null;
-        const cost     = isNew ? t.cost_usd : t.size_usd;
+        // cost_usd varsa yeni format (10 share/trade), yoksa eski ($50/trade)
+        const cost     = t.cost_usd ?? t.size_usd ?? null;
+        const shares   = t.shares ?? null;
+        const isNew    = t.cost_usd != null;   // gerçek 10-share formatı
 
         // Mevcut PM fiyatı
         const pm = pmCache[t.station]?.[t.date];
@@ -1483,26 +1486,21 @@ function ptRender(data) {
         const curPrice = bucket?.yes_price ?? null;
         const curPct   = curPrice != null ? Math.round(curPrice * 100) : null;
 
-        // Unrealized P&L
+        // Unrealized P&L — shares biliniyorsa hesapla
         let unrealizedHtml = '<span style="color:var(--text-3)">—</span>';
-        if (curPrice != null && isNew) {
-          const unreal = ((curPrice - t.entry_price) * t.shares).toFixed(2);
-          const pos    = parseFloat(unreal) >= 0;
-          const col    = parseFloat(unreal) > 0.01 ? 'var(--green)' : parseFloat(unreal) < -0.01 ? 'var(--red)' : 'var(--text-3)';
-          unrealizedHtml = `<span style="color:${col};font-weight:700">${pos?'+':''}$${unreal}</span>`;
-        } else if (curPrice != null) {
-          // eski format: yaklaşık unrealized
-          const unreal = ((curPrice - t.entry_price) * 100).toFixed(0);
-          const col    = parseInt(unreal) > 0 ? 'var(--green)' : parseInt(unreal) < 0 ? 'var(--red)' : 'var(--text-3)';
-          unrealizedHtml = `<span style="color:${col};font-size:10px">${parseInt(unreal)>0?'+':''}${unreal}¢/sh</span>`;
+        if (curPrice != null && shares != null) {
+          const unreal = ((curPrice - t.entry_price) * shares).toFixed(2);
+          const val    = parseFloat(unreal);
+          const col    = val > 0.01 ? 'var(--green)' : val < -0.01 ? 'var(--red)' : 'var(--text-3)';
+          unrealizedHtml = `<span style="color:${col};font-weight:700">${val>=0?'+':''}$${unreal}</span>`;
         }
 
         const curHtml  = curPct != null
           ? `<span style="font-family:var(--mono)">${curPct}¢</span>`
           : '<span style="color:var(--text-3)">—</span>';
-        const shareStr = isNew
-          ? `${shares} sh · $${cost?.toFixed(2)}`
-          : `$${cost} (eski)`;
+        const shareStr = shares != null && cost != null
+          ? `${shares} sh · $${parseFloat(cost).toFixed(2)}`
+          : cost != null ? `$${cost}` : '—';
 
         return `<tr>
           <td style="font-weight:600">${lbl}</td>
@@ -1564,7 +1562,7 @@ function renderDailyReport() {
   const today = dates[0];
   const tomorrow = dates[1];
   const now = new Date().toLocaleString('tr-TR', { dateStyle: 'long', timeStyle: 'short' });
-  const SN = { eglc:'EGLC · Londra', ltac:'LTAC · Ankara', limc:'LIMC · Milano', ltfm:'LTFM · İstanbul', lemd:'LEMD · Madrid', lfpg:'LFPG · Paris' };
+  const SN = { eglc:'EGLC · Londra', ltac:'LTAC · Ankara', limc:'LIMC · Milano', ltfm:'LTFM · İstanbul', lemd:'LEMD · Madrid', lfpg:'LFPG · Paris', eham:'EHAM · Amsterdam', eddm:'EDDM · Münih', epwa:'EPWA · Varşova', efhk:'EFHK · Helsinki' };
   const FL = { eglc:'🇬🇧', ltac:'🇹🇷', limc:'🇮🇹', ltfm:'🇹🇷', lemd:'🇪🇸', lfpg:'🇫🇷' };
   const ST = { eglc:'WU', ltac:'WU', limc:'WU', ltfm:'NOAA', lemd:'WU', lfpg:'WU' };
 
@@ -2195,7 +2193,7 @@ function renderTopTrades() {
     return;
   }
 
-  const stationLabels = { eglc: 'EGLC · Londra', ltac: 'LTAC · Ankara', limc: 'LIMC · Milano', ltfm: 'LTFM · İstanbul', lemd: 'LEMD · Madrid', lfpg: 'LFPG · Paris' };
+  const stationLabels = { eglc:'EGLC · Londra', ltac:'LTAC · Ankara', limc:'LIMC · Milano', ltfm:'LTFM · İstanbul', lemd:'LEMD · Madrid', lfpg:'LFPG · Paris', eham:'EHAM · Amsterdam', eddm:'EDDM · Münih', epwa:'EPWA · Varşova', efhk:'EFHK · Helsinki' };
   const sel = selections;
 
   listEl.innerHTML = trades.map((t, idx) => {
