@@ -83,157 +83,177 @@ def bucket_won(title: str, actual: float) -> bool | None:
     if range_m:  return int(range_m.group(1)) <= actual <= int(range_m.group(2))
     return None
 
-# ── Scan: Fırsat Tara ───────────────────────────────────────────────────────
+# ── Scan: Tek Tarih İçin İstasyon Tara ─────────────────────────────────────
+def scan_date(station: str, target_date: str, trades: list) -> dict | None:
+    """Bir istasyon + tarih için sinyal ara. Yeni trade dict döner veya None."""
+    label = STATION_LABELS.get(station, station.upper())
+
+    try:
+        # 1. Hava tahmini çek
+        r = httpx.get(f"{WEATHER_API}/api/weather?station={station}", timeout=30)
+        r.raise_for_status()
+        days      = r.json().get("days", {})
+        day_data  = days.get(target_date, {})
+        blend_obj = day_data.get("blend", {})
+
+        # Bias düzeltmeli blend kullan
+        if blend_obj.get("bias_active") and blend_obj.get("bias_corrected_blend"):
+            blend = blend_obj["bias_corrected_blend"]
+        else:
+            blend = blend_obj.get("max_temp")
+
+        if blend is None:
+            print(f"  ⬜ {station.upper()} {label}  — tahmin yok")
+            return None
+
+        spread = blend_obj.get("spread", 0) or 0
+        unc    = blend_obj.get("uncertainty", "?")
+
+        # top_pick: ensemble member maxlarının modu, yoksa round(blend)
+        try:
+            r_ens   = httpx.get(f"{WEATHER_API}/api/ensemble?station={station}", timeout=30)
+            members = r_ens.json().get("days", {}).get(target_date, {}).get("member_maxes", [])
+        except Exception:
+            members = []
+
+        if members:
+            counts   = Counter(round(m) for m in members)
+            top_pick = counts.most_common(1)[0][0]
+            mode_pct = round(counts[top_pick] / len(members) * 100)
+        else:
+            top_pick = round(blend)
+            mode_pct = None
+
+        # Aynı station + tarih + top_pick için zaten pozisyon var mı?
+        already_same = any(
+            t["station"] == station and t["date"] == target_date
+            and t["top_pick"] == top_pick and t["status"] == "open"
+            for t in trades
+        )
+        if already_same:
+            print(f"  ⬜ {station.upper()} {label}  — {top_pick}°C zaten açık, pas")
+            return None
+
+        # Farklı top_pick varsa bilgi ver ama devam et
+        prev_open = [
+            t for t in trades
+            if t["station"] == station and t["date"] == target_date and t["status"] == "open"
+        ]
+        if prev_open:
+            prev_picks = ", ".join(f"{t['top_pick']}°C" for t in prev_open)
+            print(f"  🔄 {station.upper()} {label}  — tahmin değişti ({prev_picks} → {top_pick}°C), yeni pozisyon açılıyor")
+
+    except Exception as e:
+        print(f"  ❌ {station.upper()} {label}  — hava API hatası: {e}")
+        return None
+
+    try:
+        # 2. PM market fiyatını çek
+        r2 = httpx.get(
+            f"{WEATHER_API}/api/polymarket",
+            params={"station": station, "date": target_date},
+            timeout=30,
+        )
+        r2.raise_for_status()
+        pm      = r2.json()
+        buckets = pm.get("buckets", [])
+
+        if not buckets:
+            print(f"  ⬜ {station.upper()} {label}  — PM market henüz yok")
+            return None
+
+        bucket = find_top_pick_bucket(buckets, top_pick)
+        if not bucket:
+            print(f"  ⬜ {station.upper()} {label}  — bucket eşleşmedi (pick={top_pick}°C)")
+            return None
+
+        price   = bucket.get("yes_price", 0)
+        cond_id = bucket.get("condition_id", "")
+        liq     = pm.get("liquidity", 0)
+
+    except Exception as e:
+        print(f"  ❌ {station.upper()} {label}  — PM API hatası: {e}")
+        return None
+
+    # 3. Karar ver
+    pct = round(price * 100)
+
+    if price < MIN_PRICE:
+        print(f"  ⬜ {station.upper()} {label}  🎯{top_pick}°C @ {pct}¢ — çok ucuz, şüpheli")
+        return None
+
+    if price >= MAX_PRICE:
+        print(f"  ⬜ {station.upper()} {label}  🎯{top_pick}°C @ {pct}¢ — pahalı, pas")
+        return None
+
+    cost          = round(SHARES * price, 2)
+    potential_win = round(SHARES - cost, 2)
+    cheap_tag     = "💰" if price < 0.20 else "←"
+    mode_tag      = f" [ens %{mode_pct}]" if mode_pct else ""
+
+    trade = {
+        "id":            f"{station}_{target_date}_{datetime.now().strftime('%H%M%S')}",
+        "station":       station,
+        "date":          target_date,
+        "blend":         round(blend, 1),
+        "spread":        round(spread, 2),
+        "uncertainty":   unc,
+        "top_pick":      top_pick,
+        "ens_mode_pct":  mode_pct,
+        "bucket_title":  bucket["title"],
+        "condition_id":  cond_id,
+        "entry_price":   price,
+        "shares":        SHARES,
+        "cost_usd":      cost,
+        "potential_win": potential_win,
+        "liquidity":     liq,
+        "status":        "open",
+        "entered_at":    datetime.now().isoformat(),
+        "actual_temp":   None,
+        "result":        None,
+        "pnl":           None,
+        "settled_at":    None,
+    }
+
+    print(
+        f"  ✅ {station.upper()} {label}  "
+        f"🎯{top_pick}°C (blend={blend:.1f}){mode_tag} @ {pct}¢ {cheap_tag}  "
+        f"{SHARES} share · risk=${cost:.2f} · pot +${potential_win:.2f}"
+    )
+    return trade
+
+
+# ── Scan: Fırsat Tara (D+1 ve D+2) ─────────────────────────────────────────
 def scan():
-    trades   = load_trades()
-    tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+    trades = load_trades()
+    today  = datetime.now()
+
+    scan_targets = [
+        (today + timedelta(days=1)).strftime("%Y-%m-%d"),   # D+1
+        (today + timedelta(days=2)).strftime("%Y-%m-%d"),   # D+2
+    ]
 
     print(f"\n{'='*62}")
-    print(f"  🔍 PAPER TRADING TARAMASI — D+1 ({tomorrow})")
-    print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"  🔍 PAPER TRADING TARAMASI — D+1 & D+2")
+    print(f"  {today.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'='*62}")
 
-    new_trades = 0
-    for station in STATIONS:
-        label = STATION_LABELS.get(station, station.upper())
-
-        try:
-            # 1. Hava tahmini çek
-            r = httpx.get(f"{WEATHER_API}/api/weather?station={station}", timeout=30)
-            r.raise_for_status()
-            days     = r.json().get("days", {})
-            day_data = days.get(tomorrow, {})
-            blend_obj = day_data.get("blend", {})
-
-            # Bias düzeltmeli blend kullan
-            if blend_obj.get("bias_active") and blend_obj.get("bias_corrected_blend"):
-                blend = blend_obj["bias_corrected_blend"]
-            else:
-                blend = blend_obj.get("max_temp")
-
-            if blend is None:
-                print(f"  ⬜ {station.upper()} {label}  — tahmin yok")
-                continue
-
-            spread = blend_obj.get("spread", 0) or 0
-            unc    = blend_obj.get("uncertainty", "?")
-
-            # top_pick: ensemble member maxlarının modu, yoksa round(blend)
-            # Böylece 18.6 blend ama üyelerin çoğu 17 diyorsa 17 seçilir
-            try:
-                r_ens = httpx.get(f"{WEATHER_API}/api/ensemble?station={station}", timeout=30)
-                members = r_ens.json().get("days", {}).get(tomorrow, {}).get("member_maxes", [])
-            except Exception:
-                members = []
-
-            if members:
-                counts   = Counter(round(m) for m in members)
-                top_pick = counts.most_common(1)[0][0]
-                mode_pct = round(counts[top_pick] / len(members) * 100)
-            else:
-                top_pick = round(blend)
-                mode_pct = None
-
-            # Aynı station + tarih + top_pick için zaten pozisyon var mı?
-            # top_pick değiştiyse (forecast güncellendiyse) yeni pozisyon açılabilir.
-            already_same = any(
-                t["station"] == station and t["date"] == tomorrow
-                and t["top_pick"] == top_pick and t["status"] == "open"
-                for t in trades
-            )
-            if already_same:
-                print(f"  ⬜ {station.upper()} {label}  — {top_pick}°C zaten açık, pas")
-                continue
-
-            # Farklı top_pick varsa bilgi ver ama devam et
-            prev_open = [t for t in trades if t["station"] == station and t["date"] == tomorrow and t["status"] == "open"]
-            if prev_open:
-                prev_picks = ", ".join(f"{t['top_pick']}°C" for t in prev_open)
-                print(f"  🔄 {station.upper()} {label}  — tahmin değişti ({prev_picks} → {top_pick}°C), yeni pozisyon açılıyor")
-
-        except Exception as e:
-            print(f"  ❌ {station.upper()} {label}  — hava API hatası: {e}")
-            continue
-
-        try:
-            # 2. PM market fiyatını çek
-            r2 = httpx.get(
-                f"{WEATHER_API}/api/polymarket",
-                params={"station": station, "date": tomorrow},
-                timeout=30,
-            )
-            r2.raise_for_status()
-            pm      = r2.json()
-            buckets = pm.get("buckets", [])
-
-            if not buckets:
-                print(f"  ⬜ {station.upper()} {label}  — PM market henüz yok")
-                continue
-
-            bucket = find_top_pick_bucket(buckets, top_pick)
-            if not bucket:
-                print(f"  ⬜ {station.upper()} {label}  — bucket eşleşmedi (pick={top_pick}°C)")
-                continue
-
-            price    = bucket.get("yes_price", 0)
-            cond_id  = bucket.get("condition_id", "")
-            liq      = pm.get("liquidity", 0)
-
-        except Exception as e:
-            print(f"  ❌ {station.upper()} {label}  — PM API hatası: {e}")
-            continue
-
-        # 3. Karar ver
-        pct = round(price * 100)
-
-        if price < MIN_PRICE:
-            print(f"  ⬜ {station.upper()} {label}  🎯{top_pick}°C @ {pct}¢ — çok ucuz, şüpheli")
-
-        elif price < MAX_PRICE:
-            cost          = round(SHARES * price, 2)   # toplam maliyet ($)
-            potential_win = round(SHARES - cost, 2)    # net kazanç ($) eğer WIN
-            cheap_tag     = "💰" if price < 0.20 else "←"
-            mode_tag      = f" [ens %{mode_pct}]" if mode_pct else ""
-
-            trade = {
-                "id":            f"{station}_{tomorrow}_{datetime.now().strftime('%H%M%S')}",
-                "station":       station,
-                "date":          tomorrow,
-                "blend":         round(blend, 1),
-                "spread":        round(spread, 2),
-                "uncertainty":   unc,
-                "top_pick":      top_pick,
-                "ens_mode_pct":  mode_pct,
-                "bucket_title":  bucket["title"],
-                "condition_id":  cond_id,
-                "entry_price":   price,
-                "shares":        SHARES,
-                "cost_usd":      cost,
-                "potential_win": potential_win,
-                "liquidity":     liq,
-                "status":        "open",
-                "entered_at":    datetime.now().isoformat(),
-                "actual_temp":   None,
-                "result":        None,
-                "pnl":           None,
-                "settled_at":    None,
-            }
-            trades.append(trade)
-            new_trades += 1
-
-            print(
-                f"  ✅ {station.upper()} {label}  "
-                f"🎯{top_pick}°C (blend={blend:.1f}){mode_tag} @ {pct}¢ {cheap_tag}  "
-                f"{SHARES} share · risk=${cost:.2f} · pot +${potential_win:.2f}"
-            )
-
-        else:
-            print(f"  ⬜ {station.upper()} {label}  🎯{top_pick}°C @ {pct}¢ — pahalı, pas")
+    total_new = 0
+    for i, target_date in enumerate(scan_targets, start=1):
+        print(f"\n  ── D+{i} ({target_date}) {'─'*38}")
+        day_new = 0
+        for station in STATIONS:
+            trade = scan_date(station, target_date, trades)
+            if trade:
+                trades.append(trade)
+                day_new += 1
+                total_new += 1
+        print(f"  → D+{i}: {day_new} yeni trade")
 
     save_trades(trades)
 
     open_count = len([t for t in trades if t["status"] == "open"])
-    print(f"\n  📝 {new_trades} yeni trade kaydedildi")
+    print(f"\n  📝 Toplam {total_new} yeni trade kaydedildi")
     print(f"  📂 Toplam açık pozisyon: {open_count}")
     print()
 
