@@ -37,6 +37,10 @@ SHARES       = 10     # her işlemde alınan share adedi (1 share kazanınca $1 
 MIN_PRICE    = 0.05   # çok ucuz → şüpheli likidite, atla
 MAX_PRICE    = 0.50   # bunun altı "ucuz" → al sinyali
 
+# Kalite filtreleri
+SKIP_UNCERTAINTY = {"yüksek", "high", "very high"}  # bu seviyelerde hiç pozisyon açma
+MIN_BIAS_TRADES  = 4   # bias hesaplamak için gereken minimum kapalı trade sayısı
+
 # ── Trade Depolama ──────────────────────────────────────────────────────────
 def load_trades() -> list:
     if TRADES_FILE.exists():
@@ -47,6 +51,33 @@ def save_trades(trades: list):
     TRADES_FILE.write_text(
         json.dumps(trades, indent=2, ensure_ascii=False), encoding="utf-8"
     )
+
+# ── Adaptif Bias Hesabı ─────────────────────────────────────────────────────
+def compute_station_biases(trades: list) -> dict:
+    """Kapalı trade'lerden istasyon bazlı sistematik tahmin hatasını öğren.
+
+    Her istasyon için: bias = ortalama(gerçek - tahmin), en yakın tam sayıya yuvarlanır.
+    Yeterli veri (MIN_BIAS_TRADES) yoksa o istasyon için 0 döner.
+
+    Örnek: EPWA için geçmiş 8 trade'de ortalama +1.4°C hata → bias = +1
+    Yani scanner top_pick'e +1 ekler ve bir üst bucket'ı hedefler.
+    """
+    from collections import defaultdict
+    errors: dict[str, list[float]] = defaultdict(list)
+
+    for t in trades:
+        if t["status"] == "closed" and t.get("actual_temp") is not None and t.get("top_pick") is not None:
+            delta = t["actual_temp"] - t["top_pick"]
+            errors[t["station"]].append(delta)
+
+    biases: dict[str, int] = {}
+    for station, deltas in errors.items():
+        if len(deltas) >= MIN_BIAS_TRADES:
+            avg  = sum(deltas) / len(deltas)
+            bias = round(avg)  # 0 ise düzeltme yok
+            biases[station] = bias
+
+    return biases
 
 # ── Bucket Eşleştirme ───────────────────────────────────────────────────────
 def find_top_pick_bucket(buckets: list, top_pick: int) -> dict | None:
@@ -84,8 +115,12 @@ def bucket_won(title: str, actual: float) -> bool | None:
     return None
 
 # ── Scan: Tek Tarih İçin İstasyon Tara ─────────────────────────────────────
-def scan_date(station: str, target_date: str, trades: list) -> dict | None:
-    """Bir istasyon + tarih için sinyal ara. Yeni trade dict döner veya None."""
+def scan_date(station: str, target_date: str, trades: list,
+              station_biases: dict | None = None) -> dict | None:
+    """Bir istasyon + tarih için sinyal ara. Yeni trade dict döner veya None.
+
+    station_biases: compute_station_biases() çıktısı — adaptif tahmin düzeltmesi.
+    """
     label = STATION_LABELS.get(station, station.upper())
 
     try:
@@ -117,12 +152,34 @@ def scan_date(station: str, target_date: str, trades: list) -> dict | None:
             members = []
 
         if members:
-            counts   = Counter(round(m) for m in members)
-            top_pick = counts.most_common(1)[0][0]
-            mode_pct = round(counts[top_pick] / len(members) * 100)
+            counts      = Counter(round(m) for m in members)
+            top_pick    = counts.most_common(1)[0][0]
+            mode_pct    = round(counts[top_pick] / len(members) * 100)
+            top2        = counts.most_common(2)
+            second_pick = top2[1][0] if len(top2) > 1 else None
+            second_pct  = round(top2[1][1] / len(members) * 100) if second_pick is not None else None
         else:
-            top_pick = round(blend)
-            mode_pct = None
+            top_pick    = round(blend)
+            mode_pct    = None
+            second_pick = None
+            second_pct  = None
+
+        # ── Uncertainty filtresi ────────────────────────────────────────────
+        # "Yüksek" belirsizlikte tahmin çok zayıf → geçmiş: %0 win rate
+        if isinstance(unc, str) and unc.lower() in SKIP_UNCERTAINTY:
+            print(f"  ⛔ {station.upper()} {label}  — belirsizlik çok yüksek ({unc}), pas")
+            return None
+
+        # ── Adaptif Bias Düzeltmesi ─────────────────────────────────────────
+        # Geçmiş kapalı trade'lerden öğrenilen sistematik sapma (°C cinsinden)
+        raw_top_pick = top_pick
+        bias = (station_biases or {}).get(station, 0)
+        if bias != 0:
+            top_pick = top_pick + bias
+            print(
+                f"  📐 {station.upper()} {label}  "
+                f"bias düzeltme {bias:+d}°C  ({raw_top_pick}°C → {top_pick}°C)"
+            )
 
         # Aynı station + tarih + top_pick için zaten pozisyon var mı?
         already_same = any(
@@ -191,6 +248,12 @@ def scan_date(station: str, target_date: str, trades: list) -> dict | None:
     cheap_tag     = "💰" if price < 0.20 else "←"
     mode_tag      = f" [ens %{mode_pct}]" if mode_pct else ""
 
+    # 2. pick bilgisi: ensemble'ın 2. adayı neydi?
+    second_tag = ""
+    if second_pick is not None and second_pct is not None:
+        if abs(second_pick - top_pick) == 1:
+            second_tag = f" [2.pick:{second_pick}°C %{second_pct}]"
+
     trade = {
         "id":            f"{station}_{target_date}_{datetime.now().strftime('%H%M%S')}",
         "station":       station,
@@ -199,7 +262,11 @@ def scan_date(station: str, target_date: str, trades: list) -> dict | None:
         "spread":        round(spread, 2),
         "uncertainty":   unc,
         "top_pick":      top_pick,
+        "raw_top_pick":  raw_top_pick,        # bias öncesi değer
+        "bias_applied":  bias,                # uygulanan düzeltme (0 = yok)
         "ens_mode_pct":  mode_pct,
+        "ens_2nd_pick":  second_pick,
+        "ens_2nd_pct":   second_pct,
         "bucket_title":  bucket["title"],
         "condition_id":  cond_id,
         "entry_price":   price,
@@ -217,7 +284,7 @@ def scan_date(station: str, target_date: str, trades: list) -> dict | None:
 
     print(
         f"  ✅ {station.upper()} {label}  "
-        f"🎯{top_pick}°C (blend={blend:.1f}){mode_tag} @ {pct}¢ {cheap_tag}  "
+        f"🎯{top_pick}°C (blend={blend:.1f}){mode_tag}{second_tag} @ {pct}¢ {cheap_tag}  "
         f"{SHARES} share · risk=${cost:.2f} · pot +${potential_win:.2f}"
     )
     return trade
@@ -233,17 +300,34 @@ def scan():
         (today + timedelta(days=2)).strftime("%Y-%m-%d"),   # D+2
     ]
 
+    # Geçmiş veriden istasyon biaslarını öğren
+    station_biases = compute_station_biases(trades)
+
     print(f"\n{'='*62}")
     print(f"  🔍 PAPER TRADING TARAMASI — D+1 & D+2")
     print(f"  {today.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'='*62}")
+
+    # Öğrenilen biasları logla
+    if station_biases:
+        bias_parts = [
+            f"{s.upper()}:{v:+d}°C"
+            for s, v in sorted(station_biases.items())
+            if v != 0
+        ]
+        if bias_parts:
+            print(f"\n  📐 Öğrenilen bias düzeltmeleri: {' | '.join(bias_parts)}")
+        else:
+            print(f"\n  📐 Tüm istasyonlar nötr — bias düzeltme yok")
+    else:
+        print(f"\n  📐 Yeterli kapalı trade yok — bias düzeltme yok")
 
     total_new = 0
     for i, target_date in enumerate(scan_targets, start=1):
         print(f"\n  ── D+{i} ({target_date}) {'─'*38}")
         day_new = 0
         for station in STATIONS:
-            trade = scan_date(station, target_date, trades)
+            trade = scan_date(station, target_date, trades, station_biases)
             if trade:
                 trades.append(trade)
                 day_new += 1
