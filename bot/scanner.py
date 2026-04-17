@@ -35,11 +35,14 @@ STATION_LABELS = {
 # Risk parametreleri
 SHARES       = 10     # her işlemde alınan share adedi (1 share kazanınca $1 öder)
 MIN_PRICE    = 0.05   # çok ucuz → şüpheli likidite, atla
-MAX_PRICE    = 0.50   # bunun altı "ucuz" → al sinyali
+MAX_PRICE    = 0.40   # 40¢ üzeri pozisyonlarda edge zayıflıyor → pas
+                      # (eski 0.50'den düşürüldü — canlı öncesi edge kalitesi için)
 
 # Kalite filtreleri
 SKIP_UNCERTAINTY = {"yüksek", "high", "very high"}  # bu seviyelerde hiç pozisyon açma
-MIN_BIAS_TRADES  = 4   # bias hesaplamak için gereken minimum kapalı trade sayısı
+MIN_BIAS_TRADES  = 8   # bias hesabı için minimum kapalı trade (4'ten artırıldı)
+                       # Az veriyle yanlış bias uygulanmasını önler (Paris +3°C vakası)
+MAX_BIAS_CORRECTION = 2  # bias tavanı: en fazla ±2°C düzeltme uygulanır
 
 # ── Trade Depolama ──────────────────────────────────────────────────────────
 def load_trades() -> list:
@@ -74,8 +77,12 @@ def compute_station_biases(trades: list) -> dict:
     for station, deltas in errors.items():
         if len(deltas) >= MIN_BIAS_TRADES:
             avg  = sum(deltas) / len(deltas)
-            bias = round(avg)  # 0 ise düzeltme yok
-            biases[station] = bias
+            bias = round(avg)
+            # Güvenlik tavanı: çok agresif bias düzeltmesini önle
+            # (Örn: Paris 6 trade ile +3°C hesapladı ama bu aşırıydı)
+            bias = max(-MAX_BIAS_CORRECTION, min(MAX_BIAS_CORRECTION, bias))
+            if bias != 0:
+                biases[station] = bias
 
     return biases
 
@@ -440,13 +447,38 @@ def report():
     total_cost   = sum(t.get("cost_usd") or t.get("size_usd", 0) for t in closed)
     roi          = total_pnl / total_cost * 100 if total_cost > 0 else 0
 
+    avg_win  = sum(t["pnl"] for t in wins)  / len(wins)  if wins  else 0
+    avg_loss = sum(t["pnl"] for t in losses) / len(losses) if losses else 0
+    ev       = (wr/100) * avg_win + (1 - wr/100) * avg_loss
+
+    # Sapma dağılımı
+    deltas = [
+        t["actual_temp"] - t["top_pick"]
+        for t in closed
+        if t.get("actual_temp") is not None and t.get("top_pick") is not None
+    ]
+    exact   = sum(1 for d in deltas if d == 0)
+    off_one = sum(1 for d in deltas if abs(d) == 1)
+
     print(f"\n  Açık pozisyon : {len(open_t)}")
     print(f"  Toplam kapalı : {len(closed)}  ({len(wins)} kazanç / {len(losses)} kayıp)")
     print(f"  İsabet oranı  : {wr:.1f}%")
     print(f"  Net P&L       : ${'+'if total_pnl>=0 else ''}{total_pnl:.2f}")
     print(f"  Toplam risk   : ${total_cost:.2f}  →  ROI: {'+'if roi>=0 else ''}{roi:.1f}%")
+    print(f"  Trade başı EV : ${'+'if ev>=0 else ''}{ev:.2f}  "
+          f"(ort.kazanç ${avg_win:+.2f} / ort.kayıp ${avg_loss:.2f})")
+    if deltas:
+        print(f"  Sapma özeti   : tam isabet {exact}/{len(deltas)} (%{exact/len(deltas)*100:.0f})  "
+              f"± 1°C {off_one}/{len(deltas)} (%{off_one/len(deltas)*100:.0f})")
 
-    # İstasyon bazlı özet
+    # İstasyon bazlı özet — bias ve sapma bilgisi ile
+    station_biases = compute_station_biases(trades)
+    from collections import defaultdict
+    station_errors: dict = defaultdict(list)
+    for t in closed:
+        if t.get("actual_temp") is not None and t.get("top_pick") is not None:
+            station_errors[t["station"]].append(t["actual_temp"] - t["top_pick"])
+
     if closed:
         print(f"\n  İSTASYON BAZLI:")
         stations_seen = dict.fromkeys(t["station"] for t in closed)
@@ -457,9 +489,14 @@ def report():
             s_wr     = len(s_wins) / len(s_trades) * 100
             label    = STATION_LABELS.get(s, s.upper())
             emoji    = "🟢" if s_pnl > 0 else "🔴"
+            errs     = station_errors.get(s, [])
+            avg_err  = sum(errs)/len(errs) if errs else 0
+            bias_val = station_biases.get(s, 0)
+            bias_str = f"bias:{bias_val:+d}°C" if bias_val != 0 else "bias:nötr"
             print(f"  {emoji} {s.upper()} {label}  "
-                  f"{len(s_wins)}/{len(s_trades)} kazanıldı ({s_wr:.0f}%)  "
-                  f"P&L: ${'+'if s_pnl>=0 else ''}{s_pnl:.0f}")
+                  f"{len(s_wins)}/{len(s_trades)} ({s_wr:.0f}%)  "
+                  f"P&L: ${'+'if s_pnl>=0 else ''}{s_pnl:.0f}  "
+                  f"ort.Δ:{avg_err:+.1f}°C  {bias_str}")
 
     # Açık pozisyonlar
     if open_t:
