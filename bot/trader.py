@@ -57,13 +57,17 @@ STATION_LABELS = {
 # ── Trade Depolama ──────────────────────────────────────────────────────────
 def load_live_trades() -> list:
     if TRADES_FILE.exists():
-        return json.loads(TRADES_FILE.read_text(encoding="utf-8"))
+        try:
+            return json.loads(TRADES_FILE.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, Exception) as e:
+            print(f"  ⚠️  live_trades.json okunamadı: {e}")
+            return []
     return []
 
 def save_live_trades(trades: list):
-    TRADES_FILE.write_text(
-        json.dumps(trades, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
+    tmp = TRADES_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(trades, indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(TRADES_FILE)
 
 # ── CLOB Client Kurulumu ────────────────────────────────────────────────────
 def setup_client():
@@ -142,7 +146,7 @@ def today_spend() -> float:
         t.get("cost_usdc", 0)
         for t in trades
         if t.get("placed_at", "")[:10] == today
-        and t["status"] not in ("cancelled",)
+        and t["status"] not in ("cancelled", "expired")
     )
 
 # ── Orderbook'tan En İyi Alış Fiyatı ───────────────────────────────────────
@@ -392,6 +396,9 @@ def cancel_stale_orders() -> int:
 
         # D+1 stale: aynı fiyatla yeniden gir (market hâlâ açık, fill şansı var)
         if horizon == "D+1" and t["date"] == tomorrow:
+            # Disk'e yazıp sonra yeniden gir — place_limit_order disk'ten okur,
+            # henüz kaydedilmediyse eski pending_fill görür ve duplicate engeller.
+            save_live_trades(trades)
             try:
                 new_result = place_limit_order(
                     condition_id = t["condition_id"],
@@ -405,6 +412,8 @@ def cancel_stale_orders() -> int:
                 if new_result:
                     requeued += 1
                     print(f"  🔄 YENİDEN GİRİLDİ  {t['station'].upper()} {label}")
+                    # place_limit_order kendi save_live_trades'ini yaptı; reload
+                    trades = load_live_trades()
             except Exception as e:
                 print(f"  ⚠️  Yeniden giriş başarısız: {e}")
 
@@ -424,7 +433,7 @@ def bucket_won(title: str, actual: float) -> bool | None:
     t = title.strip()
     higher_m = re.search(r'(-?\d+).*or higher', t, re.I)
     below_m  = re.search(r'(-?\d+).*or below',  t, re.I)
-    range_m  = re.search(r'(-?\d+)[^-\d]+(-?\d+)', t)
+    range_m  = re.search(r'(-?\d+)\D+(-?\d+)', t)
     exact_m  = re.match(r'^(-?\d+)\s*°?C?$', t)
     if higher_m: return actual >= int(higher_m.group(1))
     if below_m:  return actual <= int(below_m.group(1))
@@ -435,18 +444,20 @@ def bucket_won(title: str, actual: float) -> bool | None:
 # ── Live Settlement ─────────────────────────────────────────────────────────
 def settle_live():
     """
-    Dün tarihli 'filled' order'ların gerçek sonucunu METAR/WU'dan çek.
-    P&L hesapla, status güncelle.
+    'filled' order'ların gerçek sonucunu METAR/WU'dan çek.
+    Bugünden önceki tüm tarihleri settle eder (cron atlama durumu için).
     """
     trades    = load_live_trades()
+    today     = datetime.now().strftime("%Y-%m-%d")
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     to_settle = [
         t for t in trades
-        if t["date"] == yesterday and t["status"] == "filled"
+        if t["date"] < today and t["status"] == "filled"
     ]
 
+    dates_str = ", ".join(sorted({t["date"] for t in to_settle})) if to_settle else yesterday
     print(f"\n{'='*62}")
-    print(f"  🏁 LIVE SETTLEMENT — {yesterday}")
+    print(f"  🏁 LIVE SETTLEMENT — {dates_str}")
     print(f"{'='*62}")
 
     if not to_settle:
@@ -549,7 +560,7 @@ def cmd_status():
                 f"  📋 {t['station'].upper()} {label}  {t['date']}  "
                 f"🎯{t['top_pick']}°C @ {pct}¢  "
                 f"{t['shares']} share · ${t['cost_usdc']:.2f}  "
-                f"⏱ {kalan}s kaldı  [{t['order_id'][:12]}...]"
+                f"⏱ {kalan}h kaldı  [{t['order_id'][:12]}...]"
             )
 
     if filled:
@@ -634,6 +645,76 @@ def cmd_approve_usdc():
         print(f"  ❌ Hata: {e}\n")
         sys.exit(1)
 
+# ── Auto Redeem Kazanan Token'lar ───────────────────────────────────────────
+def cmd_redeem():
+    """
+    settled_win durumundaki trade'lerin Polymarket token'larını on-chain redeem et.
+    Polymarket positions API'den token varlığını kontrol eder; varsa CLOB
+    üzerinden redeem eder (py-clob-client destekliyorsa), yoksa zaten ödendi kabul eder.
+    """
+    trades     = load_live_trades()
+    to_redeem  = [t for t in trades if t.get("status") == "settled_win"
+                  and not t.get("redeemed")]
+
+    if not to_redeem:
+        print("  ✅ Redeem edilecek kazanç yok.\n")
+        return
+
+    print(f"\n  💰 {len(to_redeem)} kazanan trade redeem edilecek...")
+
+    # Pozisyonları çek: token_id → currentValue
+    try:
+        wallet = wallet_address_from_pk(PK)
+        r = httpx.get(
+            f"https://data-api.polymarket.com/positions?user={wallet}&sizeThreshold=0.001",
+            timeout=12
+        )
+        positions = {p["conditionId"]: p for p in r.json()} if r.is_success else {}
+    except Exception as e:
+        print(f"  ⚠️  Positions API hatası: {e}")
+        positions = {}
+
+    client  = setup_client()
+    updated = 0
+
+    for t in to_redeem:
+        cond_id = t.get("condition_id", "")
+        pos     = positions.get(cond_id)
+
+        if pos is None:
+            # Positions'ta yok → zaten ödendi veya çok küçük
+            val = float(pos.get("currentValue", 0)) if pos else 0
+            print(f"  ℹ️  {t['station'].upper()} {t['date']} — positions'ta yok (val={val:.3f}), redeemed=1")
+            t["redeemed"] = True
+            updated += 1
+            continue
+
+        current_val = float(pos.get("currentValue", 0))
+        if current_val < 0.01:
+            print(f"  ✅ {t['station'].upper()} {t['date']} — value={current_val:.3f} ≈ 0, zaten ödendi")
+            t["redeemed"] = True
+            updated += 1
+            continue
+
+        # CLOB üzerinden redeem (py-clob-client destekliyorsa)
+        try:
+            resp = client.redeem_positions(cond_id)
+            print(f"  💰 {t['station'].upper()} {t['date']} — REDEEM OK: {resp}")
+            t["redeemed"] = True
+            updated += 1
+        except AttributeError:
+            # py-clob-client'ın bu sürümünde redeem_positions yok
+            # Manuel kontrol gerekiyor — sadece flag'le
+            print(f"  ⚠️  {t['station'].upper()} {t['date']} — redeem_positions desteklenmiyor, manuel kontrol et")
+            print(f"       conditionId: {cond_id}")
+            print(f"       Şu anki değer: ${current_val:.3f}")
+        except Exception as e:
+            print(f"  ❌ {t['station'].upper()} {t['date']} — redeem hatası: {e}")
+
+    save_live_trades(trades)
+    print(f"\n  {updated} trade işlendi.\n")
+
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "status"
@@ -644,6 +725,7 @@ if __name__ == "__main__":
         "check-fills":   check_fills,
         "cancel-stale":  cancel_stale_orders,
         "settle":        settle_live,
+        "redeem":        cmd_redeem,
         "setup-creds":   cmd_setup_creds,
         "approve-usdc":  cmd_approve_usdc,
     }

@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -21,6 +21,13 @@ from pydantic import BaseModel
 load_dotenv()
 
 app = FastAPI(title="Polymarket Hava Analizi")
+
+# ── API Token (trading endpoint koruma) ─────────────────────────────────────
+_API_TOKEN = os.getenv("API_TOKEN", "")
+
+def require_token(x_api_token: str = Header(default="")):
+    if _API_TOKEN and x_api_token != _API_TOKEN:
+        raise HTTPException(status_code=403, detail="Geçersiz API token")
 
 # ── Weather cache: Open-Meteo rate limit koruması ───────────────────────────
 # 6 istasyon × 5 model = 30 eşzamanlı istek → HTTP 429.
@@ -766,8 +773,9 @@ async def get_bot_trades():
     }
 
 @app.post("/api/bot-trades/scan")
-async def bot_scan():
+async def bot_scan(x_api_token: str = Header(default="")):
     """Bot taramasını tetikle (scanner.py scan)."""
+    require_token(x_api_token)
     try:
         result = await asyncio.to_thread(
             subprocess.run,
@@ -779,8 +787,9 @@ async def bot_scan():
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/bot-trades/settle")
-async def bot_settle():
+async def bot_settle(x_api_token: str = Header(default="")):
     """Dünkü pozisyonları settle et (scanner.py settle)."""
+    require_token(x_api_token)
     try:
         result = await asyncio.to_thread(
             subprocess.run,
@@ -790,6 +799,98 @@ async def bot_settle():
         return {"ok": True, "output": result.stdout + result.stderr}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Live Trading API Endpoints ───────────────────────────────────────────────
+
+LIVE_TRADES_FILE = Path("bot/live_trades.json")
+CLOSED_STATUSES  = ("won", "lost", "settled_win", "settled_loss", "expired", "cancelled")
+
+def _load_live_trades() -> list:
+    if LIVE_TRADES_FILE.exists():
+        try:
+            return json.loads(LIVE_TRADES_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+    return []
+
+@app.get("/api/live-trades")
+async def get_live_trades():
+    trades  = _load_live_trades()
+    pending = [t for t in trades if t.get("status") == "pending_fill"]
+    filled  = [t for t in trades if t.get("status") == "filled"]
+    closed  = [t for t in trades if t.get("status") in CLOSED_STATUSES]
+    wins    = [t for t in closed if (t.get("result") or "").upper() == "WIN"]
+    losses  = [t for t in closed if (t.get("result") or "").upper() == "LOSS"]
+    total   = len(trades)
+    open_n  = len(pending) + len(filled)
+    win_rate = round(len(wins) / len(closed) * 100, 1) if closed else None
+    total_pnl = round(sum(t.get("pnl_usdc") or 0 for t in closed), 4)
+    return {
+        "trades": trades,
+        "stats": {
+            "total":    total,
+            "pending":  len(pending),
+            "filled":   len(filled),
+            "open":     open_n,
+            "closed":   len(closed),
+            "wins":     len(wins),
+            "losses":   len(losses),
+            "win_rate": win_rate,
+            "total_pnl": total_pnl,
+        }
+    }
+
+@app.get("/api/live-balance")
+async def get_live_balance():
+    try:
+        result = await asyncio.to_thread(
+            subprocess.run,
+            ["python3", "bot/trader.py", "balance"],
+            capture_output=True, text=True, timeout=30,
+            cwd="/root/weather"
+        )
+        output = result.stdout + result.stderr
+        m = re.search(r'Bakiyesi\s*:\s*\$([0-9.]+)', output)
+        balance = float(m.group(1)) if m else None
+        return {"balance": balance, "raw": output}
+    except Exception as e:
+        return {"balance": None, "error": str(e)}
+
+@app.post("/api/live-trades/scan")
+async def live_scan(x_api_token: str = Header(default="")):
+    """Gerçek para ile live scan tetikle."""
+    require_token(x_api_token)
+    try:
+        result = await asyncio.to_thread(
+            subprocess.run,
+            ["python3", "bot/scanner.py", "scan", "--live"],
+            capture_output=True, text=True, timeout=300,
+            cwd="/root/weather"
+        )
+        return {"ok": True, "output": result.stdout + result.stderr}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/trader-health")
+async def trader_health():
+    """Trader cron son çalışma zamanı + istatistikleri."""
+    log_file = Path("/root/weather/bot/trader.log")
+    if not log_file.exists():
+        return {"last_run": None, "fills_today": 0, "entries": []}
+    try:
+        lines   = log_file.read_text(encoding="utf-8", errors="ignore").splitlines()
+        entries = []
+        for line in lines[-200:]:
+            if "FILL" in line or "ORDER" in line or "check-fills" in line.lower():
+                entries.append(line.strip())
+        fills = sum(1 for l in lines[-500:] if "✅ FILL" in l)
+        last_line = next(
+            (l for l in reversed(lines) if l.strip()), None
+        )
+        return {"last_run": last_line, "fills_today": fills, "entries": entries[-20:]}
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @app.get("/", include_in_schema=False)

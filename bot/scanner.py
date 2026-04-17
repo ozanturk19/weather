@@ -47,7 +47,11 @@ MAX_BIAS_CORRECTION = 2  # bias tavanı: en fazla ±2°C düzeltme uygulanır
 # ── Trade Depolama ──────────────────────────────────────────────────────────
 def load_trades() -> list:
     if TRADES_FILE.exists():
-        return json.loads(TRADES_FILE.read_text(encoding="utf-8"))
+        try:
+            return json.loads(TRADES_FILE.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, Exception) as e:
+            print(f"  ⚠️  paper_trades.json okunamadı: {e}")
+            return []
     return []
 
 def save_trades(trades: list):
@@ -112,7 +116,7 @@ def bucket_won(title: str, actual: float) -> bool | None:
     t = title.strip()
     higher_m = re.search(r'(-?\d+).*or higher', t, re.I)
     below_m  = re.search(r'(-?\d+).*or below',  t, re.I)
-    range_m  = re.search(r'(-?\d+)[^-\d]+(-?\d+)', t)   # "X to Y" veya "X-Y"
+    range_m  = re.search(r'(-?\d+)\D+(-?\d+)', t)   # "X to Y", "X-Y", "14°C to 16°C"
     exact_m  = re.match(r'^(-?\d+)\s*°?C?$', t)
 
     if higher_m: return actual >= int(higher_m.group(1))
