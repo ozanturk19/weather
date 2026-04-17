@@ -299,8 +299,9 @@ def scan_date(station: str, target_date: str, trades: list,
 
 # ── Scan: Fırsat Tara (D+1 ve D+2) ─────────────────────────────────────────
 def scan():
-    trades = load_trades()
-    today  = datetime.now()
+    trades    = load_trades()
+    today     = datetime.now()
+    live_mode = "--live" in sys.argv   # python scanner.py scan --live
 
     scan_targets = [
         (today + timedelta(days=1)).strftime("%Y-%m-%d"),   # D+1
@@ -310,8 +311,9 @@ def scan():
     # Geçmiş veriden istasyon biaslarını öğren
     station_biases = compute_station_biases(trades)
 
+    mode_tag = "🔴 LIVE + PAPER" if live_mode else "📄 PAPER"
     print(f"\n{'='*62}")
-    print(f"  🔍 PAPER TRADING TARAMASI — D+1 & D+2")
+    print(f"  🔍 TARAMA — D+1 & D+2  [{mode_tag}]")
     print(f"  {today.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'='*62}")
 
@@ -329,23 +331,62 @@ def scan():
     else:
         print(f"\n  📐 Yeterli kapalı trade yok — bias düzeltme yok")
 
+    # Live mod için trader modülünü yükle
+    if live_mode:
+        try:
+            import importlib.util, pathlib
+            spec   = importlib.util.spec_from_file_location(
+                "trader",
+                pathlib.Path(__file__).parent / "trader.py"
+            )
+            trader = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(trader)
+            print(f"  💼 Trader modülü yüklendi (LIVE_SHARES={trader.LIVE_SHARES})")
+        except Exception as e:
+            print(f"  ❌ Trader modülü yüklenemedi: {e}")
+            live_mode = False
+
     total_new = 0
+    live_total = 0
     for i, target_date in enumerate(scan_targets, start=1):
         print(f"\n  ── D+{i} ({target_date}) {'─'*38}")
-        day_new = 0
+        day_new  = 0
+        day_live = 0
         for station in STATIONS:
             trade = scan_date(station, target_date, trades, station_biases)
             if trade:
                 trades.append(trade)
-                day_new += 1
+                day_new  += 1
                 total_new += 1
-        print(f"  → D+{i}: {day_new} yeni trade")
+
+                # Live mode: aynı sinyali CLOB'a gönder
+                if live_mode:
+                    try:
+                        result = trader.place_limit_order(
+                            condition_id = trade["condition_id"],
+                            price        = trade["entry_price"],
+                            station      = trade["station"],
+                            date         = trade["date"],
+                            top_pick     = trade["top_pick"],
+                            bucket_title = trade["bucket_title"],
+                            paper_id     = trade["id"],
+                        )
+                        if result:
+                            day_live  += 1
+                            live_total += 1
+                    except Exception as e:
+                        print(f"  ⚠️  Live order hatası ({station}): {e}")
+
+        live_str = f"  |  🔴 {day_live} live emir" if live_mode else ""
+        print(f"  → D+{i}: {day_new} yeni paper{live_str}")
 
     save_trades(trades)
 
     open_count = len([t for t in trades if t["status"] == "open"])
-    print(f"\n  📝 Toplam {total_new} yeni trade kaydedildi")
-    print(f"  📂 Toplam açık pozisyon: {open_count}")
+    print(f"\n  📝 Toplam {total_new} yeni paper trade kaydedildi")
+    if live_mode:
+        print(f"  🔴 Toplam {live_total} live emir gönderildi")
+    print(f"  📂 Toplam açık paper pozisyon: {open_count}")
     print()
 
 # ── Settle: Dünkü Pozisyonları Kapat ───────────────────────────────────────

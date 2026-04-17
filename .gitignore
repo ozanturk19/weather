@@ -23,3 +23,6 @@ predictions.json
 .vscode/
 .idea/
 bot/paper_trades.json
+bot/live_trades.json
+bot/scanner.log
+bot/trader.log
