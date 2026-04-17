@@ -58,6 +58,13 @@ if [[ -n "$DIRTY" || -n "$STAGED" ]]; then
   fi
 fi
 
+# ─── Push Edilmemiş Commit Kontrolü ──────────────────────────────────────
+AHEAD=$(git rev-list "@{u}..HEAD" --count 2>/dev/null || echo 0)
+if [[ "$AHEAD" -gt 0 ]]; then
+  die "Push edilmemiş $AHEAD commit var — GitHub ile senkron değil. Deploy iptal.
+  → git push origin main, sonra tekrar çalıştır."
+fi
+
 # ─── Git Pull ─────────────────────────────────────────────────────────────
 log "git pull origin main..."
 PULL_OUT=$(git pull origin main 2>&1)
