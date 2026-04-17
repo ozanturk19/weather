@@ -39,10 +39,11 @@ WEATHER_API     = "http://localhost:8001"
 
 # ── Risk Parametreleri ──────────────────────────────────────────────────────
 LIVE_SHARES          = 5      # her trade'de alınan share adedi
-MAX_OPEN_LIVE_TRADES = 20     # aynı anda max açık pozisyon
-MAX_DAILY_SPEND_USDC = 30.0   # günlük max yeni emir tutarı (USDC)
-MIN_USDC_RESERVE     = 10.0   # bu altına inerse yeni emir açılmaz
-ORDER_EXPIRY_HOURS   = 12     # bu kadar saat dolmazsa stale sayılır
+MAX_OPEN_LIVE_TRADES  = 30     # aynı anda max açık pozisyon
+MAX_DAILY_SPEND_USDC  = 60.0  # günlük max yeni emir tutarı (USDC) — 10 st × 2 gün × ~$1.3 ≈ $26/scan
+MIN_USDC_RESERVE      = 10.0  # bu altına inerse yeni emir açılmaz
+ORDER_EXPIRY_D1_HOURS = 5     # D+1: yarın settle → bugün dolması şart, agresif
+ORDER_EXPIRY_D2_HOURS = 20    # D+2: 2 gün var, sonraki scan yeniden dener
 MIN_PRICE            = 0.05   # çok ucuz → şüpheli
 MAX_PRICE            = 0.40   # pahalı → edge yok
 
@@ -255,7 +256,12 @@ def place_limit_order(
         return None
 
     # ── live_trades.json'a kaydet ────────────────────────────────────────────
-    now        = datetime.now()
+    now = datetime.now()
+
+    # D+1 (yarın settle) → 5h, D+2 → 20h (sonraki scan yeniden dener)
+    tomorrow = (now + timedelta(days=1)).strftime("%Y-%m-%d")
+    expiry_h = ORDER_EXPIRY_D1_HOURS if date == tomorrow else ORDER_EXPIRY_D2_HOURS
+
     trade_rec  = {
         "id":           f"{station}_{date}_{now.strftime('%H%M%S')}_live",
         "paper_id":     paper_id,
@@ -271,7 +277,8 @@ def place_limit_order(
         "fill_price":   None,
         "fill_time":    None,
         "placed_at":    now.isoformat(),
-        "expires_at":   (now + timedelta(hours=ORDER_EXPIRY_HOURS)).isoformat(),
+        "expires_at":   (now + timedelta(hours=expiry_h)).isoformat(),
+        "horizon":      "D+1" if date == tomorrow else "D+2",
         "status":       "pending_fill",
         "result":       None,
         "pnl_usdc":     None,
@@ -349,13 +356,17 @@ def check_fills() -> int:
 # ── Stale Order İptali ──────────────────────────────────────────────────────
 def cancel_stale_orders() -> int:
     """
-    ORDER_EXPIRY_HOURS saatten fazladır dolmayan order'ları iptal et.
+    expires_at geçmiş order'ları iptal et.
+    D+1 stale → aynı fiyata yeniden gir (agresif fill için)
+    D+2 stale → sadece iptal et, sonraki scan yeniden açar
     """
     trades  = load_live_trades()
     pending = [t for t in trades if t["status"] == "pending_fill"]
     client  = setup_client()
     now     = datetime.now()
+    tomorrow  = (now + timedelta(days=1)).strftime("%Y-%m-%d")
     cancelled = 0
+    requeued  = 0
 
     for t in pending:
         try:
@@ -366,22 +377,44 @@ def cancel_stale_orders() -> int:
         if now < expires:
             continue   # henüz süresi dolmadı
 
-        label = STATION_LABELS.get(t["station"], t["station"].upper())
+        label   = STATION_LABELS.get(t["station"], t["station"].upper())
+        horizon = t.get("horizon", "D+2")
+
         try:
             client.cancel(t["order_id"])
             t["status"] = "cancelled"
-            t["notes"]  = f"Stale — {ORDER_EXPIRY_HOURS}h dolmadı"
-            cancelled += 1
-            print(
-                f"  🗑️  CANCEL  {t['station'].upper()} {label}  "
-                f"🎯{t['top_pick']}°C  ({ORDER_EXPIRY_HOURS}h içinde dolmadı)"
-            )
+            t["notes"]  = f"Stale ({horizon})"
+            cancelled  += 1
+            print(f"  🗑️  CANCEL [{horizon}]  {t['station'].upper()} {label}  🎯{t['top_pick']}°C")
         except Exception as e:
             print(f"  ⚠️  İptal başarısız {t['order_id'][:16]}: {e}")
+            continue
+
+        # D+1 stale: aynı fiyatla yeniden gir (market hâlâ açık, fill şansı var)
+        if horizon == "D+1" and t["date"] == tomorrow:
+            try:
+                new_result = place_limit_order(
+                    condition_id = t["condition_id"],
+                    price        = t["limit_price"],   # aynı fiyat
+                    station      = t["station"],
+                    date         = t["date"],
+                    top_pick     = t["top_pick"],
+                    bucket_title = t["bucket_title"],
+                    paper_id     = t["paper_id"],
+                )
+                if new_result:
+                    requeued += 1
+                    print(f"  🔄 YENİDEN GİRİLDİ  {t['station'].upper()} {label}")
+            except Exception as e:
+                print(f"  ⚠️  Yeniden giriş başarısız: {e}")
 
     save_live_trades(trades)
+
+    summary = f"{cancelled} stale order iptal edildi"
+    if requeued:
+        summary += f", {requeued} D+1 yeniden girildi"
     if cancelled:
-        print(f"\n  🗑️  {cancelled} stale order iptal edildi")
+        print(f"\n  🗑️  {summary}")
     else:
         print("  ✅ Stale order yok")
     return cancelled
