@@ -1,29 +1,29 @@
 # Weather Dashboard — VPS Geliştirme Ortamı
 
-## Git Kuralları
-- **Git push için daima `Bash` aracını kullan** — MCP GitHub tool kullanma
-- Varsayılan branch: `main`
-- Remote: `https://github.com/ozanturk19/weather.git`
-- Push öncesi remote URL'yi HTTPS+PAT ile ayarla:
-  `git remote set-url origin https://GITHUB_PAT@github.com/ozanturk19/weather.git`
-- PAT yoksa kullanıcıdan iste
+## Deployment Kuralı (KRİTİK)
+VPS'te doğrudan dosya değiştirme. Tüm değişiklikler git üzerinden:
+1. Lokal Mac'te düzenle → commit → push
+2. VPS'te: cd /root/weather && ./deploy.sh
 
-## Proje
-- Yerel dizin: `/Users/mac/Projects Weather`
-- VPS dizin: `/root/weather` (git pull ile güncellenir)
-- FastAPI backend: `main.py` (port 8001)
-- Frontend: `static/index.html`
-- Bias verisi: `predictions.json` (gitignored, kaydetme)
-- Servis: `systemctl status weather` (VPS'te)
+Deploy script (./deploy.sh) iki şeyi engeller:
+- Uncommitted değişiklik varsa → abort
+- Push edilmemiş commit varsa → abort
 
-## İstasyonlar
-- EGLC — Londra City
-- LTAC — Ankara Esenboğa  
-- LIMC — Milano Malpensa
-- LTFM — İstanbul Havalimanı (NOAA settlement)
+Test: python3 tests/test_weather_bot.py
 
-## Deployment
-```bash
-git add -A && git commit -m "..." && git push origin main
-systemctl restart weather  # gerekirse
-```
+## Git
+- Remote: git@github.com:ozanturk19/weather.git (SSH)
+- Branch: main
+
+## Dosyalar
+- FastAPI backend: main.py (port 8001, uvicorn)
+- Frontend: static/index.html
+- Live trades: bot/live_trades.json
+- Paper trades: bot/paper_trades.json
+- Env: /root/weather/.env (PK, API_TOKEN, gitignored)
+
+## Cron
+- 04,10,16,22: scanner scan --live
+- 11:00: scanner settle | 11:05: trader settle | 11:15: trader redeem
+- her 30dk: trader check-fills
+- 04,08,12,16,20: trader cancel-stale
