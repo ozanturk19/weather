@@ -124,13 +124,18 @@ def wallet_address_from_pk(pk: str) -> str:
 
 # ── USDC Bakiyesi ───────────────────────────────────────────────────────────
 def get_balance() -> float:
-    """USDC.e on-chain cüzdan bakiyesini döner (Polygon, 6 decimal)."""
+    """USDC.e on-chain cüzdan bakiyesini döner (Polygon, 6 decimal).
+    Tüm RPC'ler başarısız olursa CLOB API balance_allowance fallback kullanır.
+    """
     import urllib.request as _ur, json as _json
     USDC_E = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
     RPCS = [
+        "https://polygon-rpc.com",
         "https://polygon.drpc.org",
         "https://polygon.llamarpc.com",
         "https://rpc-mainnet.matic.quiknode.pro",
+        "https://endpoints.omniatech.io/v1/matic/mainnet/public",
+        "https://polygon-bor-rpc.publicnode.com",
     ]
     try:
         wallet = wallet_address_from_pk(PK)
@@ -144,13 +149,30 @@ def get_balance() -> float:
             try:
                 req = _ur.Request(rpc, data=payload,
                                   headers={"Content-Type": "application/json"}, method="POST")
-                with _ur.urlopen(req, timeout=8) as r:
+                with _ur.urlopen(req, timeout=12) as r:
                     result = _json.loads(r.read()).get("result", "0x0")
-                return int(result, 16) / 1_000_000
-            except Exception:
+                bal = int(result, 16) / 1_000_000
+                if bal > 0:
+                    return bal
+                # 0x0 dönüyorsa sonraki RPC'yi dene
+            except Exception as rpc_err:
+                print(f"  ⚠️  RPC {rpc[:40]} başarısız: {rpc_err}")
                 continue
     except Exception as e:
-        print(f"❌ Bakiye alınamadı: {e}")
+        print(f"❌ Bakiye alınamadı (RPC): {e}")
+
+    # ── Fallback: CLOB API balance_allowance ───────────────────────────────
+    try:
+        print("  ℹ️  RPC fallback: CLOB balance_allowance kullanılıyor...")
+        client = setup_client()
+        resp = client.get_balance_allowance(params={"asset_type": "USDC"})
+        bal = float(resp.get("balance", 0)) / 1_000_000
+        if bal > 0:
+            print(f"  ℹ️  CLOB bakiye: ${bal:.4f}")
+            return bal
+    except Exception as e2:
+        print(f"❌ CLOB balance_allowance da başarısız: {e2}")
+
     return 0.0
 
 # ── Günlük Harcama Kontrolü ─────────────────────────────────────────────────
