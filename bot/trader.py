@@ -124,18 +124,34 @@ def wallet_address_from_pk(pk: str) -> str:
 
 # ── USDC Bakiyesi ───────────────────────────────────────────────────────────
 def get_balance() -> float:
-    """USDC on Polygon bakiyesini döner (6 decimal)."""
-    from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
-    from py_clob_client.constants import L1
-    client = setup_client()
+    """USDC.e on-chain cüzdan bakiyesini döner (Polygon, 6 decimal)."""
+    import urllib.request as _ur, json as _json
+    USDC_E = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
+    RPCS = [
+        "https://polygon.drpc.org",
+        "https://polygon.llamarpc.com",
+        "https://rpc-mainnet.matic.quiknode.pro",
+    ]
     try:
-        resp = client.get_balance_allowance(
-            BalanceAllowanceParams(asset_type=AssetType.COLLATERAL, signature_type=L1)
-        )
-        return float(resp.get("balance", 0)) / 1_000_000
+        wallet = wallet_address_from_pk(PK)
+        padded = wallet[2:].lower().zfill(64)
+        payload = _json.dumps({
+            "jsonrpc": "2.0", "method": "eth_call",
+            "params": [{"to": USDC_E, "data": "0x70a08231" + padded}, "latest"],
+            "id": 1
+        }).encode()
+        for rpc in RPCS:
+            try:
+                req = _ur.Request(rpc, data=payload,
+                                  headers={"Content-Type": "application/json"}, method="POST")
+                with _ur.urlopen(req, timeout=8) as r:
+                    result = _json.loads(r.read()).get("result", "0x0")
+                return int(result, 16) / 1_000_000
+            except Exception:
+                continue
     except Exception as e:
         print(f"❌ Bakiye alınamadı: {e}")
-        return 0.0
+    return 0.0
 
 # ── Günlük Harcama Kontrolü ─────────────────────────────────────────────────
 def today_spend() -> float:
