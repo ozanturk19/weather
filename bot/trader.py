@@ -335,9 +335,23 @@ def check_fills() -> int:
     client  = setup_client()
     updated = 0
 
+    # get_order(single_id) 401 döndürebiliyor — get_orders() listesini kullan
+    try:
+        open_orders = client.get_orders()
+        open_map = {o.get("id") or o.get("order_id"): o for o in (open_orders or [])}
+    except Exception as e:
+        print(f"  ⚠️  CLOB order listesi alınamadı: {e}")
+        open_map = {}
+
     for t in pending:
         try:
-            resp   = client.get_order(t["order_id"])
+            resp = open_map.get(t["order_id"])
+            if resp is None:
+                # CLOB'da yoksa → fill veya cancel olmuş, individual sorgu dene
+                try:
+                    resp = client.get_order(t["order_id"])
+                except Exception:
+                    resp = {}
             status = (resp.get("status") or "").upper()
             matched = float(resp.get("size_matched") or 0)
             size    = float(resp.get("original_size") or t["shares"])

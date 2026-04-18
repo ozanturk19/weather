@@ -363,6 +363,13 @@ def scan():
         for station in STATIONS:
             trade = scan_date(station, target_date, trades, station_biases)
             if trade:
+                # Tahmin değişti: aynı station+date'teki eski open paper trade'leri kapat
+                for old in trades:
+                    if (old["station"] == station and old["date"] == target_date
+                            and old["status"] == "open" and old["id"] != trade["id"]):
+                        old["status"] = "superseded"
+                        old["notes"]  = f"Tahmin değişti → {trade['top_pick']}°C"
+
                 trades.append(trade)
                 day_new  += 1
                 total_new += 1
