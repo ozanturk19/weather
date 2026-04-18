@@ -236,7 +236,11 @@ def scan_date(station: str, target_date: str, trades: list,
             return None
 
         price   = bucket.get("yes_price", 0)
-        cond_id = bucket.get("condition_id", "")
+        cond_id_raw = bucket.get("condition_id", "")
+        if isinstance(cond_id_raw, str) and cond_id_raw.startswith("0x"):
+            cond_id = str(int(cond_id_raw, 16))
+        else:
+            cond_id = str(cond_id_raw)
         liq     = pm.get("liquidity", 0)
 
     except Exception as e:
