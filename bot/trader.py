@@ -479,10 +479,9 @@ def settle_live():
     """
     trades    = load_live_trades()
     today     = datetime.now().strftime("%Y-%m-%d")
-    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     to_settle = [
         t for t in trades
-        if t["date"] < today and t["status"] == "filled"
+        if t["date"] <= today and t["status"] == "filled"
     ]
 
     dates_str = ", ".join(sorted({t["date"] for t in to_settle})) if to_settle else yesterday
@@ -507,7 +506,7 @@ def settle_live():
             history    = r.json()
             daily      = history.get("daily_maxes", [])
             day_record = next(
-                (d for d in daily if d["date"] == yesterday), None
+                (d for d in daily if d["date"] == trade["date"]), None
             )
 
             if not day_record:
