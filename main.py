@@ -804,45 +804,46 @@ async def bot_settle(x_api_token: str = Header(default="")):
 # ── Live Trading API Endpoints ───────────────────────────────────────────────
 
 LIVE_TRADES_FILE = Path("bot/live_trades.json")
-CLOSED_STATUSES  = ("won", "lost", "settled_win", "settled_loss", "expired", "cancelled")
+CLOSED_LIVE_STATUSES = ("won", "lost", "settled_win", "settled_loss", "expired", "cancelled")
 
 def _load_live_trades() -> list:
-    if LIVE_TRADES_FILE.exists():
-        try:
+    try:
+        if LIVE_TRADES_FILE.exists():
             return json.loads(LIVE_TRADES_FILE.read_text(encoding="utf-8"))
-        except Exception:
-            return []
+    except Exception:
+        pass
     return []
 
 @app.get("/api/live-trades")
 async def get_live_trades():
+    """Canlı live trade geçmişini döndür."""
     trades  = _load_live_trades()
     pending = [t for t in trades if t.get("status") == "pending_fill"]
     filled  = [t for t in trades if t.get("status") == "filled"]
-    closed  = [t for t in trades if t.get("status") in CLOSED_STATUSES]
+    closed  = [t for t in trades if t.get("status") in CLOSED_LIVE_STATUSES]
     wins    = [t for t in closed if (t.get("result") or "").upper() == "WIN"]
     losses  = [t for t in closed if (t.get("result") or "").upper() == "LOSS"]
-    total   = len(trades)
     open_n  = len(pending) + len(filled)
-    win_rate = round(len(wins) / len(closed) * 100, 1) if closed else None
-    total_pnl = round(sum(t.get("pnl_usdc") or 0 for t in closed), 4)
+    win_rate  = round(len(wins) / len(closed) * 100, 1) if closed else None
+    total_pnl = round(sum(t.get("pnl_usdc") or 0 for t in closed), 2)
     return {
         "trades": trades,
         "stats": {
-            "total":    total,
-            "pending":  len(pending),
-            "filled":   len(filled),
-            "open":     open_n,
-            "closed":   len(closed),
-            "wins":     len(wins),
-            "losses":   len(losses),
-            "win_rate": win_rate,
+            "total":     len(trades),
+            "pending":   len(pending),
+            "filled":    len(filled),
+            "open":      open_n,
+            "closed":    len(closed),
+            "wins":      len(wins),
+            "losses":    len(losses),
+            "win_rate":  win_rate,
             "total_pnl": total_pnl,
         }
     }
 
 @app.get("/api/live-balance")
 async def get_live_balance():
+    """USDC bakiyesini döndür (trader.py balance)."""
     try:
         result = await asyncio.to_thread(
             subprocess.run,
@@ -851,7 +852,10 @@ async def get_live_balance():
             cwd="/root/weather"
         )
         output = result.stdout + result.stderr
+        # "💰 USDC Bakiyesi   : $12.3456"
         m = re.search(r'Bakiyesi\s*:\s*\$([0-9.]+)', output)
+        if not m:
+            m = re.search(r'\$\s*([0-9.]+)\s*USDC', output, re.IGNORECASE)
         balance = float(m.group(1)) if m else None
         return {"balance": balance, "raw": output}
     except Exception as e:
@@ -866,6 +870,36 @@ async def live_scan(x_api_token: str = Header(default="")):
             subprocess.run,
             ["python3", "bot/scanner.py", "scan", "--live"],
             capture_output=True, text=True, timeout=300,
+            cwd="/root/weather"
+        )
+        return {"ok": True, "output": result.stdout + result.stderr}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/live-trades/check-fills")
+async def live_check_fills(x_api_token: str = Header(default="")):
+    """Order dolumlarını kontrol et (trader.py check-fills)."""
+    require_token(x_api_token)
+    try:
+        result = await asyncio.to_thread(
+            subprocess.run,
+            ["python3", "bot/trader.py", "check-fills"],
+            capture_output=True, text=True, timeout=120,
+            cwd="/root/weather"
+        )
+        return {"ok": True, "output": result.stdout + result.stderr}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/live-trades/settle")
+async def live_settle(x_api_token: str = Header(default="")):
+    """Geçmiş pozisyonları settle et (trader.py settle)."""
+    require_token(x_api_token)
+    try:
+        result = await asyncio.to_thread(
+            subprocess.run,
+            ["python3", "bot/trader.py", "settle"],
+            capture_output=True, text=True, timeout=180,
             cwd="/root/weather"
         )
         return {"ok": True, "output": result.stdout + result.stderr}
