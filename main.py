@@ -346,42 +346,89 @@ async def clear_weather_cache(station: str = ""):
 
 @app.get("/api/ensemble")
 async def get_ensemble(station: str):
+    """
+    Çok-model ensemble: ICON (40 üye) + ECMWF IFS (50 üye) = 90 üye.
+    Her iki model de Open-Meteo ensemble API'sinden çekilir, paralel istek.
+    ECMWF başarısız olursa sadece ICON ile devam edilir (graceful fallback).
+    member_maxes: birleştirilmiş tüm üyelerin günlük maksimumları (backward compatible).
+    """
     station = station.lower()
     if station not in STATIONS:
         raise HTTPException(status_code=404, detail="Bilinmeyen istasyon")
 
     s = STATIONS[station]
-    url = (
+
+    # Desteklenen ensemble modelleri (model_adı: open-meteo-id)
+    # ICON ENS:  40 üye — bölgesel yüksek çözünürlük
+    # ECMWF IFS: 50 üye — endüstri standardı, küresel
+    ENSEMBLE_MODELS = {
+        "icon":  "icon_seamless",
+        "ecmwf": "ecmwf_ifs025",
+    }
+
+    base_url = (
         f"https://ensemble-api.open-meteo.com/v1/ensemble"
         f"?latitude={s['lat']}&longitude={s['lon']}"
         f"&hourly=temperature_2m"
-        f"&models=icon_seamless"
         f"&timezone={s['tz']}&forecast_days=3"
     )
 
-    async with httpx.AsyncClient(timeout=20) as client:
-        r = await client.get(url)
+    def parse_ensemble_response(raw: dict) -> dict:
+        """Open-Meteo ensemble yanıtını {date: [daily_maxes]} olarak döndür."""
+        hourly = raw.get("hourly", {})
+        times  = hourly.get("time", [])
+        member_keys = sorted(k for k in hourly if k.startswith("temperature_2m_member"))
+        if not member_keys:
+            return {}
 
-    if not r.is_success:
+        date_member: dict = {}
+        for key in member_keys:
+            vals = hourly[key]
+            for i, t in enumerate(times):
+                d = t[:10]
+                v = vals[i]
+                if v is None:
+                    continue
+                date_member.setdefault(d, {}).setdefault(key, []).append(v)
+
+        result = {}
+        for date, members in date_member.items():
+            maxes = [max(temps) for temps in members.values() if temps]
+            if maxes:
+                result[date] = maxes
+        return result
+
+    async def fetch_model(client: httpx.AsyncClient, model_id: str) -> dict:
+        """Tek model için ensemble verisi çek. Hata durumunda boş dict."""
+        try:
+            r = await client.get(base_url + f"&models={model_id}", timeout=20)
+            if r.is_success:
+                return parse_ensemble_response(r.json())
+        except Exception:
+            pass
+        return {}
+
+    # Paralel fetch — her model bağımsız, biri başarısız olursa diğeri devam eder
+    async with httpx.AsyncClient(timeout=25) as client:
+        results = await asyncio.gather(
+            *[fetch_model(client, model_id) for model_id in ENSEMBLE_MODELS.values()],
+            return_exceptions=True
+        )
+
+    model_names = list(ENSEMBLE_MODELS.keys())
+
+    # Modellerin günlük maxlarını birleştir
+    combined: dict = {}   # {date: {"maxes": [...], "model_counts": {...}}}
+    for model_name, result in zip(model_names, results):
+        if isinstance(result, Exception) or not isinstance(result, dict):
+            continue
+        for date, maxes in result.items():
+            combined.setdefault(date, {"maxes": [], "model_counts": {}})
+            combined[date]["maxes"].extend(maxes)
+            combined[date]["model_counts"][model_name] = len(maxes)
+
+    if not combined:
         raise HTTPException(status_code=502, detail="Ensemble verisi alınamadı")
-
-    hourly = r.json().get("hourly", {})
-    times  = hourly.get("time", [])
-    member_keys = sorted(k for k in hourly if k.startswith("temperature_2m_member"))
-
-    if not member_keys:
-        raise HTTPException(status_code=502, detail="Ensemble üyeleri bulunamadı")
-
-    # Her tarih için her üyenin saatlik templerini topla
-    date_member: dict = {}   # {date: {member_key: [temps]}}
-    for key in member_keys:
-        vals = hourly[key]
-        for i, t in enumerate(times):
-            d = t[:10]
-            v = vals[i]
-            if v is None:
-                continue
-            date_member.setdefault(d, {}).setdefault(key, []).append(v)
 
     def pct(sorted_vals: list, p: float) -> float:
         n   = len(sorted_vals)
@@ -391,20 +438,21 @@ async def get_ensemble(station: str):
         return round(sorted_vals[lo] + (idx - lo) * (sorted_vals[hi] - sorted_vals[lo]), 1)
 
     days = {}
-    for date, members in date_member.items():
-        maxes = sorted(max(temps) for temps in members.values() if temps)
+    for date, data in combined.items():
+        maxes = sorted(data["maxes"])
         if not maxes:
             continue
         n = len(maxes)
         days[date] = {
-            "member_maxes": [round(m, 1) for m in maxes],
-            "count":  n,
-            "mean":   round(sum(maxes) / n, 1),
-            "p10":    pct(maxes, 10),
-            "p25":    pct(maxes, 25),
-            "p50":    pct(maxes, 50),
-            "p75":    pct(maxes, 75),
-            "p90":    pct(maxes, 90),
+            "member_maxes":  [round(m, 1) for m in maxes],   # backward compatible
+            "count":         n,
+            "mean":          round(sum(maxes) / n, 1),
+            "p10":           pct(maxes, 10),
+            "p25":           pct(maxes, 25),
+            "p50":           pct(maxes, 50),
+            "p75":           pct(maxes, 75),
+            "p90":           pct(maxes, 90),
+            "model_counts":  data["model_counts"],    # hangi modelden kaç üye
         }
 
     return {"station": station, "days": days}
