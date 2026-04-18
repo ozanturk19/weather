@@ -543,6 +543,18 @@ async def get_polymarket_markets(station: str, date: str):
         is_below = "below" in tl or "or less" in tl or "at most" in tl or "not more" in tl
         is_above = "above" in tl or "or more" in tl or "at least" in tl or "higher" in tl or "or greater" in tl
 
+        # clobTokenIds is a JSON string: '["YES_TOKEN_ID", "NO_TOKEN_ID"]'
+        # YES token (index 0) is what CLOB uses for OrderArgs / get_order_book
+        clob_raw = m.get("clobTokenIds", "[]")
+        if isinstance(clob_raw, str):
+            try:
+                clob_tokens = json.loads(clob_raw)
+            except Exception:
+                clob_tokens = []
+        else:
+            clob_tokens = clob_raw if isinstance(clob_raw, list) else []
+        yes_token_id = clob_tokens[0] if clob_tokens else m.get("conditionId")
+
         buckets.append({
             "title":     title,
             "threshold": thresh,
@@ -552,7 +564,7 @@ async def get_polymarket_markets(station: str, date: str):
             "no_price":  no_price,
             "liquidity": round(float(m.get("liquidity", 0) or 0)),
             "volume":    round(float(m.get("volume",    0) or 0)),
-            "condition_id": m.get("conditionId"),
+            "condition_id": yes_token_id,  # YES token_id for CLOB order placement
         })
 
     # Eşiğe göre sırala
