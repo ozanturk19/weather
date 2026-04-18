@@ -212,15 +212,42 @@ def place_limit_order(
         print(f"  ⛔ Günlük limit ({MAX_DAILY_SPEND_USDC} USDC) aşılıyor — emir açılmadı")
         return None
 
-    # Aynı station+date+top_pick için live pozisyon zaten var mı?
-    already = any(
+    # Aynı station+date için fill'lenmiş pozisyon var mı? → blokla
+    already_filled = any(
         t["station"] == station and t["date"] == date
-        and t["top_pick"] == top_pick and t["status"] == "pending_fill"
+        and t["status"] in ("filled", "settled_win", "settled_loss")
         for t in live_trades
     )
-    if already:
-        print(f"  ⬜ {station.upper()} {label} {date} {top_pick}°C — live pozisyon zaten açık")
+    if already_filled:
+        print(f"  ⬜ {station.upper()} {label} {date} — zaten fill'lenmiş pozisyon var, atlanıyor")
         return None
+
+    # Aynı station+date için pending emir var mı?
+    # Farklı top_pick → model görüşünü güncelledi: eskiyi iptal et, yeniye gir
+    stale_pending = [
+        t for t in live_trades
+        if t["station"] == station and t["date"] == date
+        and t["status"] == "pending_fill"
+    ]
+    if stale_pending:
+        if stale_pending[0]["top_pick"] == top_pick:
+            print(f"  ⬜ {station.upper()} {label} {date} {top_pick}°C — aynı emir zaten açık")
+            return None
+        # Farklı top_pick: eski pending'i iptal et
+        client_tmp = setup_client()
+        for old in stale_pending:
+            try:
+                client_tmp.cancel(old["order_id"])
+                old["status"] = "cancelled"
+                old["notes"]  = f"Model güncellendi → {top_pick}°C"
+                print(
+                    f"  🔄 GÜNCELLEME  {station.upper()} {label}  "
+                    f"{old['top_pick']}°C → {top_pick}°C  eski emir iptal edildi"
+                )
+            except Exception as e:
+                print(f"  ⚠️  Eski emir iptal edilemedi: {e}")
+        save_live_trades(live_trades)
+        live_trades = load_live_trades()   # güncel listeyi yeniden yükle
 
     if price < MIN_PRICE or price > MAX_PRICE:
         print(f"  ⬜ {station.upper()} {label} — fiyat aralık dışı ({price:.2f})")
