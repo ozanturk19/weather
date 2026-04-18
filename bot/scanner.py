@@ -12,6 +12,7 @@ Kullanım:
 
 import httpx
 import json
+import math
 import re
 import sys
 from collections import Counter
@@ -43,6 +44,19 @@ SKIP_UNCERTAINTY = {"yüksek", "high", "very high"}  # bu seviyelerde hiç pozis
 MIN_BIAS_TRADES  = 8   # bias hesabı için minimum kapalı trade (4'ten artırıldı)
                        # Az veriyle yanlış bias uygulanmasını önler (Paris +3°C vakası)
 MAX_BIAS_CORRECTION = 2  # bias tavanı: en fazla ±2°C düzeltme uygulanır
+
+# Ensemble kalite filtreleri
+MIN_MODE_PCT = 30    # ensemble üyelerinin en az %30'u aynı bucket'ta hemfikir olmalı
+                     # ICON 40 üye → min 12 üye aynı bucket'ta demek
+MIN_EDGE     = 0.05  # ensemble olasılığı (mode_pct) - market fiyatı en az 5 puan fazla olmalı
+                     # Örn: %35 ensemble → 28¢ market → edge +7% → gir ✓
+                     #      %30 ensemble → 28¢ market → edge +2% → geçersiz ✗
+
+# İstasyon bazlı fiyat tavanı (sistematik sorunlu istasyonlar)
+STATION_MAX_PRICE: dict[str, float] = {
+    "lfpg": 0.18,   # Paris: %10 win rate, settlement kaynak uyumsuzluğu (+1.9°C artık hata)
+                    # 18¢ altında EV hâlâ pozitif olabilir, üstü riskli
+}
 
 # ── Trade Depolama ──────────────────────────────────────────────────────────
 def load_trades() -> list:
@@ -81,7 +95,7 @@ def compute_station_biases(trades: list) -> dict:
     for station, deltas in errors.items():
         if len(deltas) >= MIN_BIAS_TRADES:
             avg  = sum(deltas) / len(deltas)
-            bias = round(avg)
+            bias = math.floor(avg + 0.5)   # Python banker's rounding'i atla (round(0.5)=0 problemi)
             # Güvenlik tavanı: çok agresif bias düzeltmesini önle
             # (Örn: Paris 6 trade ile +3°C hesapladı ama bu aşırıydı)
             bias = max(-MAX_BIAS_CORRECTION, min(MAX_BIAS_CORRECTION, bias))
@@ -175,6 +189,21 @@ def scan_date(station: str, target_date: str, trades: list,
             second_pick = None
             second_pct  = None
 
+        # ── Ensemble varlık kontrolü ────────────────────────────────────────
+        # Ensemble verisi olmadan top_pick güvenilirliği düşük → pas
+        if not members:
+            print(f"  ⛔ {station.upper()} {label}  — ensemble verisi alınamadı, pas")
+            return None
+
+        # ── Ensemble konsensüs filtresi ─────────────────────────────────────
+        # Düşük mode_pct = ensemble dağınık, bucket seçimi güvenilmez
+        if mode_pct is not None and mode_pct < MIN_MODE_PCT:
+            print(
+                f"  ⛔ {station.upper()} {label}  🎯{top_pick}°C"
+                f" — konsensüs zayıf (%{mode_pct} < %{MIN_MODE_PCT}), pas"
+            )
+            return None
+
         # ── Uncertainty filtresi ────────────────────────────────────────────
         # "Yüksek" belirsizlikte tahmin çok zayıf → geçmiş: %0 win rate
         if isinstance(unc, str) and unc.lower() in SKIP_UNCERTAINTY:
@@ -254,9 +283,23 @@ def scan_date(station: str, target_date: str, trades: list,
         print(f"  ⬜ {station.upper()} {label}  🎯{top_pick}°C @ {pct}¢ — çok ucuz, şüpheli")
         return None
 
-    if price >= MAX_PRICE:
-        print(f"  ⬜ {station.upper()} {label}  🎯{top_pick}°C @ {pct}¢ — pahalı, pas")
+    # İstasyon bazlı fiyat tavanı (Paris gibi sistematik sorunlu istasyonlar)
+    station_max = STATION_MAX_PRICE.get(station, MAX_PRICE)
+    if price >= station_max:
+        note = f"(Paris tavana kısıtlı: {station_max:.0%})" if station in STATION_MAX_PRICE else "pahalı"
+        print(f"  ⬜ {station.upper()} {label}  🎯{top_pick}°C @ {pct}¢ — {note}, pas")
         return None
+
+    # EV filtresi: ensemble konsensüs olasılığı vs. piyasa fiyatı
+    # Yalnızca mode_pct > market fiyatından en az MIN_EDGE puan fazlaysa gir
+    if mode_pct is not None:
+        edge = (mode_pct / 100) - price
+        if edge < MIN_EDGE:
+            print(
+                f"  ⛔ {station.upper()} {label}  🎯{top_pick}°C @ {pct}¢"
+                f" — edge yetersiz (ens%{mode_pct} - mkt{pct}¢ = {edge:+.0%} < %{MIN_EDGE*100:.0f}), pas"
+            )
+            return None
 
     cost          = round(SHARES * price, 2)
     potential_win = round(SHARES - cost, 2)
@@ -297,10 +340,11 @@ def scan_date(station: str, target_date: str, trades: list,
         "settled_at":    None,
     }
 
+    edge_str = f" · edge{((mode_pct/100)-price):+.0%}" if mode_pct is not None else ""
     print(
         f"  ✅ {station.upper()} {label}  "
         f"🎯{top_pick}°C (blend={blend:.1f}){mode_tag}{second_tag} @ {pct}¢ {cheap_tag}  "
-        f"{SHARES} share · risk=${cost:.2f} · pot +${potential_win:.2f}"
+        f"{SHARES} share · risk=${cost:.2f} · pot +${potential_win:.2f}{edge_str}"
     )
     return trade
 
