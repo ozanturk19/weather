@@ -106,24 +106,27 @@ if [[ -f "$WEATHER_DIR/tests/test_weather_bot.py" ]]; then
 fi
 
 # ─── Weather FastAPI Yeniden Başlat ───────────────────────────────────────
+# systemctl kullanıyoruz — nohup orphan process bırakıyordu (port çakışması)
 if [[ "$CHANGED_WEATHER" == "1" ]]; then
   log "Weather FastAPI yeniden başlatılıyor..."
-  UVICORN_PID=$(pgrep -f "uvicorn main:app.*8001" || true)
-  if [[ -n "$UVICORN_PID" ]]; then
-    kill "$UVICORN_PID"
+
+  # Önce port 8001'deki her orphan process'i temizle (eski nohup kalıntıları)
+  ORPHAN=$(fuser 8001/tcp 2>/dev/null | tr -d ' ')
+  if [[ -n "$ORPHAN" ]]; then
+    kill "$ORPHAN" 2>/dev/null || true
     sleep 1
   fi
-  cd "$WEATHER_DIR"
-  nohup venv/bin/uvicorn main:app --host 0.0.0.0 --port 8001 \
-    >> /root/weather/uvicorn.log 2>&1 &
-  NEW_PID=$!
-  sleep 2
+
+  # systemd ile yönet — tek otorite systemd olsun
+  systemctl restart weather
+  sleep 3
 
   # Health check
+  WEATHER_PID=$(systemctl show weather -p MainPID --value)
   if curl -sf http://localhost:8001/api/live-trades > /dev/null 2>&1; then
-    log "✅ Weather API sağlıklı (PID=$NEW_PID)"
+    log "✅ Weather API sağlıklı (PID=$WEATHER_PID)"
   else
-    die "Weather API yanıt vermiyor! Log: tail /root/weather/uvicorn.log"
+    die "Weather API yanıt vermiyor! Log: journalctl -u weather -n 20"
   fi
 fi
 
