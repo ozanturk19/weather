@@ -720,15 +720,98 @@ def cmd_approve_usdc():
         sys.exit(1)
 
 # ── Auto Redeem Kazanan Token'lar ───────────────────────────────────────────
+
+POLYGON_RPCS = [
+    "https://polygon-bor-rpc.publicnode.com",
+    "https://rpc.ankr.com/polygon",
+    "https://1rpc.io/matic",
+]
+CTF_CONTRACT  = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"
+USDC_CONTRACT = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
+CTF_ABI = [
+    {
+        "inputs": [
+            {"name": "collateralToken", "type": "address"},
+            {"name": "parentCollectionId", "type": "bytes32"},
+            {"name": "conditionId", "type": "bytes32"},
+            {"name": "indexSets", "type": "uint256[]"}
+        ],
+        "name": "redeemPositions",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    {
+        "inputs": [{"name": "conditionId", "type": "bytes32"}],
+        "name": "payoutDenominator",
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function"
+    }
+]
+
+
+def _get_w3():
+    """Polygon RPC bağlantısı kur."""
+    from web3 import Web3
+    for rpc in POLYGON_RPCS:
+        try:
+            w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 10}))
+            if w3.is_connected():
+                return w3
+        except Exception:
+            pass
+    raise RuntimeError("Polygon RPC bağlantısı kurulamadı")
+
+
+def _redeem_ctf(w3, wallet: str, pk: str, cond_id_hex: str) -> str:
+    """
+    CTF kontratını kullanarak pozisyonu on-chain redeem et.
+    Başarılı olursa TX hash döner, hata durumunda exception fırlatır.
+    """
+    cond_bytes = bytes.fromhex(cond_id_hex[2:] if cond_id_hex.startswith("0x") else cond_id_hex)
+    ctf = w3.eth.contract(address=CTF_CONTRACT, abi=CTF_ABI)
+
+    # Önce on-chain raporlama yapılmış mı kontrol et
+    denom = ctf.functions.payoutDenominator(cond_bytes).call()
+    if denom == 0:
+        raise ValueError("condition on-chain raporlanmamış (payout denom=0)")
+
+    gas_price = int(w3.eth.gas_price * 1.4)  # %40 üstü
+    nonce = w3.eth.get_transaction_count(wallet, "latest")
+
+    tx = ctf.functions.redeemPositions(
+        USDC_CONTRACT,
+        b"\x00" * 32,   # parentCollectionId = bytes32(0)
+        cond_bytes,
+        [1]             # YES token indexSet
+    ).build_transaction({
+        "from": wallet,
+        "nonce": nonce,
+        "gas": 150000,
+        "gasPrice": gas_price,
+        "chainId": 137,
+    })
+
+    from eth_account import Account
+    signed = Account.sign_transaction(tx, pk)
+    tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+    return tx_hash.hex()
+
+
 def cmd_redeem():
     """
     settled_win durumundaki trade'lerin Polymarket token'larını on-chain redeem et.
-    Polymarket positions API'den token varlığını kontrol eder; varsa CLOB
-    üzerinden redeem eder (py-clob-client destekliyorsa), yoksa zaten ödendi kabul eder.
+
+    Düzeltilen mantık:
+    - condition_id (asset/token_id decimal) → positions API'deki 'asset' alanıyla eşleştir
+    - 'redeemable: true' olan pozisyonlar için CTF kontratı üzerinden web3 redemption yap
+    - 'payoutDenominator > 0' kontrol ederek zamanından önce deneme yapma
+    - Başarılı redemption sonrası redeemed=True ve redeemed_at=now() yaz
     """
-    trades     = load_live_trades()
-    to_redeem  = [t for t in trades if t.get("status") == "settled_win"
-                  and not t.get("redeemed")]
+    trades    = load_live_trades()
+    to_redeem = [t for t in trades if t.get("status") == "settled_win"
+                 and not t.get("redeemed")]
 
     if not to_redeem:
         print("  ✅ Redeem edilecek kazanç yok.\n")
@@ -736,54 +819,86 @@ def cmd_redeem():
 
     print(f"\n  💰 {len(to_redeem)} kazanan trade redeem edilecek...")
 
-    # Pozisyonları çek: token_id → currentValue
+    # Pozisyonları çek: asset (decimal token_id) → position_data
+    wallet = wallet_address_from_pk(PK)
     try:
-        wallet = wallet_address_from_pk(PK)
         r = httpx.get(
             f"https://data-api.polymarket.com/positions?user={wallet}&sizeThreshold=0.001",
             timeout=12
         )
-        positions = {p["conditionId"]: p for p in r.json()} if r.is_success else {}
+        positions_by_asset = {str(p["asset"]): p for p in r.json()} if r.is_success else {}
     except Exception as e:
         print(f"  ⚠️  Positions API hatası: {e}")
-        positions = {}
+        positions_by_asset = {}
 
-    client  = setup_client()
+    # web3 bağlantısı
+    try:
+        w3 = _get_w3()
+    except Exception as e:
+        print(f"  ❌ Web3 bağlantı hatası: {e}")
+        return
+
     updated = 0
 
     for t in to_redeem:
-        cond_id = t.get("condition_id", "")
-        pos     = positions.get(cond_id)
+        token_id = str(t.get("condition_id", ""))
+        label    = f"{t.get('station','?').upper()} {t.get('date','?')}"
+        pos      = positions_by_asset.get(token_id)
 
         if pos is None:
-            # Positions'ta yok → zaten ödendi veya çok küçük
-            val = float(pos.get("currentValue", 0)) if pos else 0
-            print(f"  ℹ️  {t['station'].upper()} {t['date']} — positions'ta yok (val={val:.3f}), redeemed=1")
+            # Positions API'de yok → token transfer edilmiş veya çok küçük
+            print(f"  ℹ️  {label} — positions'ta bulunamadı, muhtemelen zaten ödendi")
             t["redeemed"] = True
+            t["redeemed_at"] = datetime.utcnow().isoformat()
             updated += 1
             continue
 
         current_val = float(pos.get("currentValue", 0))
+        redeemable  = pos.get("redeemable", False)
+        cond_id_hex = pos.get("conditionId", "")
+
         if current_val < 0.01:
-            print(f"  ✅ {t['station'].upper()} {t['date']} — value={current_val:.3f} ≈ 0, zaten ödendi")
+            print(f"  ✅ {label} — value={current_val:.3f} ≈ 0, zaten ödendi")
             t["redeemed"] = True
+            t["redeemed_at"] = datetime.utcnow().isoformat()
             updated += 1
             continue
 
-        # CLOB üzerinden redeem (py-clob-client destekliyorsa)
+        if not redeemable:
+            print(f"  ⏳ {label} — redeemable=False, piyasa henüz çözümlenmedi (${current_val:.2f})")
+            continue
+
+        # On-chain redemption
         try:
-            resp = client.redeem_positions(cond_id)
-            print(f"  💰 {t['station'].upper()} {t['date']} — REDEEM OK: {resp}")
-            t["redeemed"] = True
-            updated += 1
-        except AttributeError:
-            # py-clob-client'ın bu sürümünde redeem_positions yok
-            # Manuel kontrol gerekiyor — sadece flag'le
-            print(f"  ⚠️  {t['station'].upper()} {t['date']} — redeem_positions desteklenmiyor, manuel kontrol et")
-            print(f"       conditionId: {cond_id}")
-            print(f"       Şu anki değer: ${current_val:.3f}")
+            tx_hash = _redeem_ctf(w3, wallet, PK, cond_id_hex)
+            print(f"  🔗 {label} — TX gönderildi: {tx_hash[:20]}... ${current_val:.2f}")
+
+            # 20 sn bekle, onay kontrol et
+            time.sleep(20)
+            try:
+                receipt = w3.eth.get_transaction_receipt(tx_hash)
+                if receipt and receipt.status == 1:
+                    print(f"  ✅ {label} — REDEEM ONAYLANDI ${current_val:.2f}")
+                    t["redeemed"] = True
+                    t["redeemed_at"] = datetime.utcnow().isoformat()
+                    t["redeem_tx"] = tx_hash
+                    updated += 1
+                elif receipt and receipt.status == 0:
+                    print(f"  ❌ {label} — TX revert oldu! hash={tx_hash[:20]}")
+                else:
+                    # Hala pending → flag set et, sonraki çalışmada kontrol edilmez
+                    # ama en azından TX gönderdik
+                    print(f"  ⏳ {label} — TX pending: {tx_hash[:20]}... sonraki çalışmada tekrar dene")
+            except Exception:
+                print(f"  ⏳ {label} — receipt alınamadı, TX muhtemelen pending")
+
+        except ValueError as e:
+            if "on-chain raporlanmamış" in str(e):
+                print(f"  ⏳ {label} — oracle henüz on-chain raporlamamış (${current_val:.2f}), tekrar denenecek")
+            else:
+                print(f"  ❌ {label} — redeem hatası: {e}")
         except Exception as e:
-            print(f"  ❌ {t['station'].upper()} {t['date']} — redeem hatası: {e}")
+            print(f"  ❌ {label} — redeem hatası: {e}")
 
     save_live_trades(trades)
     print(f"\n  {updated} trade işlendi.\n")
