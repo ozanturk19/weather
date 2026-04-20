@@ -141,10 +141,12 @@ def bucket_won(title: str, actual: float) -> bool | None:
 
 # ── Scan: Tek Tarih İçin İstasyon Tara ─────────────────────────────────────
 def scan_date(station: str, target_date: str, trades: list,
-              station_biases: dict | None = None) -> dict | None:
+              station_biases: dict | None = None,
+              live_mode: bool = False, trader=None) -> dict | None:
     """Bir istasyon + tarih için sinyal ara. Yeni trade dict döner veya None.
 
     station_biases: compute_station_biases() çıktısı — adaptif tahmin düzeltmesi.
+    live_mode/trader: aktarılırsa, paper var ama live order eksikse retry_live tuple döner.
     """
     label = STATION_LABELS.get(station, station.upper())
 
@@ -228,6 +230,28 @@ def scan_date(station: str, target_date: str, trades: list,
             for t in trades
         )
         if already_same:
+            # Live modda: paper var ama live order hiç açılmamış olabilir (önceki hata).
+            # Bu durumda live order atmak için scan_date'i None döndürmeden çağıranın
+            # devam etmesi gerekir — ama paper yeniden oluşturulmaz.
+            if live_mode:
+                live_trades = trader.load_live_trades()
+                has_live = any(
+                    t["station"] == station and t["date"] == target_date
+                    and t["status"] in ("pending_fill", "filled",
+                                        "settled_win", "settled_loss")
+                    for t in live_trades
+                )
+                if not has_live:
+                    # Paper var ama live yok → live order at, paper değiştirme
+                    paper_match = next(
+                        (t for t in trades
+                         if t["station"] == station and t["date"] == target_date
+                         and t["top_pick"] == top_pick and t["status"] == "open"),
+                        None,
+                    )
+                    if paper_match:
+                        print(f"  🔁 {station.upper()} {label}  — {top_pick}°C paper var, live order eksik → tekrar deneniyor")
+                        return ("retry_live", paper_match)
             print(f"  ⬜ {station.upper()} {label}  — {top_pick}°C zaten açık, pas")
             return None
 
@@ -384,6 +408,7 @@ def scan():
         print(f"\n  📐 Yeterli kapalı trade yok — bias düzeltme yok")
 
     # Live mod için trader modülünü yükle
+    trader = None
     if live_mode:
         try:
             import importlib.util, pathlib
@@ -405,7 +430,30 @@ def scan():
         day_new  = 0
         day_live = 0
         for station in STATIONS:
-            trade = scan_date(station, target_date, trades, station_biases)
+            trade = scan_date(station, target_date, trades, station_biases,
+                              live_mode=live_mode, trader=trader if live_mode else None)
+
+            # Özel durum: paper var ama live order eksik → sadece live order at
+            if isinstance(trade, tuple) and trade[0] == "retry_live":
+                _, paper_match = trade
+                if live_mode:
+                    try:
+                        result = trader.place_limit_order(
+                            condition_id = paper_match["condition_id"],
+                            price        = paper_match["entry_price"],
+                            station      = paper_match["station"],
+                            date         = paper_match["date"],
+                            top_pick     = paper_match["top_pick"],
+                            bucket_title = paper_match["bucket_title"],
+                            paper_id     = paper_match["id"],
+                        )
+                        if result:
+                            day_live  += 1
+                            live_total += 1
+                    except Exception as e:
+                        print(f"  ⚠️  Live order hatası ({station}): {e}")
+                continue
+
             if trade:
                 # Tahmin değişti: aynı station+date'teki eski open paper trade'leri kapat
                 for old in trades:
