@@ -908,17 +908,200 @@ def cmd_redeem():
     print(f"\n  {updated} trade işlendi.\n")
 
 
+# ── Pozisyon Satışı (Exit / Take-Profit) ────────────────────────────────────
+def cmd_sell(threshold: float = 0.70):
+    """
+    Polymarket positions API'den yüksek değerli pozisyonları tespit et,
+    CLOB'da SELL limit order ver.
+
+    Kullanım:
+      python trader.py sell          # varsayılan: ≥70¢ pozisyonlar
+      python trader.py sell 0.85     # yalnızca ≥85¢ olanlar
+
+    Mantık:
+      - CLOB üzerinden fill'lenen pozisyonlar Exchange contract'ta tutuluyor.
+      - WU settlement'ı beklemek yerine CLOB'da satmak daha güvenli:
+        anında USDC kredisi, WU ≠ METAR riskinden bağımsız.
+      - Satış emri: post_only=False (taker ok — hızlı fill istiyoruz)
+        limit price = best_bid - 1 tick (0.01)
+    """
+    from py_clob_client.clob_types import OrderArgs, OrderType
+    from py_clob_client.order_builder.constants import SELL as SELL_SIDE
+
+    trades = load_live_trades()
+    wallet = wallet_address_from_pk(PK)
+
+    # Positions API'den mevcut değerleri çek
+    try:
+        r = httpx.get(
+            f"https://data-api.polymarket.com/positions?user={wallet}&sizeThreshold=0.001",
+            timeout=15
+        )
+        positions = {str(p["asset"]): p for p in r.json()} if r.is_success else {}
+    except Exception as e:
+        print(f"  ❌ Positions API hatası: {e}")
+        return
+
+    client     = setup_client()
+    now        = datetime.now()
+    sold_count = 0
+
+    print(f"\n{'='*62}")
+    print(f"  📤 SELL TARAMA — eşik ≥{round(threshold*100)}¢/share")
+    print(f"{'='*62}")
+
+    for t in trades:
+        if t["status"] not in ("filled",):
+            continue
+
+        token_id = str(t.get("condition_id", ""))
+        pos      = positions.get(token_id)
+        if pos is None:
+            continue
+
+        size        = float(pos.get("size", 0))
+        current_val = float(pos.get("currentValue", 0))
+        redeemable  = pos.get("redeemable", False)
+        price_now   = current_val / size if size > 0 else 0
+        label       = STATION_LABELS.get(t["station"], t["station"].upper())
+
+        # Zaten resolve olmuş ve val=$0 → kayıp, sat diyemeyiz
+        if redeemable and current_val < 0.01:
+            print(f"  ❌ {t['station'].upper()} {label} {t['date']} — resolve oldu, val=$0 (kayıp)")
+            continue
+
+        if price_now < threshold:
+            print(f"  ⬜ {t['station'].upper()} {label} {t['date']} {t['top_pick']}°C"
+                  f" — şu an {round(price_now*100)}¢ (eşik {round(threshold*100)}¢ altında)")
+            continue
+
+        entry_price = t.get("fill_price") or t["limit_price"]
+        profit_if_sold = round((price_now - entry_price) * size, 2)
+
+        # Orderbook'tan best_bid al — bir tick altına sat (maker olmak için)
+        try:
+            ob        = client.get_order_book(token_id)
+            best_bid  = float(ob.bids[0].price) if ob and ob.bids else price_now
+        except Exception:
+            best_bid  = price_now
+
+        sell_price = round(max(best_bid - 0.01, 0.01), 2)
+
+        print(f"  📤 SELL  {t['station'].upper()} {label}  {t['date']}  "
+              f"🎯{t['top_pick']}°C  {size:.0f} share  "
+              f"@ {round(sell_price*100)}¢  "
+              f"(giriş {round(entry_price*100)}¢, kâr ≈${profit_if_sold:+.2f})")
+
+        try:
+            order_args   = OrderArgs(
+                token_id = token_id,
+                price    = sell_price,
+                size     = size,
+                side     = SELL_SIDE,
+            )
+            signed_order = client.create_order(order_args)
+            # Satış emri: post_only=False (taker fee var ama hızlı fill şart)
+            resp         = client.post_order(signed_order, OrderType.GTC)
+            order_id     = resp.get("orderID") or resp.get("order_id") or resp.get("id")
+
+            if order_id:
+                t["status"]   = "sell_pending"
+                t["sell_price"] = sell_price
+                t["sell_order_id"] = order_id
+                t["sell_placed_at"] = now.isoformat()
+                t["notes"]    = (t.get("notes", "") + f" | SELL@{sell_price}").strip(" | ")
+                sold_count   += 1
+                print(f"       ✅ Satış emri → {order_id[:20]}...")
+            else:
+                print(f"       ❌ Order ID alınamadı: {resp}")
+
+        except Exception as e:
+            print(f"       ❌ Satış emri gönderilemedi: {e}")
+
+    save_live_trades(trades)
+    print(f"\n  {sold_count} pozisyon için satış emri verildi.\n")
+
+
+# ── Pozisyon Özeti (Positions API) ──────────────────────────────────────────
+def cmd_positions():
+    """Polymarket positions API'den mevcut portföy değerini göster."""
+    wallet = wallet_address_from_pk(PK)
+    try:
+        r = httpx.get(
+            f"https://data-api.polymarket.com/positions?user={wallet}&sizeThreshold=0",
+            timeout=15
+        )
+        positions = r.json() if r.is_success else []
+    except Exception as e:
+        print(f"  ❌ Positions API: {e}")
+        return
+
+    trades       = load_live_trades()
+    token_to_trade = {str(t["condition_id"]): t for t in trades}
+
+    total_val    = 0
+    total_cost   = 0
+    claimable    = 0
+
+    print(f"\n{'='*62}")
+    print(f"  💼 PORTFÖY  (wallet: {wallet[:10]}...)")
+    print(f"{'='*62}")
+
+    for p in sorted(positions, key=lambda x: -float(x.get("currentValue", 0))):
+        val        = float(p.get("currentValue", 0))
+        size       = float(p.get("size", 0))
+        redeemable = p.get("redeemable", False)
+        title      = (p.get("title") or "")[:52]
+        price_now  = val / size if size > 0 else 0
+        t          = token_to_trade.get(str(p.get("asset", "")))
+        entry      = (t.get("fill_price") or t.get("limit_price", 0)) if t else 0
+        cost       = t.get("cost_usdc", 0) if t else 0
+        pnl        = val - cost if cost else 0
+
+        if redeemable and val < 0.01:
+            status_icon = "❌"
+        elif redeemable and val > 0:
+            status_icon = "💰"
+            claimable  += val
+        elif price_now >= 0.80:
+            status_icon = "🔥"
+        elif price_now >= 0.50:
+            status_icon = "📈"
+        else:
+            status_icon = "📋"
+
+        total_val  += val
+        total_cost += cost
+        arrow = "↑" if pnl >= 0 else "↓"
+        print(f"  {status_icon}  ${val:5.2f}  {round(price_now*100):3}¢  {arrow}${abs(pnl):.2f}  {title}")
+
+    print(f"\n  Toplam değer  : ${total_val:.2f}")
+    print(f"  Toplam maliyet: ${total_cost:.2f}")
+    print(f"  Unrealized P&L: ${total_val - total_cost:+.2f}")
+    if claimable > 0:
+        print(f"  Claim edilebilir: ${claimable:.2f}")
+    print()
+
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "status"
 
+    # sell komutu opsiyonel threshold argümanı alır
+    if cmd == "sell":
+        threshold = float(sys.argv[2]) if len(sys.argv) > 2 else 0.70
+        cmd_sell(threshold)
+        sys.exit(0)
+
     commands = {
         "status":        cmd_status,
         "balance":       cmd_balance,
+        "positions":     cmd_positions,
         "check-fills":   check_fills,
         "cancel-stale":  cancel_stale_orders,
         "settle":        settle_live,
         "redeem":        cmd_redeem,
+        "sell":          lambda: cmd_sell(0.70),
         "setup-creds":   cmd_setup_creds,
         "approve-usdc":  cmd_approve_usdc,
     }
