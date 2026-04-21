@@ -951,7 +951,10 @@ def cmd_sell(threshold: float = 0.70):
     print(f"{'='*62}")
 
     for t in trades:
-        if t["status"] not in ("filled",):
+        # filled: normal açık pozisyon
+        # settled_win: botun METAR'a göre win dediği ama Polymarket henüz
+        #   resolve etmemiş olabilir — positions API'de değer varsa sat
+        if t["status"] not in ("filled", "settled_win"):
             continue
 
         token_id = str(t.get("condition_id", ""))
