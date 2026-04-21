@@ -1107,24 +1107,34 @@ def cmd_positions():
         print(f"  ❌ Positions API: {e}")
         return
 
-    trades       = load_live_trades()
+    trades         = load_live_trades()
     token_to_trade = {str(t["condition_id"]): t for t in trades}
+    # redeemed=True işaretli token'lar gizlenir
+    redeemed_ids   = {str(t["condition_id"]) for t in trades if t.get("redeemed")}
 
     total_val    = 0
     total_cost   = 0
     claimable    = 0
+    hidden       = 0
 
     print(f"\n{'='*62}")
     print(f"  💼 PORTFÖY  (wallet: {wallet[:10]}...)")
-    print(f"{'='*62}")
+    print(f"{'═'*62}")
 
     for p in sorted(positions, key=lambda x: -float(x.get("currentValue", 0))):
+        asset_id = str(p.get("asset", ""))
+
+        # Lokal olarak temizlenmiş (redeemed) → gizle
+        if asset_id in redeemed_ids:
+            hidden += 1
+            continue
+
         val        = float(p.get("currentValue", 0))
         size       = float(p.get("size", 0))
         redeemable = p.get("redeemable", False)
         title      = (p.get("title") or "")[:52]
         price_now  = val / size if size > 0 else 0
-        t          = token_to_trade.get(str(p.get("asset", "")))
+        t          = token_to_trade.get(asset_id)
         entry      = (t.get("fill_price") or t.get("limit_price", 0)) if t else 0
         cost       = t.get("cost_usdc", 0) if t else 0
         pnl        = val - cost if cost else 0
@@ -1151,6 +1161,8 @@ def cmd_positions():
     print(f"  Unrealized P&L: ${total_val - total_cost:+.2f}")
     if claimable > 0:
         print(f"  Claim edilebilir: ${claimable:.2f}")
+    if hidden > 0:
+        print(f"  ({hidden} temizlenmiş kayıp gizlendi — görmek için: cleanup)")
     print()
 
 
