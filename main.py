@@ -50,6 +50,8 @@ STATIONS = {
     "eddm": {"lat": 48.354, "lon": 11.786, "tz": "Europe/Berlin",      "label": "EDDM (Münih)",              "pm_query": "Munich",    "settlement": "wu"},
     "epwa": {"lat": 52.166, "lon": 20.967, "tz": "Europe/Warsaw",      "label": "EPWA (Varşova Chopin)",     "pm_query": "Warsaw",    "settlement": "wu"},
     "efhk": {"lat": 60.317, "lon": 24.963, "tz": "Europe/Helsinki",    "label": "EFHK (Helsinki Vantaa)",    "pm_query": "Helsinki",  "settlement": "wu"},
+    "omdb": {"lat": 25.253, "lon": 55.364, "tz": "Asia/Dubai",         "label": "OMDB (Dubai Intl)",          "pm_query": "Dubai",     "settlement": "wu"},
+    "rjtt": {"lat": 35.552, "lon": 139.780,"tz": "Asia/Tokyo",         "label": "RJTT (Tokyo Haneda)",        "pm_query": "Tokyo",     "settlement": "wu"},
 }
 
 # Her model için Open-Meteo model adı
