@@ -1154,6 +1154,96 @@ def cmd_positions():
     print()
 
 
+# ── Kapanmış Kayıp Pozisyonları Temizle ─────────────────────────────────────
+def cmd_cleanup():
+    """
+    Polymarket'ta resolve olmuş, value=$0 olan kayıp pozisyonları
+    live_trades.json'dan temizle (redeemed=True işaretle).
+
+    Hangi pozisyonlar temizlenir:
+      - settled_loss: zaten kayıp işaretli, sadece redeemed flag eksik
+      - settled_win ama positions API'de value≈$0 (WU/METAR fark → aslında kayıp)
+      - pending_fill / filled ama positions API'de redeemable=True AND value=0
+        (market dolduktan sonra yanlış yönde kapandı)
+
+    On-chain TX gerekmez — $0 değerli YES token'ların redemption'ı $0 döner.
+    Sadece lokal kayıt temizlenir.
+    """
+    trades = load_live_trades()
+    wallet = wallet_address_from_pk(PK)
+
+    # Positions API'den resolve olmuş pozisyonları çek
+    try:
+        r = httpx.get(
+            f"https://data-api.polymarket.com/positions?user={wallet}&sizeThreshold=0",
+            timeout=15
+        )
+        positions_by_asset = {str(p["asset"]): p for p in r.json()} if r.is_success else {}
+    except Exception as e:
+        print(f"  ❌ Positions API hatası: {e}")
+        positions_by_asset = {}
+
+    now      = datetime.utcnow().isoformat()
+    cleaned  = 0
+    skipped  = 0
+
+    print(f"\n{'='*62}")
+    print(f"  🧹 PORTFÖY TEMİZLEME")
+    print(f"{'='*62}")
+
+    for t in trades:
+        if t.get("redeemed"):
+            continue   # zaten temizlenmiş
+
+        label    = f"{t.get('station','?').upper()} {t.get('date','?')} {t.get('top_pick','?')}°C"
+        token_id = str(t.get("condition_id", ""))
+        pos      = positions_by_asset.get(token_id)
+
+        # ── Durum 1: settled_loss — lokal olarak kayıp işaretli ────────────
+        if t["status"] == "settled_loss":
+            t["redeemed"]    = True
+            t["redeemed_at"] = now
+            t["notes"]       = (t.get("notes", "") + " | cleanup:settled_loss").strip(" | ")
+            cleaned += 1
+            print(f"  🗑️  {label}  settled_loss → temizlendi")
+            continue
+
+        # ── Durum 2: settled_win ama positions API'de value≈$0 ─────────────
+        if t["status"] == "settled_win" and pos is not None:
+            val = float(pos.get("currentValue", 0))
+            if pos.get("redeemable") and val < 0.01:
+                t["redeemed"]    = True
+                t["redeemed_at"] = now
+                t["notes"]       = (t.get("notes", "") + " | cleanup:win_val0").strip(" | ")
+                cleaned += 1
+                print(f"  🗑️  {label}  settled_win ama val=$0 (WU kayıp) → temizlendi")
+                continue
+
+        # ── Durum 3: filled/pending ama market resolve olmuş, value=$0 ─────
+        if t["status"] in ("filled", "pending_fill") and pos is not None:
+            val = float(pos.get("currentValue", 0))
+            if pos.get("redeemable") and val < 0.01:
+                t["status"]      = "settled_loss"
+                t["result"]      = "LOSS"
+                t["pnl_usdc"]    = round(-t.get("cost_usdc", 0), 2)
+                t["settled_at"]  = now
+                t["redeemed"]    = True
+                t["redeemed_at"] = now
+                t["notes"]       = (t.get("notes", "") + " | cleanup:resolved_loss").strip(" | ")
+                cleaned += 1
+                print(f"  🗑️  {label}  {t['status']} → resolve edilmiş kayıp, temizlendi")
+                continue
+
+        skipped += 1
+
+    save_live_trades(trades)
+
+    remaining = sum(
+        1 for t in trades
+        if not t.get("redeemed") and t["status"] not in ("cancelled", "expired", "superseded")
+    )
+    print(f"\n  🗑️  {cleaned} pozisyon temizlendi  |  {remaining} aktif pozisyon kaldı\n")
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "status"
@@ -1172,6 +1262,7 @@ if __name__ == "__main__":
         "cancel-stale":  cancel_stale_orders,
         "settle":        settle_live,
         "redeem":        cmd_redeem,
+        "cleanup":       cmd_cleanup,
         "sell":          lambda: cmd_sell(0.70),
         "setup-creds":   cmd_setup_creds,
         "approve-usdc":  cmd_approve_usdc,
