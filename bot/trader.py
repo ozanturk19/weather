@@ -991,6 +991,15 @@ def cmd_sell(threshold: float = 0.70):
 
         sell_price = round(max(best_bid - 0.01, 0.01), 2)
 
+        # Güvenlik: satış fiyatı giriş fiyatının %50'sinden düşük olamaz
+        # Orderbook bid'i çökmüşse (market resolve aşaması) satma, bekle
+        min_acceptable = round(entry_price * 0.50, 2)
+        if sell_price < min_acceptable:
+            print(f"  ⚠️  {t['station'].upper()} {label} {t['date']} {t['top_pick']}°C"
+                  f" — orderbook bid çökmüş ({round(sell_price*100)}¢ < min {round(min_acceptable*100)}¢)"
+                  f" → market resolve aşamasında, Polymarket otomatik ödeyecek")
+            continue
+
         print(f"  📤 SELL  {t['station'].upper()} {label}  {t['date']}  "
               f"🎯{t['top_pick']}°C  {size:.0f} share  "
               f"@ {round(sell_price*100)}¢  "
