@@ -24,13 +24,30 @@ WEATHER_API   = "http://localhost:8001"
 TRADES_FILE   = Path(__file__).parent / "paper_trades.json"
 
 STATIONS = ["eglc", "ltac", "limc", "ltfm", "lemd", "lfpg",
-            "eham", "eddm", "epwa", "efhk"]
+            "eham", "eddm", "epwa", "efhk", "omdb", "rjtt"]
 
 STATION_LABELS = {
     "eglc": "Londra   ", "lfpg": "Paris    ", "limc": "Milano   ",
     "lemd": "Madrid   ", "ltfm": "İstanbul ", "ltac": "Ankara   ",
     "eham": "Amsterdam", "eddm": "Münih    ", "epwa": "Varşova  ",
-    "efhk": "Helsinki ",
+    "efhk": "Helsinki ", "omdb": "Dubai    ", "rjtt": "Tokyo    ",
+}
+
+# İstasyon koordinatları (Open-Meteo settlement için)
+# WU (Weather Underground) veri kaynağı Polymarket'ın kullandığı kaynak
+STATION_COORDS: dict = {
+    "eglc": (51.505,   0.055),
+    "lfpg": (49.009,   2.548),
+    "limc": (45.630,   8.723),
+    "lemd": (40.472,  -3.562),
+    "ltfm": (41.261,  28.742),
+    "ltac": (40.128,  32.995),
+    "eham": (52.309,   4.764),
+    "eddm": (48.364,  11.786),
+    "epwa": (52.166,  20.967),
+    "efhk": (60.317,  24.963),
+    "omdb": (25.253,  55.364),
+    "rjtt": (35.552, 139.780),
 }
 
 # Risk parametreleri
@@ -137,6 +154,36 @@ def bucket_won(title: str, actual: float) -> bool | None:
     if below_m:  return actual <= int(below_m.group(1))
     if exact_m:  return round(actual) == int(exact_m.group(1))
     if range_m:  return int(range_m.group(1)) <= actual <= int(range_m.group(2))
+    return None
+
+# ── Open-Meteo Gerçek Sıcaklık (Settlement İçin Birincil Kaynak) ───────────
+def get_actual_temp_open_meteo(station: str, date: str):
+    """Open-Meteo arşivinden günlük maks. sıcaklık çek (°C olarak).
+
+    Polymarket, WU (Weather Underground) verisiyle settle eder.
+    Open-Meteo temperature_2m_max → WU daily max ile uyumlu.
+    METAR saatlik ölçümlerinin ortalamasından çok daha doğru.
+
+    Döner: float (°C) veya None (veri yoksa / hata).
+    """
+    coords = STATION_COORDS.get(station)
+    if not coords:
+        return None
+    lat, lon = coords
+    try:
+        url = (
+            f"https://archive-api.open-meteo.com/v1/archive"
+            f"?latitude={lat}&longitude={lon}"
+            f"&start_date={date}&end_date={date}"
+            f"&daily=temperature_2m_max&timezone=auto"
+        )
+        r = httpx.get(url, timeout=20)
+        r.raise_for_status()
+        temps = r.json().get("daily", {}).get("temperature_2m_max", [])
+        if temps and temps[0] is not None:
+            return float(temps[0])
+    except Exception as e:
+        print(f"  ⚠️  Open-Meteo hatası ({station}, {date}): {e}")
     return None
 
 # ── Scan: Tek Tarih İçin İstasyon Tara ─────────────────────────────────────
@@ -370,7 +417,78 @@ def scan_date(station: str, target_date: str, trades: list,
         f"🎯{top_pick}°C (blend={blend:.1f}){mode_tag}{second_tag} @ {pct}¢ {cheap_tag}  "
         f"{SHARES} share · risk=${cost:.2f} · pot +${potential_win:.2f}{edge_str}"
     )
-    return trade
+    result_trades = [trade]
+
+    # ── 2-Bucket Stratejisi ─────────────────────────────────────────────────
+    # Ensemble 2. adayı birinciye bitişikse (±1°C) ve yeterli edge varsa,
+    # her iki bucket'a girer: ±1°C ölçüm/WU belirsizliğine karşı hedge.
+    # Maliyet 2×risk, biri kazanırsa net ~+$5.50 (2×$2.25 risk, $10 payout).
+    if (
+        second_pick is not None
+        and second_pct is not None
+        and abs(second_pick - top_pick) == 1
+        and second_pct >= MIN_MODE_PCT
+    ):
+        second_bucket = find_top_pick_bucket(buckets, second_pick)
+        if second_bucket:
+            s_price = second_bucket.get("yes_price", 0)
+            s_edge  = (second_pct / 100) - s_price
+            # 2. bucket için zaten pozisyon var mı?
+            already_second = any(
+                t["station"] == station and t["date"] == target_date
+                and t["top_pick"] == second_pick and t["status"] == "open"
+                for t in trades
+            )
+            station_max = STATION_MAX_PRICE.get(station, MAX_PRICE)
+            if (
+                not already_second
+                and MIN_PRICE <= s_price < station_max
+                and s_edge >= MIN_EDGE
+            ):
+                s_cond_raw = second_bucket.get("condition_id", "")
+                if isinstance(s_cond_raw, str) and s_cond_raw.startswith("0x"):
+                    s_cond = str(int(s_cond_raw, 16))
+                else:
+                    s_cond = str(s_cond_raw)
+                s_cost    = round(SHARES * s_price, 2)
+                s_pot_win = round(SHARES - s_cost, 2)
+                s_pct     = round(s_price * 100)
+                second_trade = {
+                    "id":            f"{station}_{target_date}_{datetime.now().strftime('%H%M%S')}_2nd",
+                    "station":       station,
+                    "date":          target_date,
+                    "blend":         round(blend, 1),
+                    "spread":        round(spread, 2),
+                    "uncertainty":   unc,
+                    "top_pick":      second_pick,
+                    "raw_top_pick":  second_pick,
+                    "bias_applied":  0,
+                    "ens_mode_pct":  second_pct,
+                    "ens_2nd_pick":  top_pick,
+                    "ens_2nd_pct":   mode_pct,
+                    "bucket_title":  second_bucket["title"],
+                    "condition_id":  s_cond,
+                    "entry_price":   s_price,
+                    "shares":        SHARES,
+                    "cost_usd":      s_cost,
+                    "potential_win": s_pot_win,
+                    "liquidity":     liq,
+                    "status":        "open",
+                    "entered_at":    datetime.now().isoformat(),
+                    "actual_temp":   None,
+                    "result":        None,
+                    "pnl":           None,
+                    "settled_at":    None,
+                    "two_bucket":    True,
+                }
+                print(
+                    f"  🔀 2.BUCKET  {station.upper()} {label}  "
+                    f"🎯{second_pick}°C [ens%{second_pct}] @ {s_pct}¢  "
+                    f"{SHARES} share · risk=${s_cost:.2f} · edge{s_edge:+.0%}"
+                )
+                result_trades.append(second_trade)
+
+    return result_trades
 
 
 # ── Scan: Fırsat Tara (D+1 ve D+2) ─────────────────────────────────────────
@@ -438,7 +556,7 @@ def scan():
                 _, paper_match = trade
                 if live_mode:
                     try:
-                        result = trader.place_limit_order(
+                        live_r = trader.place_limit_order(
                             condition_id = paper_match["condition_id"],
                             price        = paper_match["entry_price"],
                             station      = paper_match["station"],
@@ -447,42 +565,48 @@ def scan():
                             bucket_title = paper_match["bucket_title"],
                             paper_id     = paper_match["id"],
                         )
-                        if result:
+                        if live_r:
                             day_live  += 1
                             live_total += 1
                     except Exception as e:
                         print(f"  ⚠️  Live order hatası ({station}): {e}")
                 continue
 
-            if trade:
-                # Tahmin değişti: aynı station+date'teki eski open paper trade'leri kapat
+            # scan_date artık liste döner ([trade] veya [trade, second_trade])
+            new_list = trade if isinstance(trade, list) else []
+            if new_list:
+                # Yeni top_pick seti: artık sadece bu setde olmayanlar supersede edilir
+                new_top_picks = {t["top_pick"] for t in new_list}
                 for old in trades:
                     if (old["station"] == station and old["date"] == target_date
-                            and old["status"] == "open" and old["id"] != trade["id"]):
+                            and old["status"] == "open"
+                            and old["top_pick"] not in new_top_picks):
                         old["status"] = "superseded"
-                        old["notes"]  = f"Tahmin değişti → {trade['top_pick']}°C"
+                        picks_str = ", ".join(f"{p}°C" for p in sorted(new_top_picks))
+                        old["notes"]  = f"Tahmin değişti → {picks_str}"
 
-                trades.append(trade)
-                day_new  += 1
-                total_new += 1
+                for new_trade in new_list:
+                    trades.append(new_trade)
+                    day_new  += 1
+                    total_new += 1
 
-                # Live mode: aynı sinyali CLOB'a gönder
-                if live_mode:
-                    try:
-                        result = trader.place_limit_order(
-                            condition_id = trade["condition_id"],
-                            price        = trade["entry_price"],
-                            station      = trade["station"],
-                            date         = trade["date"],
-                            top_pick     = trade["top_pick"],
-                            bucket_title = trade["bucket_title"],
-                            paper_id     = trade["id"],
-                        )
-                        if result:
-                            day_live  += 1
-                            live_total += 1
-                    except Exception as e:
-                        print(f"  ⚠️  Live order hatası ({station}): {e}")
+                    # Live mode: CLOB'a gönder
+                    if live_mode:
+                        try:
+                            live_r = trader.place_limit_order(
+                                condition_id = new_trade["condition_id"],
+                                price        = new_trade["entry_price"],
+                                station      = new_trade["station"],
+                                date         = new_trade["date"],
+                                top_pick     = new_trade["top_pick"],
+                                bucket_title = new_trade["bucket_title"],
+                                paper_id     = new_trade["id"],
+                            )
+                            if live_r:
+                                day_live  += 1
+                                live_total += 1
+                        except Exception as e:
+                            print(f"  ⚠️  Live order hatası ({station}): {e}")
 
         live_str = f"  |  🔴 {day_live} live emir" if live_mode else ""
         print(f"  → D+{i}: {day_new} yeni paper{live_str}")
@@ -516,20 +640,34 @@ def settle():
         label   = STATION_LABELS.get(station, station.upper())
 
         try:
-            r = httpx.get(
-                f"{WEATHER_API}/api/metar-history?station={station}", timeout=30
-            )
-            r.raise_for_status()
-            history    = r.json()
-            daily      = history.get("daily_maxes", [])
-            day_record = next((d for d in daily if d["date"] == yesterday), None)
+            actual = None
 
-            if not day_record:
+            # Birincil: Open-Meteo — Polymarket'ın WU kaynağıyla uyumlu daily max
+            actual_om = get_actual_temp_open_meteo(station, yesterday)
+            if actual_om is not None:
+                actual = round(actual_om)
+                print(f"  🌡️  {station.upper()} Open-Meteo: {actual_om:.1f}°C → {actual}°C")
+
+            # Yedek: METAR API (Open-Meteo veri yoksa veya hata verdiyse)
+            if actual is None:
+                try:
+                    r = httpx.get(
+                        f"{WEATHER_API}/api/metar-history?station={station}", timeout=30
+                    )
+                    r.raise_for_status()
+                    daily      = r.json().get("daily_maxes", [])
+                    day_record = next((d for d in daily if d["date"] == yesterday), None)
+                    if day_record:
+                        actual = round(day_record["max_temp"])
+                        print(f"  🌡️  {station.upper()} METAR (yedek): {actual}°C")
+                except Exception as metar_e:
+                    print(f"  ⚠️  METAR yedek başarısız ({station}): {metar_e}")
+
+            if actual is None:
                 print(f"  ⏳ {station.upper()} {label}  — gerçek veri henüz yok (settlement bekle)")
                 continue
 
-            actual = round(day_record["max_temp"])   # WU tam °C yuvarlaması
-            won    = bucket_won(trade["bucket_title"], actual)
+            won = bucket_won(trade["bucket_title"], actual)
 
             if won is None:
                 print(f"  ❓ {station.upper()} {label}  — bucket sonuç belirlenemedi")

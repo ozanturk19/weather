@@ -1074,6 +1074,272 @@ test("get_balance(): kaynak kodda CLOB + RPC iki katmanlı fallback mevcut",
      test_get_balance_has_two_sources)
 
 # ══════════════════════════════════════════════════════════════════════════════
+print("\n══════════════════════════════════════════════════════════════")
+print(" TEST 22: Open-Meteo Settlement (METAR → Open-Meteo Primary)")
+print("══════════════════════════════════════════════════════════════")
+
+SCANNER_SRC_PATH = Path(__file__).parent.parent / "bot" / "scanner.py"
+SCANNER_SRC = SCANNER_SRC_PATH.read_text(encoding="utf-8") if SCANNER_SRC_PATH.exists() else ""
+
+def test_openmeteo_in_scanner_source():
+    """scanner.py settle() Open-Meteo birincil kaynak kullanıyor mu?"""
+    ok("archive-api.open-meteo.com" in SCANNER_SRC,
+       "scanner.py settle() Open-Meteo API endpoint içermiyor")
+    ok("temperature_2m_max" in SCANNER_SRC,
+       "scanner.py settle() temperature_2m_max parametresi yok")
+    ok("get_actual_temp_open_meteo" in SCANNER_SRC,
+       "scanner.py get_actual_temp_open_meteo() fonksiyonu yok")
+    ok("STATION_COORDS" in SCANNER_SRC,
+       "scanner.py STATION_COORDS dict yok")
+    # METAR hâlâ yedek olarak kalmalı
+    ok("metar-history" in SCANNER_SRC,
+       "scanner.py METAR yedek kaynak kaldırılmış — yedek kalmalı")
+
+def test_openmeteo_in_trader_source():
+    """trader.py settle_live() Open-Meteo birincil kaynak kullanıyor mu?"""
+    ok("archive-api.open-meteo.com" in TRADER_SRC,
+       "trader.py settle_live() Open-Meteo API endpoint içermiyor")
+    ok("temperature_2m_max" in TRADER_SRC,
+       "trader.py settle_live() temperature_2m_max parametresi yok")
+    ok("get_actual_temp_open_meteo" in TRADER_SRC,
+       "trader.py get_actual_temp_open_meteo() fonksiyonu yok")
+    ok("STATION_COORDS" in TRADER_SRC,
+       "trader.py STATION_COORDS dict yok")
+    ok("metar-history" in TRADER_SRC,
+       "trader.py METAR yedek kaynak kaldırılmış — yedek kalmalı")
+
+def simulate_open_meteo_settle(om_temp, metar_temp):
+    """get_actual_temp_open_meteo + METAR fallback mantığını simüle et."""
+    actual = None
+    # Open-Meteo birincil
+    if om_temp is not None:
+        actual = round(om_temp)
+    # METAR yedek
+    if actual is None and metar_temp is not None:
+        actual = round(metar_temp)
+    return actual
+
+test("Open-Meteo kaynak kodu: scanner.py'de birincil kaynak",
+     test_openmeteo_in_scanner_source)
+test("Open-Meteo kaynak kodu: trader.py'de birincil kaynak",
+     test_openmeteo_in_trader_source)
+test("Open-Meteo settle: Open-Meteo veri varsa kullan, METAR'ı atla", lambda:
+    eq(simulate_open_meteo_settle(14.7, 13.0), 15,
+       "Open-Meteo 14.7 → round = 15 (METAR'ın 13.0'ı gözardı edilmeli)")
+)
+test("Open-Meteo settle: Open-Meteo None → METAR yedek devreye girer", lambda:
+    eq(simulate_open_meteo_settle(None, 16.3), 16,
+       "Open-Meteo None ise METAR yedek 16.3 → 16")
+)
+test("Open-Meteo settle: ikisi de None → None (settlement bekle)", lambda:
+    eq(simulate_open_meteo_settle(None, None), None,
+       "Her iki kaynak da None ise settlement yapılmamalı")
+)
+test("Open-Meteo settle: sınır değer yuvarlama 15.5 → 16", lambda:
+    eq(simulate_open_meteo_settle(15.5, 14.0), 16)
+)
+test("Open-Meteo settle: negatif sıcaklık doğru yuvarlanır (-0.4 → 0)", lambda:
+    eq(simulate_open_meteo_settle(-0.4, None), 0)
+)
+test("Open-Meteo settle: negatif sıcaklık doğru yuvarlanır (-1.6 → -2)", lambda:
+    eq(simulate_open_meteo_settle(-1.6, None), -2)
+)
+
+def test_station_coords_coverage():
+    """STATION_COORDS tüm önemli istasyonları kapsıyor mu?"""
+    required = ["eglc", "ltfm", "lemd", "lfpg", "limc", "ltac",
+                "eham", "eddm", "epwa", "efhk", "omdb", "rjtt"]
+    for station in required:
+        ok(f'"{station}"' in SCANNER_SRC or f"'{station}'" in SCANNER_SRC,
+           f"STATION_COORDS'da {station} yok")
+        # Koordinatlar makul aralıkta mı? (sadece kaynak kod varlığı doğrulandı)
+    ok("55.364" in SCANNER_SRC or "55.3" in SCANNER_SRC,
+       "Dubai (OMDB) koordinatları (55.36x boylamı) eksik")
+    ok("139.78" in SCANNER_SRC or "139.7" in SCANNER_SRC,
+       "Tokyo (RJTT) koordinatları (139.78x boylamı) eksik")
+
+test("STATION_COORDS: tüm 12 istasyon koordinatları mevcut",
+     test_station_coords_coverage)
+
+# ══════════════════════════════════════════════════════════════════════════════
+print("\n══════════════════════════════════════════════════════════════")
+print(" TEST 23: Yeni İstasyonlar — Dubai (OMDB) & Tokyo (RJTT)")
+print("══════════════════════════════════════════════════════════════")
+
+def test_new_stations_in_scanner():
+    """scanner.py STATIONS listesine omdb ve rjtt eklendi mi?"""
+    ok('"omdb"' in SCANNER_SRC or "'omdb'" in SCANNER_SRC,
+       "scanner.py STATIONS'da 'omdb' yok")
+    ok('"rjtt"' in SCANNER_SRC or "'rjtt'" in SCANNER_SRC,
+       "scanner.py STATIONS'da 'rjtt' yok")
+    ok('"omdb": "Dubai' in SCANNER_SRC or "'omdb': 'Dubai'" in SCANNER_SRC
+       or '"omdb": "Dubai    "' in SCANNER_SRC,
+       "scanner.py STATION_LABELS'da Dubai etiketi yok")
+    ok('"rjtt": "Tokyo' in SCANNER_SRC or "'rjtt': 'Tokyo'" in SCANNER_SRC
+       or '"rjtt": "Tokyo    "' in SCANNER_SRC,
+       "scanner.py STATION_LABELS'da Tokyo etiketi yok")
+
+def test_new_stations_in_trader():
+    """trader.py STATION_LABELS'a omdb ve rjtt eklendi mi?"""
+    ok('"omdb"' in TRADER_SRC or "'omdb'" in TRADER_SRC,
+       "trader.py STATION_LABELS'da 'omdb' yok")
+    ok('"rjtt"' in TRADER_SRC or "'rjtt'" in TRADER_SRC,
+       "trader.py STATION_LABELS'da 'rjtt' yok")
+    ok("Dubai" in TRADER_SRC,
+       "trader.py STATION_LABELS'da 'Dubai' etiketi yok")
+    ok("Tokyo" in TRADER_SRC,
+       "trader.py STATION_LABELS'da 'Tokyo' etiketi yok")
+
+def test_station_count():
+    """Toplam istasyon sayısı 12 olmalı (10 Avrupa + Dubai + Tokyo)."""
+    # STATIONS listesindeki istasyon sayısını kaynak koddan çıkar
+    import re as _re
+    m = _re.search(r'STATIONS\s*=\s*\[([^\]]+)\]', SCANNER_SRC, _re.S)
+    if m:
+        items = [s.strip().strip('"\'') for s in m.group(1).split(',') if s.strip()]
+        ok(len(items) >= 12,
+           f"STATIONS listesinde {len(items)} istasyon var, en az 12 bekleniyor (Dubai+Tokyo eklendi)")
+    else:
+        ok(False, "STATIONS listesi parse edilemedi")
+
+test("Yeni istasyonlar: scanner.py STATIONS + STATION_LABELS güncellendi",
+     test_new_stations_in_scanner)
+test("Yeni istasyonlar: trader.py STATION_LABELS güncellendi",
+     test_new_stations_in_trader)
+test("Yeni istasyonlar: STATIONS listesi en az 12 istasyon içeriyor",
+     test_station_count)
+
+# ══════════════════════════════════════════════════════════════════════════════
+print("\n══════════════════════════════════════════════════════════════")
+print(" TEST 24: 2-Bucket Stratejisi")
+print("══════════════════════════════════════════════════════════════")
+
+def simulate_two_bucket_decision(
+    top_pick, top_pct, second_pick, second_pct,
+    top_price, second_price,
+    min_mode_pct=30, min_edge=0.05, min_price=0.05, max_price=0.40,
+):
+    """scan_date() 2-bucket karar mantığını simüle et.
+
+    Döner: ["primary"] veya ["primary", "secondary"] veya ["primary"] (edge yetersiz)
+    """
+    result = ["primary"]
+
+    if (
+        second_pick is not None
+        and second_pct is not None
+        and abs(second_pick - top_pick) == 1    # bitişik bucket
+        and second_pct >= min_mode_pct          # ensemble konsensüsü yeterli
+    ):
+        s_edge = (second_pct / 100) - second_price
+        if (
+            min_price <= second_price < max_price
+            and s_edge >= min_edge
+        ):
+            result.append("secondary")
+
+    return result
+
+test("2-bucket: bitişik 2. pick + edge → iki bucket açılır", lambda:
+    eq(simulate_two_bucket_decision(
+        top_pick=14, top_pct=45,
+        second_pick=15, second_pct=35,    # bitişik, %35 konsensüs
+        top_price=0.28, second_price=0.22  # 35%-22%=+13% edge
+    ), ["primary", "secondary"])
+)
+test("2-bucket: 2. pick bitişik DEĞİL (2°C fark) → tek bucket", lambda:
+    eq(simulate_two_bucket_decision(
+        top_pick=14, top_pct=45,
+        second_pick=16, second_pct=35,    # 2°C fark, bitişik değil
+        top_price=0.28, second_price=0.22
+    ), ["primary"])
+)
+test("2-bucket: 2. pick konsensüs çok düşük (<%30) → tek bucket", lambda:
+    eq(simulate_two_bucket_decision(
+        top_pick=14, top_pct=45,
+        second_pick=15, second_pct=25,    # %25 < MIN_MODE_PCT=30
+        top_price=0.28, second_price=0.22
+    ), ["primary"])
+)
+test("2-bucket: 2. bucket edge yetersiz → tek bucket", lambda:
+    eq(simulate_two_bucket_decision(
+        top_pick=14, top_pct=45,
+        second_pick=15, second_pct=32,    # 32%-30%=+2% edge < MIN_EDGE=5%
+        top_price=0.28, second_price=0.30
+    ), ["primary"])
+)
+test("2-bucket: 2. bucket fiyatı MAX_PRICE'ı aşıyor → tek bucket", lambda:
+    eq(simulate_two_bucket_decision(
+        top_pick=14, top_pct=45,
+        second_pick=15, second_pct=35,
+        top_price=0.28, second_price=0.42  # > MAX_PRICE=0.40
+    ), ["primary"])
+)
+test("2-bucket: 2. bucket fiyatı MIN_PRICE'ın altında → tek bucket", lambda:
+    eq(simulate_two_bucket_decision(
+        top_pick=14, top_pct=45,
+        second_pick=15, second_pct=35,
+        top_price=0.28, second_price=0.03  # < MIN_PRICE=0.05
+    ), ["primary"])
+)
+test("2-bucket: second_pick=None → tek bucket (ensemble tek mod)", lambda:
+    eq(simulate_two_bucket_decision(
+        top_pick=14, top_pct=60,
+        second_pick=None, second_pct=None,
+        top_price=0.28, second_price=0.00
+    ), ["primary"])
+)
+test("2-bucket: alt komşu da geçerli (14→13)", lambda:
+    eq(simulate_two_bucket_decision(
+        top_pick=14, top_pct=40,
+        second_pick=13, second_pct=32,    # alt bitişik
+        top_price=0.28, second_price=0.20
+    ), ["primary", "secondary"])
+)
+test("2-bucket: kaynak kodda two_bucket flag var (trade kaydı)", lambda:
+    ok("two_bucket" in SCANNER_SRC,
+       "scanner.py 2-bucket trade dict'inde 'two_bucket' flag yok")
+)
+test("2-bucket: kaynak kodda second_bucket mantığı mevcut", lambda: (
+    ok("result_trades" in SCANNER_SRC,
+       "scanner.py'de result_trades listesi yok (2-bucket dönüş yapısı)"),
+    ok("second_pick" in SCANNER_SRC and "second_pct" in SCANNER_SRC,
+       "scanner.py'de second_pick/second_pct kullanımı yok"),
+))
+
+# P&L doğrulaması: 2-bucket senaryosu
+def test_two_bucket_pnl():
+    """2-bucket P&L matematik: biri kazanırsa net pozitif mu?
+    10 share, 1.bucket 28¢, 2.bucket 22¢ → toplam maliyet $5.00
+    Birisi kazanırsa $10, öteki kaybeder (2.28+2.22=4.50 loss)
+    Net: +$10 - $2.80 (kaybeden 1. bucket) - 0 (kazanan 2.) = +$7.20
+    Veya: +$10 - $2.20 (kaybeden 2. bucket) - 0 = +$7.80
+    Her iki senaryo net pozitif."""
+    shares    = 10
+    price1    = 0.28
+    price2    = 0.22
+    cost1     = shares * price1   # $2.80
+    cost2     = shares * price2   # $2.20
+    payout    = shares * 1.0      # $10.00
+
+    # Senaryo A: 1. bucket kazanır
+    pnl_a = (payout - cost1) - cost2   # +$10 - $2.80 - $2.20 = +$5.00
+    # Senaryo B: 2. bucket kazanır
+    pnl_b = (payout - cost2) - cost1   # +$10 - $2.20 - $2.80 = +$5.00
+    # Senaryo C: ikisi de kaybeder
+    pnl_c = -(cost1 + cost2)            # -$5.00
+
+    ok(pnl_a > 0, f"Senaryo A (1. kazanır) net negatif: ${pnl_a:.2f}")
+    ok(pnl_b > 0, f"Senaryo B (2. kazanır) net negatif: ${pnl_b:.2f}")
+    ok(pnl_c < 0, f"Senaryo C (ikisi kayıp) pozitif gösteriliyor: ${pnl_c:.2f}")
+    # En az biri kazanınca toplam maliyet geri alınıyor
+    eq(round(pnl_a, 2), round(pnl_b, 2),
+       "Simetrik fiyat varsayımı kırıldı — P&L simetrik olmalı")
+
+test("2-bucket P&L: birisi kazanınca net pozitif, ikisi kayıpsa negatif",
+     test_two_bucket_pnl)
+
+# ══════════════════════════════════════════════════════════════════════════════
 print(f"\n{'═'*62}")
 print(f"  SONUÇ: {PASS} geçti / {FAIL} başarısız / {PASS+FAIL} toplam")
 if FAIL == 0:

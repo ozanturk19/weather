@@ -51,7 +51,23 @@ STATION_LABELS = {
     "eglc": "Londra   ", "lfpg": "Paris    ", "limc": "Milano   ",
     "lemd": "Madrid   ", "ltfm": "İstanbul ", "ltac": "Ankara   ",
     "eham": "Amsterdam", "eddm": "Münih    ", "epwa": "Varşova  ",
-    "efhk": "Helsinki ",
+    "efhk": "Helsinki ", "omdb": "Dubai    ", "rjtt": "Tokyo    ",
+}
+
+# İstasyon koordinatları (Open-Meteo settlement için)
+STATION_COORDS: dict = {
+    "eglc": (51.505,   0.055),
+    "lfpg": (49.009,   2.548),
+    "limc": (45.630,   8.723),
+    "lemd": (40.472,  -3.562),
+    "ltfm": (41.261,  28.742),
+    "ltac": (40.128,  32.995),
+    "eham": (52.309,   4.764),
+    "eddm": (48.364,  11.786),
+    "epwa": (52.166,  20.967),
+    "efhk": (60.317,  24.963),
+    "omdb": (25.253,  55.364),
+    "rjtt": (35.552, 139.780),
 }
 
 # ── Trade Depolama ──────────────────────────────────────────────────────────
@@ -520,6 +536,34 @@ def bucket_won(title: str, actual: float) -> bool | None:
     if range_m:  return int(range_m.group(1)) <= actual <= int(range_m.group(2))
     return None
 
+# ── Open-Meteo Gerçek Sıcaklık (Settlement İçin Birincil Kaynak) ───────────
+def get_actual_temp_open_meteo(station: str, date: str):
+    """Open-Meteo arşivinden günlük maks. sıcaklık çek (°C).
+
+    Polymarket, WU (Weather Underground) verisiyle settle eder.
+    Open-Meteo temperature_2m_max → WU daily max ile uyumlu.
+    METAR saatlik ölçümlerinden çok daha doğru settlement tahmini verir.
+    """
+    coords = STATION_COORDS.get(station)
+    if not coords:
+        return None
+    lat, lon = coords
+    try:
+        url = (
+            f"https://archive-api.open-meteo.com/v1/archive"
+            f"?latitude={lat}&longitude={lon}"
+            f"&start_date={date}&end_date={date}"
+            f"&daily=temperature_2m_max&timezone=auto"
+        )
+        r = httpx.get(url, timeout=20)
+        r.raise_for_status()
+        temps = r.json().get("daily", {}).get("temperature_2m_max", [])
+        if temps and temps[0] is not None:
+            return float(temps[0])
+    except Exception as e:
+        print(f"  ⚠️  Open-Meteo hatası ({station}, {date}): {e}")
+    return None
+
 # ── Live Settlement ─────────────────────────────────────────────────────────
 def settle_live():
     """
@@ -548,22 +592,36 @@ def settle_live():
         label   = STATION_LABELS.get(station, station.upper())
 
         try:
-            r = httpx.get(
-                f"{WEATHER_API}/api/metar-history?station={station}", timeout=30
-            )
-            r.raise_for_status()
-            history    = r.json()
-            daily      = history.get("daily_maxes", [])
-            day_record = next(
-                (d for d in daily if d["date"] == trade["date"]), None
-            )
+            actual = None
 
-            if not day_record:
+            # Birincil: Open-Meteo — Polymarket'ın WU kaynağıyla uyumlu
+            actual_om = get_actual_temp_open_meteo(station, trade["date"])
+            if actual_om is not None:
+                actual = round(actual_om)
+                print(f"  🌡️  {station.upper()} Open-Meteo: {actual_om:.1f}°C → {actual}°C")
+
+            # Yedek: METAR API
+            if actual is None:
+                try:
+                    r = httpx.get(
+                        f"{WEATHER_API}/api/metar-history?station={station}", timeout=30
+                    )
+                    r.raise_for_status()
+                    daily      = r.json().get("daily_maxes", [])
+                    day_record = next(
+                        (d for d in daily if d["date"] == trade["date"]), None
+                    )
+                    if day_record:
+                        actual = round(day_record["max_temp"])
+                        print(f"  🌡️  {station.upper()} METAR (yedek): {actual}°C")
+                except Exception as metar_e:
+                    print(f"  ⚠️  METAR yedek başarısız ({station}): {metar_e}")
+
+            if actual is None:
                 print(f"  ⏳ {station.upper()} {label} — gerçek veri henüz yok")
                 continue
 
-            actual = round(day_record["max_temp"])
-            won    = bucket_won(trade["bucket_title"], actual)
+            won = bucket_won(trade["bucket_title"], actual)
 
             if won is None:
                 print(f"  ❓ {station.upper()} {label} — bucket sonuç belirlenemedi")
