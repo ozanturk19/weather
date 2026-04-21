@@ -41,7 +41,7 @@ WEATHER_API     = "http://localhost:8001"
 LIVE_SHARES          = 5      # her trade'de alınan share adedi
 MAX_OPEN_LIVE_TRADES  = 30     # aynı anda max açık pozisyon
 MAX_DAILY_SPEND_USDC  = 60.0  # günlük max yeni emir tutarı (USDC) — 10 st × 2 gün × ~$1.3 ≈ $26/scan
-MIN_USDC_RESERVE      = 10.0  # bu altına inerse yeni emir açılmaz
+MIN_USDC_RESERVE      = 5.0   # bu altına inerse yeni emir açılmaz
 ORDER_EXPIRY_D1_HOURS = 5     # D+1: yarın settle → bugün dolması şart, agresif
 ORDER_EXPIRY_D2_HOURS = 20    # D+2: 2 gün var, sonraki scan yeniden dener
 MIN_PRICE            = 0.05   # çok ucuz → şüpheli
@@ -130,8 +130,12 @@ def get_balance() -> float:
     import urllib.request as _ur, json as _json
     # ── Birincil: CLOB API balance_allowance ──────────────────────────────
     try:
+        from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
+        from py_clob_client.constants import L1
         client = setup_client()
-        resp = client.get_balance_allowance(params={"asset_type": "USDC"})
+        resp = client.get_balance_allowance(
+            BalanceAllowanceParams(asset_type=AssetType.COLLATERAL, signature_type=L1)
+        )
         bal = float(resp.get("balance", 0)) / 1_000_000
         if bal > 0:
             return bal
@@ -722,9 +726,9 @@ def cmd_approve_usdc():
 # ── Auto Redeem Kazanan Token'lar ───────────────────────────────────────────
 
 POLYGON_RPCS = [
+    "https://rpc-mainnet.matic.quiknode.pro",
+    "https://polygon.drpc.org",
     "https://polygon-bor-rpc.publicnode.com",
-    "https://rpc.ankr.com/polygon",
-    "https://1rpc.io/matic",
 ]
 CTF_CONTRACT  = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"
 USDC_CONTRACT = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
