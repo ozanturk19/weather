@@ -58,6 +58,9 @@ CREATE TABLE IF NOT EXISTS paper_trades (
     ens_peak_sep     INTEGER,
     ens_mode_ci_low  INTEGER,
     ens_mode_ci_high INTEGER,
+    -- Faz 3: sinyal kalitesi
+    signal_score     INTEGER,
+    signal_grade     TEXT,
     bucket_title  TEXT,
     condition_id  TEXT,
     entry_price   REAL,
@@ -225,6 +228,9 @@ def _migrate_add_columns(conn) -> None:
         ("ens_peak_sep",     "INTEGER"),
         ("ens_mode_ci_low",  "INTEGER"),
         ("ens_mode_ci_high", "INTEGER"),
+        # Faz 3
+        ("signal_score",     "INTEGER"),
+        ("signal_grade",     "TEXT"),
     ]
     for col, typ in new_cols:
         if col not in existing:
@@ -238,6 +244,8 @@ PAPER_FIELDS = [
     "ens_mode_pct", "ens_2nd_pick", "ens_2nd_pct",
     # Faz 2 şekil metrikleri
     "ens_is_bimodal", "ens_peak_sep", "ens_mode_ci_low", "ens_mode_ci_high",
+    # Faz 3 sinyal kalitesi
+    "signal_score", "signal_grade",
     "bucket_title", "condition_id", "entry_price", "shares",
     "cost_usd", "size_usd", "potential_win", "liquidity",
     "status", "entered_at", "actual_temp", "result", "pnl", "settled_at",

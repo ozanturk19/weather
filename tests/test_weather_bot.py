@@ -1966,6 +1966,231 @@ test("db.py: eski (v1) şema üstüne migration yeni kolonları ekler",
 
 # ══════════════════════════════════════════════════════════════════════════════
 print(f"\n{'═'*62}")
+print(" TEST 27: Faz 3 — Kalman Bias + Sinyal Kalitesi")
+print(f"{'═'*62}")
+
+def _import_kalman():
+    import importlib.util
+    path = Path(__file__).resolve().parent.parent / "bot" / "kalman.py"
+    spec = importlib.util.spec_from_file_location("weather_kalman", path)
+    mod  = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _import_signal_score():
+    import importlib.util
+    path = Path(__file__).resolve().parent.parent / "bot" / "signal_score.py"
+    spec = importlib.util.spec_from_file_location("weather_signal", path)
+    mod  = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_kalman_zero_bias():
+    k = _import_kalman()
+    # bias=0 civarında 10 gözlem → bias ≈ 0
+    obs = [(0.1, "2026-03-01"), (-0.2, "2026-03-02"), (0.0, "2026-03-03"),
+           (0.3, "2026-03-04"), (-0.1, "2026-03-05"), (0.05, "2026-03-06"),
+           (-0.15, "2026-03-07"), (0.1, "2026-03-08"), (-0.05, "2026-03-09"),
+           (0.2, "2026-03-10")]
+    bias, var = k.kalman_bias_estimate(obs)
+    ok(abs(bias) < 0.5, f"bias sıfıra yakın beklenir, bulunan {bias}")
+
+test("kalman_bias_estimate: sıfır civarı gözlemler → bias ≈ 0",
+     test_kalman_zero_bias)
+
+
+def test_kalman_positive_bias():
+    k = _import_kalman()
+    # 10 gözlem ortalama +1.5°C — bias yakınsamalı
+    obs = [(1.5 + (i % 3 - 1) * 0.2, f"2026-03-{d:02d}")
+           for i, d in enumerate(range(1, 11))]
+    bias, var = k.kalman_bias_estimate(obs)
+    ok(0.8 < bias < 2.0, f"bias +1.5 civarı olmalı, bulunan {bias}")
+    ok(var < 1.0, f"10 gözlem sonrası variance düşmeli, bulunan {var}")
+
+test("kalman_bias_estimate: +1.5°C bias yakınsar, variance düşer",
+     test_kalman_positive_bias)
+
+
+def test_kalman_recency_bias():
+    """Son gözlemler eski gözlemlerden daha etkili (process noise)."""
+    k = _import_kalman()
+    # İlk 5 gözlem 0 civarında, son 5 gözlem +3°C — Kalman yakın döneme ağırlık verir
+    obs = [(0.0, f"2026-03-{d:02d}") for d in range(1, 6)] + \
+          [(3.0, f"2026-03-{d:02d}") for d in range(6, 11)]
+    bias, _var = k.kalman_bias_estimate(obs)
+    # Son gözlemlere daha fazla ağırlık verildiği için bias > 1.0 olmalı
+    ok(bias > 1.0, f"son gözlemler ağırlıklı olmalı, bias={bias}")
+
+test("kalman_bias_estimate: son gözlemler eski gözlemlerden etkili",
+     test_kalman_recency_bias)
+
+
+def test_kalman_empty():
+    k = _import_kalman()
+    bias, var = k.kalman_bias_estimate([])
+    ok(bias == 0.0, f"boş gözlem → bias 0, bulunan {bias}")
+    ok(var > 0, f"boş gözlem → variance pozitif (prior), bulunan {var}")
+
+test("kalman_bias_estimate: boş gözlem güvenli (bias=0)",
+     test_kalman_empty)
+
+
+def test_kalman_station_biases_integration():
+    k = _import_kalman()
+    trades = [
+        # 6 trade: actual - top_pick ortalaması +1.3 → bias ≈ +1
+        {"status": "closed", "station": "epwa", "date": f"2026-03-{d:02d}",
+         "top_pick": 10, "actual_temp": 11.3 + (d % 3 - 1) * 0.2}
+        for d in range(1, 7)
+    ]
+    biases = k.kalman_station_biases(trades, max_correction=2, min_trades=5)
+    ok("epwa" in biases, f"EPWA bias hesaplanmadı: {biases}")
+    ok(biases["epwa"] == 1, f"EPWA bias +1 beklenir, bulunan {biases['epwa']}")
+
+test("kalman_station_biases: kapalı trade'lerden bias öğrenir (+1)",
+     test_kalman_station_biases_integration)
+
+
+def test_kalman_bias_cap():
+    """MAX_BIAS_CORRECTION tavanı çok büyük bias'ı sınırlar."""
+    k = _import_kalman()
+    trades = [
+        {"status": "closed", "station": "lfpg", "date": f"2026-03-{d:02d}",
+         "top_pick": 10, "actual_temp": 16.0}   # +6°C sürekli!
+        for d in range(1, 11)
+    ]
+    biases = k.kalman_station_biases(trades, max_correction=2, min_trades=5)
+    ok(biases.get("lfpg", 0) == 2, f"tavan 2 bekleniyor, bulunan {biases}")
+
+test("kalman_station_biases: max_correction tavanı uygulanır",
+     test_kalman_bias_cap)
+
+
+def test_signal_score_perfect():
+    s = _import_signal_score()
+    r = s.compute_signal_score(
+        mode_pct=80, mode_ci_low=75, mode_ci_high=85,
+        edge=0.30, uncertainty="Düşük",
+        is_bimodal=False, n_members=90,
+    )
+    ok(r["score"] >= 85, f"mükemmel sinyal ≥85 beklenir, bulunan {r}")
+    ok(r["grade"] == "güçlü", f"güçlü grade beklenir: {r}")
+
+test("compute_signal_score: mükemmel sinyal → ≥85 puan, 'güçlü'",
+     test_signal_score_perfect)
+
+
+def test_signal_score_weak():
+    s = _import_signal_score()
+    r = s.compute_signal_score(
+        mode_pct=32, mode_ci_low=22, mode_ci_high=48,
+        edge=0.05, uncertainty="Yüksek",
+        is_bimodal=True, n_members=40,
+    )
+    ok(r["score"] < 50, f"zayıf sinyal < 50 beklenir: {r}")
+    ok(r["grade"] == "zayıf", f"zayıf grade beklenir: {r}")
+
+test("compute_signal_score: sınırda sinyal → <50 puan, 'zayıf'",
+     test_signal_score_weak)
+
+
+def test_signal_score_components_sum():
+    s = _import_signal_score()
+    r = s.compute_signal_score(
+        mode_pct=55, mode_ci_low=48, mode_ci_high=62,
+        edge=0.15, uncertainty="Orta",
+        is_bimodal=False, n_members=90,
+    )
+    ok(sum(r["components"].values()) == r["score"],
+       f"bileşenler toplamı skora eşit olmalı: {r}")
+    ok(0 <= r["score"] <= 100,
+       f"skor 0-100 aralığı dışı: {r}")
+
+test("compute_signal_score: bileşenler toplamı 0-100 aralığında, skora eşit",
+     test_signal_score_components_sum)
+
+
+def test_signal_score_missing_fields():
+    s = _import_signal_score()
+    # None değerler → nötr puanlama, crash yok
+    r = s.compute_signal_score(
+        mode_pct=None, mode_ci_low=None, mode_ci_high=None,
+        edge=None, uncertainty=None,
+        is_bimodal=False, n_members=0,
+    )
+    ok(0 <= r["score"] <= 100,
+       f"eksik alan → skor hâlâ sınırda: {r}")
+    ok("components" in r, f"components dict yok: {r}")
+
+test("compute_signal_score: None alanlar crash üretmez, nötr puanlanır",
+     test_signal_score_missing_fields)
+
+
+def test_scanner_uses_kalman_fallback():
+    """scanner.compute_station_biases Kalman kullanıyor, fallback var."""
+    scanner_path = Path(__file__).resolve().parent.parent / "bot" / "scanner.py"
+    src = scanner_path.read_text(encoding="utf-8")
+    ok("kalman_station_biases" in src, "scanner Kalman'ı kullanmıyor")
+    # Fallback: try/except ile eski ortalama yönteme düşmeli
+    start = src.find("def compute_station_biases")
+    end   = src.find("\ndef ", start + 1)
+    body  = src[start:end]
+    ok("try:" in body and "except" in body,
+       "Kalman fallback try/except yok")
+
+test("scanner: compute_station_biases Kalman + eski fallback",
+     test_scanner_uses_kalman_fallback)
+
+
+def test_scanner_has_signal_score_integration():
+    """scanner.py sinyal skorunu üretip trade'e yazıyor."""
+    scanner_path = Path(__file__).resolve().parent.parent / "bot" / "scanner.py"
+    src = scanner_path.read_text(encoding="utf-8")
+    ok("compute_signal_score" in src, "scanner signal_score çağırmıyor")
+    ok('"signal_score"' in src, "trade dict'te signal_score yok")
+    ok('"signal_grade"' in src, "trade dict'te signal_grade yok")
+
+test("scanner: compute_signal_score entegrasyonu trade'e yazıyor",
+     test_scanner_has_signal_score_integration)
+
+
+def test_scanner_settle_records_forecast_error():
+    """scanner.settle(), settlement sırasında forecast_errors'a yazıyor."""
+    scanner_path = Path(__file__).resolve().parent.parent / "bot" / "scanner.py"
+    src = scanner_path.read_text(encoding="utf-8")
+    start = src.find("def settle(")
+    end   = src.find("\ndef ", start + 1)
+    body  = src[start:end]
+    ok("record_forecast_error" in body, "settle() forecast_errors yazmıyor")
+    ok("already_recorded_error" in body, "duplicate koruması yok")
+    ok("try:" in body and "except" in body, "sessiz fallback yok")
+
+test("scanner.settle: forecast_errors tablosuna sessizce yazar",
+     test_scanner_settle_records_forecast_error)
+
+
+def test_db_phase3_schema():
+    db = _import_db_module()
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.db"
+        db.init_db(db_path)
+        import sqlite3
+        with sqlite3.connect(str(db_path)) as conn:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(paper_trades)")}
+    for c in ("signal_score", "signal_grade"):
+        ok(c in cols, f"paper_trades şemasında {c} yok")
+    for c in ("signal_score", "signal_grade"):
+        ok(c in db.PAPER_FIELDS, f"PAPER_FIELDS'te {c} yok")
+
+test("db.py: paper_trades şemasında Faz 3 kolonları (signal_*)",
+     test_db_phase3_schema)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+print(f"\n{'═'*62}")
 print(f"  SONUÇ: {PASS} geçti / {FAIL} başarısız / {PASS+FAIL} toplam")
 if FAIL == 0:
     print("  🎉 Tüm testler geçti!")

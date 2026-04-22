@@ -109,32 +109,60 @@ def save_trades(trades: list):
 def compute_station_biases(trades: list) -> dict:
     """Kapalı trade'lerden istasyon bazlı sistematik tahmin hatasını öğren.
 
-    Her istasyon için: bias = ortalama(gerçek - tahmin), en yakın tam sayıya yuvarlanır.
-    Yeterli veri (MIN_BIAS_TRADES) yoksa o istasyon için 0 döner.
+    Birincil: Kalman filter (Faz 3) — son gözlemlere daha fazla ağırlık,
+              zaman aralığına duyarlı (mevsim kaymasına adapte).
+    Yedek: basit ortalama (Kalman modülü yüklenemezse).
 
+    Yeterli veri (MIN_BIAS_TRADES) yoksa o istasyon için 0 döner.
     Örnek: EPWA için geçmiş 8 trade'de ortalama +1.4°C hata → bias = +1
-    Yani scanner top_pick'e +1 ekler ve bir üst bucket'ı hedefler.
     """
+    # Önce Kalman dene (Faz 3)
+    try:
+        from bot.kalman import kalman_station_biases
+        return kalman_station_biases(
+            trades,
+            max_correction=MAX_BIAS_CORRECTION,
+            min_trades=MIN_BIAS_TRADES,
+        )
+    except Exception:
+        pass
+
+    # Yedek: basit ortalama (eski davranış — hiçbir şey bozmasın)
     from collections import defaultdict
-    errors: dict[str, list[float]] = defaultdict(list)
+    errors: dict = defaultdict(list)
 
     for t in trades:
         if t["status"] == "closed" and t.get("actual_temp") is not None and t.get("top_pick") is not None:
             delta = t["actual_temp"] - t["top_pick"]
             errors[t["station"]].append(delta)
 
-    biases: dict[str, int] = {}
+    biases: dict = {}
     for station, deltas in errors.items():
         if len(deltas) >= MIN_BIAS_TRADES:
             avg  = sum(deltas) / len(deltas)
-            bias = math.floor(avg + 0.5)   # Python banker's rounding'i atla (round(0.5)=0 problemi)
-            # Güvenlik tavanı: çok agresif bias düzeltmesini önle
-            # (Örn: Paris 6 trade ile +3°C hesapladı ama bu aşırıydı)
+            bias = math.floor(avg + 0.5)
             bias = max(-MAX_BIAS_CORRECTION, min(MAX_BIAS_CORRECTION, bias))
             if bias != 0:
                 biases[station] = bias
 
     return biases
+
+# ── Sinyal Skoru Yardımcısı (Faz 3) ─────────────────────────────────────────
+def _score_for_second_bucket(
+    mode_pct, mode_ci_low, mode_ci_high, edge, unc, is_bimodal, n_members
+) -> dict:
+    """İkinci bucket için {signal_score, signal_grade} döner. Sessiz fallback."""
+    try:
+        from bot.signal_score import compute_signal_score
+        sig = compute_signal_score(
+            mode_pct=mode_pct, mode_ci_low=mode_ci_low,
+            mode_ci_high=mode_ci_high, edge=edge,
+            uncertainty=unc, is_bimodal=is_bimodal, n_members=n_members,
+        )
+        return {"signal_score": sig["score"], "signal_grade": sig["grade"]}
+    except Exception:
+        return {"signal_score": None, "signal_grade": None}
+
 
 # ── Bucket Eşleştirme ───────────────────────────────────────────────────────
 def find_top_pick_bucket(buckets: list, top_pick: int) -> dict | None:
@@ -420,6 +448,24 @@ def scan_date(station: str, target_date: str, trades: list,
     cheap_tag     = "💰" if price < 0.20 else "←"
     mode_tag      = f" [ens %{mode_pct}]" if mode_pct else ""
 
+    # ── Faz 3: sinyal kalitesi skoru (0-100 kompozit) ───────────────────────
+    try:
+        from bot.signal_score import compute_signal_score
+        sig = compute_signal_score(
+            mode_pct     = mode_pct,
+            mode_ci_low  = mode_ci_low,
+            mode_ci_high = mode_ci_high,
+            edge         = (mode_pct / 100 - price) if mode_pct is not None else None,
+            uncertainty  = unc,
+            is_bimodal   = is_bimodal,
+            n_members    = len(members) if members else 0,
+        )
+        signal_score = sig["score"]
+        signal_grade = sig["grade"]
+    except Exception:
+        signal_score = None
+        signal_grade = None
+
     # 2. pick bilgisi: ensemble'ın 2. adayı neydi?
     second_tag = ""
     if second_pick is not None and second_pct is not None:
@@ -444,6 +490,9 @@ def scan_date(station: str, target_date: str, trades: list,
         "ens_peak_sep":     peak_sep,
         "ens_mode_ci_low":  mode_ci_low,
         "ens_mode_ci_high": mode_ci_high,
+        # Faz 3: sinyal kalitesi
+        "signal_score":     signal_score,
+        "signal_grade":     signal_grade,
         "bucket_title":  bucket["title"],
         "condition_id":  cond_id,
         "entry_price":   price,
@@ -460,10 +509,11 @@ def scan_date(station: str, target_date: str, trades: list,
     }
 
     edge_str = f" · edge{((mode_pct/100)-price):+.0%}" if mode_pct is not None else ""
+    score_str = f" · Q{signal_score}({signal_grade[0]})" if signal_score is not None else ""
     print(
         f"  ✅ {station.upper()} {label}  "
         f"🎯{top_pick}°C (blend={blend:.1f}){mode_tag}{second_tag} @ {pct}¢ {cheap_tag}  "
-        f"{SHARES} share · risk=${cost:.2f} · pot +${potential_win:.2f}{edge_str}"
+        f"{SHARES} share · risk=${cost:.2f} · pot +${potential_win:.2f}{edge_str}{score_str}"
     )
     result_trades = [trade]
 
@@ -518,6 +568,12 @@ def scan_date(station: str, target_date: str, trades: list,
                     "ens_peak_sep":     peak_sep,
                     "ens_mode_ci_low":  mode_ci_low,
                     "ens_mode_ci_high": mode_ci_high,
+                    # Faz 3: ikinci bucket için ayrı sinyal skoru
+                    **_score_for_second_bucket(
+                        second_pct, mode_ci_low, mode_ci_high,
+                        s_edge, unc, is_bimodal,
+                        len(members) if members else 0,
+                    ),
                     "bucket_title":  second_bucket["title"],
                     "condition_id":  s_cond,
                     "entry_price":   s_price,
@@ -737,6 +793,26 @@ def settle():
                 "settled_at":  datetime.now().isoformat(),
             })
             settled += 1
+
+            # ── Faz 3: settlement gözlemini analitik tablolara yaz ──
+            # forecast_errors — sessiz başarısızlık (bot akışı bozmasın).
+            try:
+                from bot.db import record_forecast_error, already_recorded_error
+                tid = trade.get("id")
+                if tid and not already_recorded_error(tid):
+                    record_forecast_error(
+                        date=yesterday,
+                        station=station,
+                        horizon_days=None,     # scanner bu bilgiyi henüz taşımıyor
+                        blend=trade.get("blend"),
+                        top_pick=trade.get("top_pick"),
+                        spread=trade.get("spread"),
+                        uncertainty=trade.get("uncertainty"),
+                        actual_temp=float(actual),
+                        trade_id=tid,
+                    )
+            except Exception:
+                pass
 
             emoji = "🟢" if won else "🔴"
             print(
