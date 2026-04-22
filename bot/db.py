@@ -1,0 +1,407 @@
+#!/usr/bin/env python3
+"""
+SQLite altyapısı — mevcut JSON sistemi üzerinde mirror + yeni tablolar.
+
+Tasarım ilkeleri:
+  - JSON = tek kaynak (paper_trades.json, live_trades.json değişmez).
+  - SQLite = sorgulanabilir ayna + yeni veri tabloları (forecast_errors,
+    bias_corrections, model_weights). Bot çökerse SQLite silinebilir;
+    JSON'dan yeniden oluşturulur.
+  - WAL + synchronous=NORMAL: crash sonrası otomatik kurtarma, hızlı yazma.
+
+Kullanım:
+  from bot.db import get_db, sync_all, init_db
+
+  with get_db() as conn:
+      rows = conn.execute("SELECT * FROM paper_trades WHERE station=?", ("eglc",)).fetchall()
+"""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+from contextlib import contextmanager
+from datetime import datetime, timezone
+from pathlib import Path
+
+BASE_DIR    = Path(__file__).parent.parent
+PAPER_JSON  = BASE_DIR / "bot" / "paper_trades.json"
+LIVE_JSON   = BASE_DIR / "bot" / "live_trades.json"
+DB_PATH     = BASE_DIR / "bot" / "trades.db"
+
+
+# ── Şema ────────────────────────────────────────────────────────────────────
+SCHEMA_SQL = """
+PRAGMA journal_mode = WAL;
+PRAGMA synchronous  = NORMAL;
+PRAGMA foreign_keys = ON;
+
+-- ───────────────────────────────────────────────────────────────────────
+-- paper_trades: paper_trades.json'ın birebir aynası
+-- JSON her zaman kaynaktır; bu tablo sync_paper_trades() ile yenilenir
+-- ───────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS paper_trades (
+    id            TEXT PRIMARY KEY,            -- JSON'daki id alanı
+    station       TEXT NOT NULL,
+    date          TEXT NOT NULL,               -- 'YYYY-MM-DD'
+    blend         REAL,
+    spread        REAL,
+    uncertainty   TEXT,
+    top_pick      INTEGER,
+    raw_top_pick  INTEGER,
+    bias_applied  INTEGER,
+    ens_mode_pct  INTEGER,
+    ens_2nd_pick  INTEGER,
+    ens_2nd_pct   INTEGER,
+    bucket_title  TEXT,
+    condition_id  TEXT,
+    entry_price   REAL,
+    shares        REAL,
+    cost_usd      REAL,                        -- yeni format
+    size_usd      REAL,                        -- eski format (cost_usd yoksa)
+    potential_win REAL,
+    liquidity     REAL,
+    status        TEXT NOT NULL,               -- open | closed | superseded
+    entered_at    TEXT,                        -- ISO timestamp
+    actual_temp   REAL,
+    result        TEXT,                        -- WIN | LOSS | NULL
+    pnl           REAL,
+    settled_at    TEXT,
+    two_bucket    INTEGER,                     -- 0/1
+    notes         TEXT,
+    synced_at     INTEGER DEFAULT (strftime('%s','now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_paper_station_date ON paper_trades(station, date);
+CREATE INDEX IF NOT EXISTS idx_paper_status       ON paper_trades(status);
+CREATE INDEX IF NOT EXISTS idx_paper_result       ON paper_trades(result);
+
+-- ───────────────────────────────────────────────────────────────────────
+-- live_trades: live_trades.json aynası
+-- ───────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS live_trades (
+    id              TEXT PRIMARY KEY,
+    paper_id        TEXT,
+    station         TEXT NOT NULL,
+    date            TEXT NOT NULL,
+    top_pick        INTEGER,
+    bucket_title    TEXT,
+    condition_id    TEXT,
+    order_id        TEXT,
+    limit_price     REAL,
+    shares          REAL,
+    cost_usdc       REAL,
+    fill_price      REAL,
+    fill_time       TEXT,
+    placed_at       TEXT,
+    expires_at      TEXT,
+    horizon         TEXT,
+    status          TEXT NOT NULL,             -- pending_fill | filled | settled_win | settled_loss | cancelled | sell_pending
+    result          TEXT,
+    pnl_usdc        REAL,
+    settled_at      TEXT,
+    notes           TEXT,
+    redeemed        INTEGER DEFAULT 0,
+    redeemed_at     TEXT,
+    redeem_tx       TEXT,
+    sell_order_id   TEXT,
+    sell_placed_at  TEXT,
+    sell_price      REAL,
+    synced_at       INTEGER DEFAULT (strftime('%s','now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_live_station_date ON live_trades(station, date);
+CREATE INDEX IF NOT EXISTS idx_live_status       ON live_trades(status);
+CREATE INDEX IF NOT EXISTS idx_live_order_id     ON live_trades(order_id);
+
+-- ───────────────────────────────────────────────────────────────────────
+-- forecast_errors: her settlement sonrası kaydedilen model hataları
+-- (Faz 3-4 için gerekli: Kalman bias, dynamic weighting, CRPS)
+-- ───────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS forecast_errors (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    date          TEXT NOT NULL,               -- forecast target date
+    station       TEXT NOT NULL,
+    horizon_days  INTEGER,                     -- 0, 1, 2
+    month         INTEGER,                     -- 1-12
+    season        TEXT,                        -- winter|spring|summer|autumn
+
+    blend         REAL,                        -- p50 ensemble (bias öncesi)
+    top_pick      INTEGER,                     -- modun round'u
+    spread        REAL,                        -- p90-p10 / std
+    uncertainty   TEXT,
+
+    actual_temp   REAL NOT NULL,
+    error_c       REAL NOT NULL,               -- blend - actual
+    abs_error_c   REAL NOT NULL,
+    pick_error    INTEGER,                     -- top_pick - actual (integer)
+
+    trade_id      TEXT,                        -- ilgili paper_trade.id
+    created_at    INTEGER DEFAULT (strftime('%s','now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_err_station_date ON forecast_errors(station, date);
+CREATE INDEX IF NOT EXISTS idx_err_station      ON forecast_errors(station);
+CREATE INDEX IF NOT EXISTS idx_err_created      ON forecast_errors(created_at);
+
+-- ───────────────────────────────────────────────────────────────────────
+-- bias_corrections: Kalman filter bias history (Faz 3)
+-- Her settle sonrası istasyon için güncellenir
+-- ───────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS bias_corrections (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    station       TEXT NOT NULL,
+    date          TEXT NOT NULL,               -- observation date
+    measured_err  REAL NOT NULL,               -- predicted - actual (bu gözlem)
+    bias_est      REAL NOT NULL,               -- Kalman state x
+    uncertainty   REAL NOT NULL,               -- Kalman covariance P
+    correction    REAL NOT NULL,               -- apply to top_pick
+    created_at    INTEGER DEFAULT (strftime('%s','now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_bias_station_date ON bias_corrections(station, date);
+CREATE INDEX IF NOT EXISTS idx_bias_station      ON bias_corrections(station);
+
+-- ───────────────────────────────────────────────────────────────────────
+-- model_weights: istasyon × model rolling RMSE bazlı dinamik ağırlık (Faz 4)
+-- Her settle sonrası güncellenir
+-- ───────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS model_weights (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    station      TEXT NOT NULL,
+    model        TEXT NOT NULL,                -- gfs, ecmwf_ifs, icon, ukmo, meteofrance
+    weight       REAL NOT NULL,
+    rmse_30d     REAL,
+    n_samples    INTEGER,
+    recorded_at  INTEGER DEFAULT (strftime('%s','now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_weights_station_recorded ON model_weights(station, recorded_at);
+CREATE INDEX IF NOT EXISTS idx_weights_station_model    ON model_weights(station, model);
+"""
+
+
+# ── Bağlantı ────────────────────────────────────────────────────────────────
+@contextmanager
+def get_db(db_path: Path = DB_PATH, readonly: bool = False):
+    """Thread-safe SQLite bağlantısı. WAL mode sayesinde eş zamanlı read OK."""
+    if readonly:
+        uri  = f"file:{db_path}?mode=ro"
+        conn = sqlite3.connect(uri, uri=True, timeout=10)
+    else:
+        conn = sqlite3.connect(str(db_path), timeout=10)
+    conn.row_factory = sqlite3.Row
+    try:
+        yield conn
+        if not readonly:
+            conn.commit()
+    except Exception:
+        if not readonly:
+            conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def init_db(db_path: Path = DB_PATH) -> None:
+    """Şema oluştur (idempotent)."""
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with get_db(db_path) as conn:
+        conn.executescript(SCHEMA_SQL)
+
+
+# ── JSON → SQLite Mirror Senkronizasyonu ────────────────────────────────────
+PAPER_FIELDS = [
+    "id", "station", "date", "blend", "spread", "uncertainty",
+    "top_pick", "raw_top_pick", "bias_applied",
+    "ens_mode_pct", "ens_2nd_pick", "ens_2nd_pct",
+    "bucket_title", "condition_id", "entry_price", "shares",
+    "cost_usd", "size_usd", "potential_win", "liquidity",
+    "status", "entered_at", "actual_temp", "result", "pnl", "settled_at",
+    "two_bucket", "notes",
+]
+
+LIVE_FIELDS = [
+    "id", "paper_id", "station", "date", "top_pick", "bucket_title",
+    "condition_id", "order_id", "limit_price", "shares", "cost_usdc",
+    "fill_price", "fill_time", "placed_at", "expires_at", "horizon",
+    "status", "result", "pnl_usdc", "settled_at", "notes",
+    "redeemed", "redeemed_at", "redeem_tx",
+    "sell_order_id", "sell_placed_at", "sell_price",
+]
+
+
+def _bool_to_int(v):
+    if isinstance(v, bool):
+        return 1 if v else 0
+    return v
+
+
+def sync_paper_trades(db_path: Path = DB_PATH, json_path: Path = PAPER_JSON) -> int:
+    """paper_trades.json'ı SQLite'a aynala. Döner: aynalanan kayıt sayısı."""
+    if not json_path.exists():
+        return 0
+    try:
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+    except Exception:
+        return 0
+    if not isinstance(data, list):
+        return 0
+
+    placeholders = ", ".join(":" + f for f in PAPER_FIELDS)
+    columns      = ", ".join(PAPER_FIELDS)
+    sql = f"INSERT OR REPLACE INTO paper_trades ({columns}) VALUES ({placeholders})"
+
+    with get_db(db_path) as conn:
+        # Tam tazeleme: mevcut satırları temizle, sonra tüm JSON'u yaz
+        # (status değişenleri yakalamanın en güvenli yolu)
+        conn.execute("DELETE FROM paper_trades")
+        for raw in data:
+            row = {f: _bool_to_int(raw.get(f)) for f in PAPER_FIELDS}
+            conn.execute(sql, row)
+    return len(data)
+
+
+def sync_live_trades(db_path: Path = DB_PATH, json_path: Path = LIVE_JSON) -> int:
+    """live_trades.json'ı SQLite'a aynala."""
+    if not json_path.exists():
+        return 0
+    try:
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+    except Exception:
+        return 0
+    if not isinstance(data, list):
+        return 0
+
+    placeholders = ", ".join(":" + f for f in LIVE_FIELDS)
+    columns      = ", ".join(LIVE_FIELDS)
+    sql = f"INSERT OR REPLACE INTO live_trades ({columns}) VALUES ({placeholders})"
+
+    with get_db(db_path) as conn:
+        conn.execute("DELETE FROM live_trades")
+        for raw in data:
+            row = {f: _bool_to_int(raw.get(f)) for f in LIVE_FIELDS}
+            conn.execute(sql, row)
+    return len(data)
+
+
+def sync_all(db_path: Path = DB_PATH) -> dict:
+    """Her iki JSON'ı da SQLite'a aynala. Sessiz başarısızlık (bot asla bozmasın)."""
+    result = {"paper": 0, "live": 0, "errors": []}
+    try:
+        init_db(db_path)
+    except Exception as e:
+        result["errors"].append(f"init_db: {e}")
+        return result
+    # NOT: modül-düzeyi sabitleri çağrı anında resolve et (monkey-patch'e saygı)
+    try:
+        result["paper"] = sync_paper_trades(db_path, PAPER_JSON)
+    except Exception as e:
+        result["errors"].append(f"sync_paper: {e}")
+    try:
+        result["live"] = sync_live_trades(db_path, LIVE_JSON)
+    except Exception as e:
+        result["errors"].append(f"sync_live: {e}")
+    return result
+
+
+# ── Settlement-time Veri Kaydı (Faz 3+ için) ────────────────────────────────
+def record_forecast_error(
+    date: str,
+    station: str,
+    horizon_days: int | None,
+    blend: float | None,
+    top_pick: int | None,
+    spread: float | None,
+    uncertainty: str | None,
+    actual_temp: float,
+    trade_id: str | None = None,
+    db_path: Path = DB_PATH,
+) -> None:
+    """Settlement sonrası model hatasını forecast_errors tablosuna yaz.
+
+    Aynı (date, station, trade_id) tekrar yazılırsa duplicate olur — bu tabloda
+    unique constraint yok çünkü tarihsel seriyi çoğaltarak öğrenme noktalarını
+    değiştirmek istemiyoruz. Çağıran 'zaten kayıtlı mı' kontrolünden sorumlu.
+    """
+    if blend is None or actual_temp is None:
+        return
+    error_c     = round(blend - actual_temp, 3)
+    abs_error_c = round(abs(error_c), 3)
+    pick_err    = (top_pick - round(actual_temp)) if top_pick is not None else None
+
+    month = int(date[5:7]) if date else None
+    season = (
+        "winter" if month in (12, 1, 2)
+        else "spring" if month in (3, 4, 5)
+        else "summer" if month in (6, 7, 8)
+        else "autumn" if month in (9, 10, 11)
+        else None
+    )
+
+    with get_db(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO forecast_errors
+                (date, station, horizon_days, month, season,
+                 blend, top_pick, spread, uncertainty,
+                 actual_temp, error_c, abs_error_c, pick_error, trade_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (date, station, horizon_days, month, season,
+             blend, top_pick, spread, uncertainty,
+             actual_temp, error_c, abs_error_c, pick_err, trade_id),
+        )
+
+
+def already_recorded_error(trade_id: str, db_path: Path = DB_PATH) -> bool:
+    """Bu trade_id için forecast_errors'a zaten yazıldı mı?"""
+    if not trade_id:
+        return False
+    with get_db(db_path, readonly=True) as conn:
+        row = conn.execute(
+            "SELECT 1 FROM forecast_errors WHERE trade_id=? LIMIT 1",
+            (trade_id,),
+        ).fetchone()
+        return row is not None
+
+
+# ── Hızlı Sorgular (debugging / monitoring) ─────────────────────────────────
+def summary_stats(db_path: Path = DB_PATH) -> dict:
+    """Hızlı özet: kaç trade, kaç error kaydı, hangi istasyonlar."""
+    with get_db(db_path, readonly=True) as conn:
+        return {
+            "paper_total":   conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0],
+            "paper_open":    conn.execute("SELECT COUNT(*) FROM paper_trades WHERE status='open'").fetchone()[0],
+            "paper_closed":  conn.execute("SELECT COUNT(*) FROM paper_trades WHERE status='closed'").fetchone()[0],
+            "live_total":    conn.execute("SELECT COUNT(*) FROM live_trades").fetchone()[0],
+            "live_pending":  conn.execute("SELECT COUNT(*) FROM live_trades WHERE status='pending_fill'").fetchone()[0],
+            "live_filled":   conn.execute("SELECT COUNT(*) FROM live_trades WHERE status='filled'").fetchone()[0],
+            "live_settled":  conn.execute("SELECT COUNT(*) FROM live_trades WHERE status LIKE 'settled_%'").fetchone()[0],
+            "errors_total":  conn.execute("SELECT COUNT(*) FROM forecast_errors").fetchone()[0],
+            "bias_total":    conn.execute("SELECT COUNT(*) FROM bias_corrections").fetchone()[0],
+            "weights_total": conn.execute("SELECT COUNT(*) FROM model_weights").fetchone()[0],
+        }
+
+
+if __name__ == "__main__":
+    # CLI: python3 -m bot.db
+    import sys
+    cmd = sys.argv[1] if len(sys.argv) > 1 else "sync"
+    if cmd == "init":
+        init_db()
+        print(f"✅ Schema oluşturuldu: {DB_PATH}")
+    elif cmd == "sync":
+        result = sync_all()
+        print(f"📥 Paper: {result['paper']} | Live: {result['live']}")
+        if result["errors"]:
+            for e in result["errors"]:
+                print(f"  ⚠️  {e}")
+    elif cmd == "stats":
+        init_db()
+        result = sync_all()
+        stats = summary_stats()
+        for k, v in stats.items():
+            print(f"  {k:16s}: {v}")
+    else:
+        print(f"Kullanım: python3 -m bot.db [init|sync|stats]")

@@ -89,6 +89,13 @@ def save_trades(trades: list):
     TRADES_FILE.write_text(
         json.dumps(trades, indent=2, ensure_ascii=False), encoding="utf-8"
     )
+    # SQLite ayna senkronizasyonu — sessiz başarısızlık (bot akışı bozmasın)
+    try:
+        from bot.db import sync_paper_trades, init_db
+        init_db()
+        sync_paper_trades()
+    except Exception:
+        pass
 
 # ── Adaptif Bias Hesabı ─────────────────────────────────────────────────────
 def compute_station_biases(trades: list) -> dict:

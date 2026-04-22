@@ -26,3 +26,9 @@ bot/paper_trades.json
 bot/live_trades.json
 bot/scanner.log
 bot/trader.log
+
+# SQLite DB (yerel/VPS'te üretilir, migration ile oluşur)
+bot/trades.db
+bot/trades.db-shm
+bot/trades.db-wal
+backups/

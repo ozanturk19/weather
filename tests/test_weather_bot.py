@@ -1340,6 +1340,403 @@ test("2-bucket P&L: birisi kazanınca net pozitif, ikisi kayıpsa negatif",
      test_two_bucket_pnl)
 
 # ══════════════════════════════════════════════════════════════════════════════
+print("\n══════════════════════════════════════════════════════════════")
+print(" TEST 25: SQLite Altyapısı (Faz 1)")
+print("══════════════════════════════════════════════════════════════")
+
+def _import_db_module():
+    """bot/db.py'yi bağımsız yükle — Python 3.9 annotation sorunu için."""
+    import importlib.util, pathlib
+    db_path = pathlib.Path(__file__).resolve().parent.parent / "bot" / "db.py"
+    if not db_path.exists():
+        raise FileNotFoundError(f"bot/db.py bulunamadı: {db_path}")
+    spec = importlib.util.spec_from_file_location("weather_bot_db_test", db_path)
+    mod  = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+def test_db_module_loads():
+    db = _import_db_module()
+    ok(hasattr(db, "init_db"),           "init_db eksik")
+    ok(hasattr(db, "sync_all"),          "sync_all eksik")
+    ok(hasattr(db, "sync_paper_trades"), "sync_paper_trades eksik")
+    ok(hasattr(db, "sync_live_trades"),  "sync_live_trades eksik")
+    ok(hasattr(db, "record_forecast_error"), "record_forecast_error eksik")
+    ok(hasattr(db, "summary_stats"),     "summary_stats eksik")
+
+test("db modülü yüklenir ve gerekli API'yi sağlar", test_db_module_loads)
+
+
+def _make_sample_paper(n=3):
+    """Örnek paper trade kayıtları üret."""
+    return [
+        {
+            "id": f"test_{i}", "station": "eglc", "date": "2026-04-22",
+            "blend": 14.5 + i*0.3, "spread": 0.5, "uncertainty": "Düşük",
+            "top_pick": 15, "raw_top_pick": 14, "bias_applied": 1,
+            "ens_mode_pct": 40, "ens_2nd_pick": 14, "ens_2nd_pct": 22,
+            "bucket_title": "15°C", "condition_id": f"cond{i}",
+            "entry_price": 0.18, "shares": 10, "cost_usd": 1.80,
+            "potential_win": 8.20, "liquidity": 10000,
+            "status": "closed" if i < 2 else "open",
+            "entered_at": "2026-04-21T12:00:00",
+            "actual_temp": 15.0 if i < 2 else None,
+            "result": "WIN" if i < 2 else None,
+            "pnl": 8.20 if i < 2 else None,
+            "settled_at": "2026-04-22T17:00:00" if i < 2 else None,
+        }
+        for i in range(n)
+    ]
+
+
+def test_db_schema_creates_all_tables():
+    db = _import_db_module()
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.db"
+        db.init_db(db_path)
+        import sqlite3
+        with sqlite3.connect(str(db_path)) as conn:
+            tables = {r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()}
+        expected = {"paper_trades", "live_trades", "forecast_errors",
+                    "bias_corrections", "model_weights"}
+        for t in expected:
+            ok(t in tables, f"Tablo {t} oluşmamış (mevcut: {tables})")
+
+test("db şeması 5 tablo oluşturur", test_db_schema_creates_all_tables)
+
+
+def test_db_wal_mode_enabled():
+    db = _import_db_module()
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.db"
+        db.init_db(db_path)
+        import sqlite3
+        with sqlite3.connect(str(db_path)) as conn:
+            mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+        eq(mode.lower(), "wal", f"Journal mode WAL olmalı, gerçek: {mode}")
+
+test("db WAL mode aktif (crash recovery)", test_db_wal_mode_enabled)
+
+
+def test_sync_paper_trades_roundtrip():
+    db = _import_db_module()
+    with tempfile.TemporaryDirectory() as td:
+        json_path = Path(td) / "paper.json"
+        db_path   = Path(td) / "test.db"
+        samples   = _make_sample_paper(5)
+        json_path.write_text(json.dumps(samples))
+
+        db.init_db(db_path)
+        n = db.sync_paper_trades(db_path, json_path)
+        eq(n, 5, "sync_paper_trades kayıt sayısı yanlış")
+
+        import sqlite3
+        with sqlite3.connect(str(db_path)) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("SELECT * FROM paper_trades ORDER BY id").fetchall()
+            eq(len(rows), 5, "DB'de 5 kayıt olmalı")
+            eq(rows[0]["station"], "eglc")
+            eq(rows[0]["status"], "closed")
+            eq(rows[0]["top_pick"], 15)
+            total_pnl = conn.execute(
+                "SELECT COALESCE(SUM(pnl),0) FROM paper_trades WHERE pnl IS NOT NULL"
+            ).fetchone()[0]
+            # 2 closed trade (i<2) — her biri 8.20, toplam 16.40
+            ok(abs(total_pnl - 16.40) < 0.01, f"pnl toplamı yanlış: {total_pnl}")
+
+test("sync_paper_trades roundtrip (JSON→DB, veri bütünlüğü)",
+     test_sync_paper_trades_roundtrip)
+
+
+def test_sync_handles_missing_json_gracefully():
+    """JSON dosyası yoksa veya bozuksa hata verme."""
+    db = _import_db_module()
+    with tempfile.TemporaryDirectory() as td:
+        db_path   = Path(td) / "test.db"
+        missing   = Path(td) / "nonexistent.json"
+        db.init_db(db_path)
+        # Eksik dosya: 0 döner, hata fırlatmaz
+        n = db.sync_paper_trades(db_path, missing)
+        eq(n, 0, "Eksik dosya 0 döndürmeli")
+        # Bozuk JSON: 0 döner
+        corrupt = Path(td) / "corrupt.json"
+        corrupt.write_text("{ not valid json")
+        n = db.sync_paper_trades(db_path, corrupt)
+        eq(n, 0, "Bozuk JSON 0 döndürmeli")
+
+test("sync eksik/bozuk JSON'da sessizce 0 döner", test_sync_handles_missing_json_gracefully)
+
+
+def test_sync_idempotent():
+    """Aynı JSON'u 2 kez sync et → kayıt sayısı değişmesin."""
+    db = _import_db_module()
+    with tempfile.TemporaryDirectory() as td:
+        json_path = Path(td) / "paper.json"
+        db_path   = Path(td) / "test.db"
+        samples   = _make_sample_paper(3)
+        json_path.write_text(json.dumps(samples))
+        db.init_db(db_path)
+        db.sync_paper_trades(db_path, json_path)
+        db.sync_paper_trades(db_path, json_path)  # ikinci kez
+        db.sync_paper_trades(db_path, json_path)  # üçüncü kez
+        import sqlite3
+        with sqlite3.connect(str(db_path)) as conn:
+            n = conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0]
+            eq(n, 3, "Çoklu sync sonrası 3 kayıt olmalı (duplicate yok)")
+
+test("sync idempotent (çoklu çağrı duplicate üretmez)", test_sync_idempotent)
+
+
+def test_sync_reflects_status_changes():
+    """JSON'da status değiştiğinde SQLite yansıtsın."""
+    db = _import_db_module()
+    with tempfile.TemporaryDirectory() as td:
+        json_path = Path(td) / "paper.json"
+        db_path   = Path(td) / "test.db"
+        samples   = _make_sample_paper(3)
+        json_path.write_text(json.dumps(samples))
+        db.init_db(db_path)
+        db.sync_paper_trades(db_path, json_path)
+
+        # 3. trade'i open'dan closed'a çevir
+        samples[2]["status"]      = "closed"
+        samples[2]["actual_temp"] = 14.0
+        samples[2]["result"]      = "LOSS"
+        samples[2]["pnl"]         = -1.80
+        json_path.write_text(json.dumps(samples))
+        db.sync_paper_trades(db_path, json_path)
+
+        import sqlite3
+        with sqlite3.connect(str(db_path)) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT status, result, pnl FROM paper_trades WHERE id='test_2'"
+            ).fetchone()
+            eq(row["status"], "closed")
+            eq(row["result"], "LOSS")
+            ok(abs(row["pnl"] - (-1.80)) < 0.01)
+
+test("sync status değişimlerini yansıtır (open→closed)",
+     test_sync_reflects_status_changes)
+
+
+def test_live_trades_sync():
+    """Live trade sync + status field'ları."""
+    db = _import_db_module()
+    with tempfile.TemporaryDirectory() as td:
+        json_path = Path(td) / "live.json"
+        db_path   = Path(td) / "test.db"
+        samples = [
+            {
+                "id": "live_1", "paper_id": "test_0", "station": "eglc",
+                "date": "2026-04-22", "top_pick": 15, "bucket_title": "15°C",
+                "condition_id": "c1", "order_id": "o1", "limit_price": 0.18,
+                "shares": 5, "cost_usdc": 0.90, "fill_price": 0.18,
+                "fill_time": "2026-04-21T13:00:00",
+                "placed_at": "2026-04-21T12:00:00",
+                "expires_at": "2026-04-21T17:00:00", "horizon": "D+1",
+                "status": "settled_win", "result": "WIN", "pnl_usdc": 4.10,
+                "settled_at": "2026-04-22T17:00:00", "notes": "actual=15",
+                "redeemed": True, "redeemed_at": "2026-04-22T18:00:00",
+                "redeem_tx": "abc123",
+            },
+            {
+                "id": "live_2", "paper_id": "test_1", "station": "lfpg",
+                "date": "2026-04-23", "top_pick": 18, "bucket_title": "18°C",
+                "condition_id": "c2", "order_id": "o2", "limit_price": 0.25,
+                "shares": 5, "cost_usdc": 1.25, "fill_price": None,
+                "placed_at": "2026-04-22T10:00:00",
+                "expires_at": "2026-04-22T15:00:00", "horizon": "D+1",
+                "status": "pending_fill", "result": None, "pnl_usdc": None,
+                "settled_at": None, "notes": "",
+            },
+        ]
+        json_path.write_text(json.dumps(samples))
+        db.init_db(db_path)
+        n = db.sync_live_trades(db_path, json_path)
+        eq(n, 2)
+        import sqlite3
+        with sqlite3.connect(str(db_path)) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT * FROM live_trades ORDER BY id"
+            ).fetchall()
+            eq(rows[0]["status"], "settled_win")
+            eq(rows[0]["redeemed"], 1, "bool True → 1 olarak kaydedilmeli")
+            eq(rows[1]["status"], "pending_fill")
+            ok(rows[1]["fill_price"] is None)
+
+test("sync_live_trades tüm field'ları (bool dönüşümü dahil)",
+     test_live_trades_sync)
+
+
+def test_record_forecast_error_writes_row():
+    db = _import_db_module()
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.db"
+        db.init_db(db_path)
+        db.record_forecast_error(
+            date="2026-04-22", station="eglc",
+            horizon_days=1, blend=14.5, top_pick=15,
+            spread=0.5, uncertainty="Düşük",
+            actual_temp=14.0, trade_id="test_x",
+            db_path=db_path,
+        )
+        import sqlite3
+        with sqlite3.connect(str(db_path)) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("SELECT * FROM forecast_errors").fetchone()
+            eq(row["date"], "2026-04-22")
+            eq(row["station"], "eglc")
+            eq(row["month"], 4)
+            eq(row["season"], "spring")
+            ok(abs(row["error_c"] - 0.5) < 0.01,   "error_c yanlış")
+            ok(abs(row["abs_error_c"] - 0.5) < 0.01, "abs_error_c yanlış")
+            eq(row["pick_error"], 1)   # 15 - round(14.0) = 1
+            eq(row["trade_id"], "test_x")
+
+test("record_forecast_error tüm bileşenleri yazar (season, pick_error)",
+     test_record_forecast_error_writes_row)
+
+
+def test_already_recorded_error():
+    db = _import_db_module()
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.db"
+        db.init_db(db_path)
+        eq(db.already_recorded_error("t1", db_path), False, "Başta yok")
+        db.record_forecast_error(
+            date="2026-04-22", station="eglc", horizon_days=1,
+            blend=14.0, top_pick=14, spread=0.3, uncertainty="Düşük",
+            actual_temp=14.0, trade_id="t1", db_path=db_path,
+        )
+        eq(db.already_recorded_error("t1", db_path), True, "Yazılan true olmalı")
+        eq(db.already_recorded_error("t2", db_path), False, "Yazılmayan false")
+
+test("already_recorded_error duplicate koruması", test_already_recorded_error)
+
+
+def test_sync_preserves_pnl_totals():
+    """JSON'daki toplam P&L SQLite'a birebir aktarılmalı."""
+    db = _import_db_module()
+    with tempfile.TemporaryDirectory() as td:
+        json_path = Path(td) / "paper.json"
+        db_path   = Path(td) / "test.db"
+        samples = [
+            {"id": "t1", "station": "eglc", "date": "2026-04-20",
+             "status": "closed", "pnl": 7.30, "top_pick": 14,
+             "entry_price": 0.27, "shares": 10, "cost_usd": 2.70},
+            {"id": "t2", "station": "lfpg", "date": "2026-04-20",
+             "status": "closed", "pnl": -1.80, "top_pick": 18,
+             "entry_price": 0.18, "shares": 10, "cost_usd": 1.80},
+            {"id": "t3", "station": "ltac", "date": "2026-04-20",
+             "status": "closed", "pnl": -2.50, "top_pick": 10,
+             "entry_price": 0.25, "shares": 10, "cost_usd": 2.50},
+        ]
+        json_path.write_text(json.dumps(samples))
+        db.init_db(db_path)
+        db.sync_paper_trades(db_path, json_path)
+
+        json_total = sum(t["pnl"] for t in samples)   # 7.30 - 1.80 - 2.50 = 3.00
+        import sqlite3
+        with sqlite3.connect(str(db_path)) as conn:
+            db_total = conn.execute(
+                "SELECT SUM(pnl) FROM paper_trades WHERE pnl IS NOT NULL"
+            ).fetchone()[0]
+        ok(abs(db_total - json_total) < 0.01,
+           f"P&L uyuşmuyor: JSON={json_total} DB={db_total}")
+
+test("sync P&L toplamlarını bozmadan aktarır",
+     test_sync_preserves_pnl_totals)
+
+
+def test_sync_all_handles_both_files():
+    db = _import_db_module()
+    with tempfile.TemporaryDirectory() as td:
+        paper_json = Path(td) / "paper.json"
+        live_json  = Path(td) / "live.json"
+        db_path    = Path(td) / "test.db"
+        paper_json.write_text(json.dumps(_make_sample_paper(4)))
+        live_json.write_text(json.dumps([{
+            "id": "l1", "paper_id": "test_0", "station": "eglc",
+            "date": "2026-04-22", "top_pick": 15, "bucket_title": "15°C",
+            "condition_id": "c1", "order_id": "o1", "limit_price": 0.18,
+            "shares": 5, "cost_usdc": 0.90, "status": "filled",
+        }]))
+        # monkey-patch yollar
+        orig_p, orig_l, orig_d = db.PAPER_JSON, db.LIVE_JSON, db.DB_PATH
+        db.PAPER_JSON = paper_json
+        db.LIVE_JSON  = live_json
+        db.DB_PATH    = db_path
+        try:
+            r = db.sync_all(db_path)
+            eq(r["paper"], 4)
+            eq(r["live"], 1)
+            eq(r["errors"], [])
+        finally:
+            db.PAPER_JSON, db.LIVE_JSON, db.DB_PATH = orig_p, orig_l, orig_d
+
+test("sync_all her iki JSON'ı birlikte işler",
+     test_sync_all_handles_both_files)
+
+
+def test_summary_stats_reports_counts():
+    db = _import_db_module()
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.db"
+        db.init_db(db_path)
+        # 2 open, 1 closed paper
+        import sqlite3
+        with sqlite3.connect(str(db_path)) as conn:
+            for i, st in enumerate(["open", "open", "closed"]):
+                conn.execute(
+                    "INSERT INTO paper_trades(id,station,date,status) "
+                    "VALUES (?,?,?,?)",
+                    (f"p{i}", "eglc", "2026-04-22", st),
+                )
+            conn.commit()
+        stats = db.summary_stats(db_path)
+        eq(stats["paper_total"], 3)
+        eq(stats["paper_open"], 2)
+        eq(stats["paper_closed"], 1)
+
+test("summary_stats trade sayılarını doğru raporlar",
+     test_summary_stats_reports_counts)
+
+
+def test_scanner_save_has_sync_hook():
+    """scanner.save_trades artık sync_paper_trades çağırıyor."""
+    scanner_path = Path(__file__).resolve().parent.parent / "bot" / "scanner.py"
+    src = scanner_path.read_text(encoding="utf-8")
+    ok("sync_paper_trades" in src, "scanner.save_trades sync çağırmıyor")
+    # try/except ile güvenli olmalı
+    save_fn_start = src.find("def save_trades(")
+    save_fn_end   = src.find("\ndef ", save_fn_start + 1)
+    save_fn       = src[save_fn_start:save_fn_end]
+    ok("try:" in save_fn and "except" in save_fn,
+       "save_trades içinde sync try/except eksik — sync hatası scanner'ı çökertebilir")
+
+test("scanner.save_trades sync_paper_trades'i güvenle çağırır",
+     test_scanner_save_has_sync_hook)
+
+
+def test_trader_save_has_sync_hook():
+    trader_path = Path(__file__).resolve().parent.parent / "bot" / "trader.py"
+    src = trader_path.read_text(encoding="utf-8")
+    ok("sync_live_trades" in src, "trader.save_live_trades sync çağırmıyor")
+    save_fn_start = src.find("def save_live_trades(")
+    save_fn_end   = src.find("\ndef ", save_fn_start + 1)
+    save_fn       = src[save_fn_start:save_fn_end]
+    ok("try:" in save_fn and "except" in save_fn,
+       "save_live_trades içinde sync try/except eksik")
+
+test("trader.save_live_trades sync_live_trades'i güvenle çağırır",
+     test_trader_save_has_sync_hook)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 print(f"\n{'═'*62}")
 print(f"  SONUÇ: {PASS} geçti / {FAIL} başarısız / {PASS+FAIL} toplam")
 if FAIL == 0:

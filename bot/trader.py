@@ -84,6 +84,13 @@ def save_live_trades(trades: list):
     tmp = TRADES_FILE.with_suffix(".tmp")
     tmp.write_text(json.dumps(trades, indent=2, ensure_ascii=False), encoding="utf-8")
     tmp.replace(TRADES_FILE)
+    # SQLite ayna senkronizasyonu — sessiz başarısızlık
+    try:
+        from bot.db import sync_live_trades, init_db
+        init_db()
+        sync_live_trades()
+    except Exception:
+        pass
 
 # ── CLOB Client Kurulumu ────────────────────────────────────────────────────
 def setup_client():
