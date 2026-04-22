@@ -69,6 +69,14 @@ MIN_EDGE     = 0.05  # ensemble olasılığı (mode_pct) - market fiyatı en az 
                      # Örn: %35 ensemble → 28¢ market → edge +7% → gir ✓
                      #      %30 ensemble → 28¢ market → edge +2% → geçersiz ✗
 
+# Faz 2: bootstrap CI tabanlı kırılganlık eşiği
+# Bootstrap CI alt sınırı MIN_MODE_PCT - 10'un altındaysa consensus aslında
+# hassas (üye değişince dağılabilir) — pas geç.
+MIN_MODE_CI_LOW = 20  # bootstrap %5 percentile en az bu olmalı (MIN_MODE_PCT=30 iken)
+
+# Faz 2: bimodal dağılım uyarısı (sadece log, ret değil — 2-bucket halleder)
+BIMODAL_MAX_SEPARATION = 1   # üstü = tepeler uzak, tek bucket stratejisi riskli
+
 # İstasyon bazlı fiyat tavanı (sistematik sorunlu istasyonlar)
 STATION_MAX_PRICE: dict[str, float] = {
     "lfpg": 0.18,   # Paris: %10 win rate, settlement kaynak uyumsuzluğu (+1.9°C artık hata)
@@ -226,9 +234,11 @@ def scan_date(station: str, target_date: str, trades: list,
         unc    = blend_obj.get("uncertainty", "?")
 
         # top_pick: ensemble member maxlarının modu, yoksa round(blend)
+        ens_day: dict = {}
         try:
             r_ens   = httpx.get(f"{WEATHER_API}/api/ensemble?station={station}", timeout=30)
-            members = r_ens.json().get("days", {}).get(target_date, {}).get("member_maxes", [])
+            ens_day = r_ens.json().get("days", {}).get(target_date, {})
+            members = ens_day.get("member_maxes", [])
         except Exception:
             members = []
 
@@ -245,6 +255,12 @@ def scan_date(station: str, target_date: str, trades: list,
             second_pick = None
             second_pct  = None
 
+        # Faz 2: ensemble şekil metrikleri (API varsa)
+        is_bimodal    = bool(ens_day.get("is_bimodal"))
+        peak_sep      = ens_day.get("peak_separation")
+        mode_ci_low   = ens_day.get("mode_ci_low")
+        mode_ci_high  = ens_day.get("mode_ci_high")
+
         # ── Ensemble varlık kontrolü ────────────────────────────────────────
         # Ensemble verisi olmadan top_pick güvenilirliği düşük → pas
         if not members:
@@ -257,6 +273,26 @@ def scan_date(station: str, target_date: str, trades: list,
             print(
                 f"  ⛔ {station.upper()} {label}  🎯{top_pick}°C"
                 f" — konsensüs zayıf (%{mode_pct} < %{MIN_MODE_PCT}), pas"
+            )
+            return None
+
+        # ── Faz 2: bootstrap CI kırılganlık filtresi ────────────────────────
+        # mode_pct kendi başına yüksek olsa da bootstrap %5 alt sınırı çok
+        # düşükse consensus kırılgan (birkaç üye değişince dağılır) — pas geç.
+        if mode_ci_low is not None and mode_ci_low < MIN_MODE_CI_LOW:
+            print(
+                f"  ⛔ {station.upper()} {label}  🎯{top_pick}°C"
+                f" — CI alt %{mode_ci_low} < %{MIN_MODE_CI_LOW} (konsensüs kırılgan), pas"
+            )
+            return None
+
+        # ── Faz 2: bimodal uyarı (tepe ayrımı geniş = risk) ──────────────────
+        # 2-bucket stratejisi bitişik tepeleri (±1°C) halleder; 2°C+ ayrımda
+        # hangi tepenin gerçekleşeceği belirsiz → pas.
+        if is_bimodal and peak_sep is not None and peak_sep > BIMODAL_MAX_SEPARATION:
+            print(
+                f"  ⛔ {station.upper()} {label}  🎯{top_pick}°C"
+                f" — bimodal dağılım (tepe ayrımı {peak_sep}°C > {BIMODAL_MAX_SEPARATION}), pas"
             )
             return None
 
@@ -403,6 +439,11 @@ def scan_date(station: str, target_date: str, trades: list,
         "ens_mode_pct":  mode_pct,
         "ens_2nd_pick":  second_pick,
         "ens_2nd_pct":   second_pct,
+        # Faz 2 şekil metrikleri (geçmiş analizi için kayıt altına alınır)
+        "ens_is_bimodal":   is_bimodal,
+        "ens_peak_sep":     peak_sep,
+        "ens_mode_ci_low":  mode_ci_low,
+        "ens_mode_ci_high": mode_ci_high,
         "bucket_title":  bucket["title"],
         "condition_id":  cond_id,
         "entry_price":   price,
@@ -473,6 +514,10 @@ def scan_date(station: str, target_date: str, trades: list,
                     "ens_mode_pct":  second_pct,
                     "ens_2nd_pick":  top_pick,
                     "ens_2nd_pct":   mode_pct,
+                    "ens_is_bimodal":   is_bimodal,
+                    "ens_peak_sep":     peak_sep,
+                    "ens_mode_ci_low":  mode_ci_low,
+                    "ens_mode_ci_high": mode_ci_high,
                     "bucket_title":  second_bucket["title"],
                     "condition_id":  s_cond,
                     "entry_price":   s_price,

@@ -53,6 +53,11 @@ CREATE TABLE IF NOT EXISTS paper_trades (
     ens_mode_pct  INTEGER,
     ens_2nd_pick  INTEGER,
     ens_2nd_pct   INTEGER,
+    -- Faz 2: ensemble şekil metrikleri
+    ens_is_bimodal   INTEGER,
+    ens_peak_sep     INTEGER,
+    ens_mode_ci_low  INTEGER,
+    ens_mode_ci_high INTEGER,
     bucket_title  TEXT,
     condition_id  TEXT,
     entry_price   REAL,
@@ -204,10 +209,26 @@ def get_db(db_path: Path = DB_PATH, readonly: bool = False):
 
 
 def init_db(db_path: Path = DB_PATH) -> None:
-    """Şema oluştur (idempotent)."""
+    """Şema oluştur (idempotent) + olası yeni kolonları ekle (migration)."""
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with get_db(db_path) as conn:
         conn.executescript(SCHEMA_SQL)
+        _migrate_add_columns(conn)
+
+
+def _migrate_add_columns(conn) -> None:
+    """Şema evrimi — eksik kolonları idempotent olarak ekler."""
+    # paper_trades: Faz 2 şekil metrikleri
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(paper_trades)")}
+    new_cols = [
+        ("ens_is_bimodal",   "INTEGER"),
+        ("ens_peak_sep",     "INTEGER"),
+        ("ens_mode_ci_low",  "INTEGER"),
+        ("ens_mode_ci_high", "INTEGER"),
+    ]
+    for col, typ in new_cols:
+        if col not in existing:
+            conn.execute(f"ALTER TABLE paper_trades ADD COLUMN {col} {typ}")
 
 
 # ── JSON → SQLite Mirror Senkronizasyonu ────────────────────────────────────
@@ -215,6 +236,8 @@ PAPER_FIELDS = [
     "id", "station", "date", "blend", "spread", "uncertainty",
     "top_pick", "raw_top_pick", "bias_applied",
     "ens_mode_pct", "ens_2nd_pick", "ens_2nd_pct",
+    # Faz 2 şekil metrikleri
+    "ens_is_bimodal", "ens_peak_sep", "ens_mode_ci_low", "ens_mode_ci_high",
     "bucket_title", "condition_id", "entry_price", "shares",
     "cost_usd", "size_usd", "potential_win", "liquidity",
     "status", "entered_at", "actual_temp", "result", "pnl", "settled_at",

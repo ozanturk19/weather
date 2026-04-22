@@ -1738,6 +1738,234 @@ test("trader.save_live_trades sync_live_trades'i güvenle çağırır",
 
 # ══════════════════════════════════════════════════════════════════════════════
 print(f"\n{'═'*62}")
+print(" TEST 26: Faz 2 — Bimodal + Bootstrap + Dinamik CALIB")
+print(f"{'═'*62}")
+
+def _import_main_module():
+    """main.py'yi scanner.py import'unu atlamak için doğrudan yükle."""
+    import importlib.util
+    main_path = Path(__file__).resolve().parent.parent / "main.py"
+    spec = importlib.util.spec_from_file_location("weather_main", main_path)
+    mod  = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_dynamic_calib_basic():
+    m = _import_main_module()
+    # D+0 temel
+    ok(abs(m.dynamic_calib_factor(0, 0.5) - 1.2) < 0.01, "D+0 base=1.2")
+    # D+1 temel
+    ok(abs(m.dynamic_calib_factor(1, 0.5) - 1.5) < 0.01, "D+1 base=1.5")
+    # D+2 temel
+    ok(abs(m.dynamic_calib_factor(2, 0.5) - 2.0) < 0.01, "D+2 base=2.0")
+
+test("dynamic_calib_factor horizon tabanlı (0→1.2, 1→1.5, 2→2.0)",
+     test_dynamic_calib_basic)
+
+
+def test_dynamic_calib_spread_extra():
+    m = _import_main_module()
+    # geniş spread → +0.2
+    v = m.dynamic_calib_factor(1, 2.5)
+    ok(abs(v - 1.7) < 0.01, f"spread>2.0 için 1.5+0.2=1.7 beklenir, bulunan {v}")
+    # tavan 2.5
+    v = m.dynamic_calib_factor(2, 3.0)
+    ok(v <= 2.5, f"tavan 2.5 aşıldı: {v}")
+
+test("dynamic_calib_factor: spread>2°C → +0.2 ek, tavan 2.5",
+     test_dynamic_calib_spread_extra)
+
+
+def test_dynamic_calib_none_spread():
+    m = _import_main_module()
+    # None spread → sadece base
+    v = m.dynamic_calib_factor(1, None)
+    ok(abs(v - 1.5) < 0.01)
+
+test("dynamic_calib_factor: spread None → sadece base",
+     test_dynamic_calib_none_spread)
+
+
+def test_bimodal_unimodal():
+    m = _import_main_module()
+    # tek tepe — 90 üye 15 civarında toplanmış
+    members = [15.0] * 50 + [14.7, 15.3, 14.5, 15.5, 15.1] * 2 + [16.0] * 5 + [14.0] * 5
+    r = m.bimodal_analysis(members)
+    ok(not r["is_bimodal"], f"tek tepe bimodal sayıldı: {r}")
+
+test("bimodal_analysis: tek tepeli dağılım bimodal değil",
+     test_bimodal_unimodal)
+
+
+def test_bimodal_detected():
+    m = _import_main_module()
+    # iki tepe, 3°C ayrımda — açık bimodal
+    members = [13.0] * 25 + [13.2] * 10 + [16.0] * 25 + [15.8] * 10
+    r = m.bimodal_analysis(members)
+    ok(r["is_bimodal"], f"bimodal dağılım yakalanmadı: {r}")
+    ok(r["separation"] is not None and r["separation"] >= 2,
+       f"tepe ayrımı yanlış: {r}")
+
+test("bimodal_analysis: iki tepeli dağılım yakalanır (ayrım≥2°C)",
+     test_bimodal_detected)
+
+
+def test_bimodal_close_peaks_not_flagged():
+    m = _import_main_module()
+    # İki tepe ama sadece 1°C ayrımda — 2-bucket stratejisi halleder, bimodal sayılmaz
+    members = [14.0] * 20 + [15.0] * 18 + [14.5] * 5 + [15.5] * 5
+    r = m.bimodal_analysis(members)
+    ok(not r["is_bimodal"],
+       f"bitişik tepeler (ayrım 1°C) bimodal işaretlenmemeli: {r}")
+
+test("bimodal_analysis: bitişik tepeler (ayrım<2°C) bimodal değil",
+     test_bimodal_close_peaks_not_flagged)
+
+
+def test_bootstrap_tight_ci_strong_mode():
+    m = _import_main_module()
+    # 90 üyenin 70'i 15°C → mod çok kararlı
+    members = [15.0] * 70 + [14.7, 15.3, 16.0, 14.0] * 5
+    r = m.bootstrap_mode_ci(members)
+    ok(r["top_pick"] == 15, f"top_pick yanlış: {r}")
+    # CI alt sınır en az 60 olmalı (mod çok güçlü)
+    ok(r["ci_low"] >= 60, f"güçlü modda CI alt çok düşük: {r}")
+
+test("bootstrap_mode_ci: güçlü mod → dar CI (ci_low>=60)",
+     test_bootstrap_tight_ci_strong_mode)
+
+
+def test_bootstrap_wide_ci_fragile_mode():
+    m = _import_main_module()
+    # 40 üye, sadece 11'i (top_pick için) %27 — sınırda zayıf
+    members = [15.0] * 11 + [14.0] * 10 + [16.0] * 10 + [13.0] * 9
+    r = m.bootstrap_mode_ci(members)
+    ok(r["mode_pct"] <= 30, f"mode_pct çok yüksek: {r}")
+    # CI geniş olmalı (fragile)
+    ok(r["ci_high"] - r["ci_low"] >= 10,
+       f"kırılgan modda CI dar: {r}")
+
+test("bootstrap_mode_ci: kırılgan mod → geniş CI (high-low>=10)",
+     test_bootstrap_wide_ci_fragile_mode)
+
+
+def test_bootstrap_deterministic():
+    """Aynı ensemble → aynı CI (scanner her çağrıda aynı sonucu görsün)."""
+    m = _import_main_module()
+    members = [15.0] * 30 + [14.0, 16.0] * 10 + [13.5, 15.5] * 10
+    r1 = m.bootstrap_mode_ci(members)
+    r2 = m.bootstrap_mode_ci(members)
+    ok(r1["ci_low"] == r2["ci_low"] and r1["ci_high"] == r2["ci_high"],
+       f"bootstrap deterministik değil: {r1} vs {r2}")
+
+test("bootstrap_mode_ci: aynı veri → aynı CI (deterministik)",
+     test_bootstrap_deterministic)
+
+
+def test_bootstrap_empty_safe():
+    m = _import_main_module()
+    r = m.bootstrap_mode_ci([])
+    ok(r["mode_pct"] is None and r["ci_low"] is None,
+       f"boş ensemble None dönmeli: {r}")
+
+test("bootstrap_mode_ci: boş liste güvenli None döner",
+     test_bootstrap_empty_safe)
+
+
+def test_calib_applied_in_blend_day():
+    """blend_day() dinamik calib_factor üretip calibrated_spread hesaplıyor."""
+    m = _import_main_module()
+    models_data = {
+        "gfs":         {"max_temp": 14.8, "hours": []},
+        "ecmwf":       {"max_temp": 15.0, "hours": []},
+        "icon":        {"max_temp": 15.2, "hours": []},
+        "ukmo":        {"max_temp": 15.1, "hours": []},
+        "meteofrance": {"max_temp": 14.9, "hours": []},
+    }
+    r = m.blend_day(models_data, horizon=1)
+    ok("calib_factor" in r and r["calib_factor"] is not None,
+       "blend_day calib_factor döndürmüyor")
+    ok("calibrated_spread" in r,
+       "blend_day calibrated_spread döndürmüyor")
+    # D+1, düşük spread → base 1.5 beklenir
+    ok(abs(r["calib_factor"] - 1.5) < 0.01,
+       f"D+1 dar spread → 1.5 beklenir, bulunan {r['calib_factor']}")
+
+test("blend_day: calib_factor + calibrated_spread döner",
+     test_calib_applied_in_blend_day)
+
+
+def test_scanner_has_fragility_filter():
+    """scanner.py bootstrap CI alt sınırı filtresini kaynak kodda içeriyor."""
+    scanner_path = Path(__file__).resolve().parent.parent / "bot" / "scanner.py"
+    src = scanner_path.read_text(encoding="utf-8")
+    ok("MIN_MODE_CI_LOW" in src, "MIN_MODE_CI_LOW sabiti yok")
+    ok("mode_ci_low" in src, "scanner mode_ci_low okumuyor")
+    ok("BIMODAL_MAX_SEPARATION" in src, "BIMODAL_MAX_SEPARATION sabiti yok")
+
+test("scanner.py: Faz 2 kırılganlık + bimodal filtreleri kodda",
+     test_scanner_has_fragility_filter)
+
+
+def test_db_schema_has_phase2_columns():
+    """SQLite şeması ve PAPER_FIELDS Faz 2 kolonlarını içeriyor."""
+    db = _import_db_module()
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.db"
+        db.init_db(db_path)
+        import sqlite3
+        with sqlite3.connect(str(db_path)) as conn:
+            cols = {row[1] for row in conn.execute("PRAGMA table_info(paper_trades)")}
+    for c in ("ens_is_bimodal", "ens_peak_sep",
+              "ens_mode_ci_low", "ens_mode_ci_high"):
+        ok(c in cols, f"paper_trades şemasında {c} yok")
+    for c in ("ens_is_bimodal", "ens_peak_sep",
+              "ens_mode_ci_low", "ens_mode_ci_high"):
+        ok(c in db.PAPER_FIELDS, f"PAPER_FIELDS'te {c} yok")
+
+test("db.py: paper_trades şemasında Faz 2 kolonları mevcut",
+     test_db_schema_has_phase2_columns)
+
+
+def test_db_migration_adds_phase2_columns():
+    """Eski sürüm (v1) şema üstüne init_db çağrılınca yeni kolonlar eklenir."""
+    db = _import_db_module()
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.db"
+        import sqlite3
+        # v1 şema — Faz 2 kolonlarından yoksun ama indeksler için gerekli
+        # kolonları barındıran üretimdeki gerçek mirror
+        v1_sql = """
+        CREATE TABLE paper_trades (
+            id TEXT PRIMARY KEY, station TEXT NOT NULL, date TEXT NOT NULL,
+            blend REAL, spread REAL, uncertainty TEXT,
+            top_pick INTEGER, raw_top_pick INTEGER, bias_applied INTEGER,
+            ens_mode_pct INTEGER, ens_2nd_pick INTEGER, ens_2nd_pct INTEGER,
+            bucket_title TEXT, condition_id TEXT, entry_price REAL,
+            shares REAL, cost_usd REAL, size_usd REAL, potential_win REAL,
+            liquidity REAL, status TEXT NOT NULL, entered_at TEXT,
+            actual_temp REAL, result TEXT, pnl REAL, settled_at TEXT,
+            two_bucket INTEGER, notes TEXT,
+            synced_at INTEGER DEFAULT (strftime('%s','now'))
+        );
+        """
+        with sqlite3.connect(str(db_path)) as conn:
+            conn.executescript(v1_sql)
+        # init_db çağırınca migration yeni kolonları eklemeli
+        db.init_db(db_path)
+        with sqlite3.connect(str(db_path)) as conn:
+            cols = {row[1] for row in conn.execute("PRAGMA table_info(paper_trades)")}
+    for c in ("ens_is_bimodal", "ens_peak_sep",
+              "ens_mode_ci_low", "ens_mode_ci_high"):
+        ok(c in cols, f"migration sonrası {c} kolonu eklenmedi")
+
+test("db.py: eski (v1) şema üstüne migration yeni kolonları ekler",
+     test_db_migration_adds_phase2_columns)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+print(f"\n{'═'*62}")
 print(f"  SONUÇ: {PASS} geçti / {FAIL} başarısız / {PASS+FAIL} toplam")
 if FAIL == 0:
     print("  🎉 Tüm testler geçti!")

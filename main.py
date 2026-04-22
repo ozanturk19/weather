@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import json
 import math
@@ -82,6 +84,126 @@ UNCERTAINTY_THRESHOLDS = {
     1: (0.8, 1.5),   # Yarın   — spread < 0.8 = Düşük, < 1.5 = Orta
     2: (1.1, 1.8),   # Öbür gün — toleranslı ama gerçek ayrışmayı yakalar
 }
+
+# ── Dinamik CALIB_STD_FACTOR (Faz 2) ────────────────────────────────────────
+# Eski: statik 1.8 — tüm horizon/spread kombinasyonlarına aynı çarpan.
+# Yeni: horizon + spread bağlamlı; kısa horizonda düşük, uzun/dağınık dönemde yüksek.
+# Değerler backtest'ten değil fiziksel sezgiyle: D+0 dar, D+2 ~2× daha geniş.
+CALIB_BASE = {0: 1.2, 1: 1.5, 2: 2.0}
+CALIB_MAX  = 2.5
+
+def dynamic_calib_factor(horizon_days: int, spread: float | None) -> float:
+    """Horizon + spread'e göre kalibrasyon çarpanı (1.2 – 2.5 arası).
+
+    Amaç: ensemble spread'i küçükse modelin güvenini koru; büyükse
+    (model disagreement yüksek) spread'i biraz daha şişir — aşırı güveni
+    aşındır, Brier ve CRPS'yi iyileştirir.
+    """
+    base = CALIB_BASE.get(min(max(horizon_days, 0), 2), 1.8)
+    if spread is None:
+        return base
+    # spread > 2°C ise ek +0.2 (model ayrışması fazla)
+    extra = 0.2 if spread > 2.0 else 0.0
+    return round(min(base + extra, CALIB_MAX), 2)
+
+# ── Bimodal Tespiti (Faz 2, stdlib-only) ────────────────────────────────────
+BIMODAL_MIN_PEAK_PCT = 18  # tepe başına minimum üye oranı (%)
+BIMODAL_MIN_SEPARATION = 2  # °C — iki tepe arasında en az bu kadar mesafe
+
+def bimodal_analysis(member_maxes: list[float]) -> dict:
+    """Ensemble üye dağılımında kaç tepe (mod) var?
+
+    Yöntem: yuvarlanmış °C histogramında lokal maksimumları say.
+    Her tepe en az BIMODAL_MIN_PEAK_PCT oranında üyeye sahip olmalı.
+
+    Döner:
+      is_bimodal: 2+ anlamlı tepe var mı
+      n_peaks:    tepe sayısı
+      peaks:      [(temp, count, pct), ...] azalan count sırasıyla
+      separation: ilk iki tepenin °C farkı (None eğer 1 tepe)
+    """
+    if not member_maxes:
+        return {"is_bimodal": False, "n_peaks": 0, "peaks": [], "separation": None}
+
+    from collections import Counter
+    n = len(member_maxes)
+    counts = Counter(round(m) for m in member_maxes)
+    if not counts:
+        return {"is_bimodal": False, "n_peaks": 0, "peaks": [], "separation": None}
+
+    temps = sorted(counts.keys())
+    # temp → count haritasını komşu değerlere göre tara (1°C delikleri tolere et)
+    def _get(t: int) -> int:
+        return counts.get(t, 0)
+
+    min_count = max(1, int(n * BIMODAL_MIN_PEAK_PCT / 100))
+    peaks = []
+    for t in temps:
+        c = _get(t)
+        if c < min_count:
+            continue
+        # lokal maksimum: solundakinden ≥ ve sağındakinden ≥, en az biri >
+        left  = _get(t - 1)
+        right = _get(t + 1)
+        if c >= left and c >= right and (c > left or c > right or (left == 0 and right == 0)):
+            peaks.append((t, c, round(c / n * 100)))
+
+    peaks.sort(key=lambda x: x[1], reverse=True)
+
+    # İkinci tepenin en büyük tepeden yeterince uzak olduğunu doğrula
+    is_bimodal = False
+    separation = None
+    if len(peaks) >= 2:
+        t1, _, _ = peaks[0]
+        t2, _, _ = peaks[1]
+        separation = abs(t1 - t2)
+        is_bimodal = separation >= BIMODAL_MIN_SEPARATION
+
+    return {
+        "is_bimodal": is_bimodal,
+        "n_peaks":    len(peaks),
+        "peaks":      peaks[:3],       # en fazla 3 göster
+        "separation": separation,
+    }
+
+# ── Bootstrap Güven Aralığı — Mod Yüzdesi (Faz 2, stdlib-only) ──────────────
+BOOTSTRAP_SAMPLES = 200
+
+def bootstrap_mode_ci(member_maxes: list[float], n_boot: int = BOOTSTRAP_SAMPLES) -> dict:
+    """Ensemble'ın replacement'lı yeniden örneklenmesinden mod-yüzdesi %90 CI.
+
+    Döner: {mode_pct, ci_low, ci_high, top_pick}
+    CI geniş (örn. 25→55) ise consensus aslında çok kırılgan — uyarı ver.
+    """
+    import random
+    from collections import Counter
+    if not member_maxes:
+        return {"mode_pct": None, "ci_low": None, "ci_high": None, "top_pick": None}
+
+    n = len(member_maxes)
+    # Orijinal mod yüzdesi
+    orig_counts = Counter(round(m) for m in member_maxes)
+    top_pick, top_n = orig_counts.most_common(1)[0]
+    orig_pct = round(top_n / n * 100)
+
+    # Deterministik CI — scanner her çağrıda aynı sonucu görsün (aynı gün içinde)
+    rng = random.Random(hash(tuple(sorted(round(m, 1) for m in member_maxes))) & 0xFFFFFFFF)
+    pcts = []
+    for _ in range(n_boot):
+        sample = [member_maxes[rng.randrange(n)] for _ in range(n)]
+        c = Counter(round(m) for m in sample)
+        # aynı top_pick için olasılık (farklı mod olsa bile orijinal top_pick'i takip et)
+        pcts.append(c.get(top_pick, 0) / n * 100)
+
+    pcts.sort()
+    lo_idx = int(0.05 * n_boot)
+    hi_idx = int(0.95 * n_boot) - 1
+    return {
+        "mode_pct": orig_pct,
+        "ci_low":   round(pcts[lo_idx]),
+        "ci_high":  round(pcts[hi_idx]),
+        "top_pick": top_pick,
+    }
 
 # Bias düzeltmesi için minimum gün sayısı
 BIAS_MIN_DAYS = 7
@@ -179,12 +301,16 @@ def blend_day(models_data: dict, horizon: int = 1) -> dict:
     else:
         spread = 0.0
 
-    # ── Adım 4: Horizon-aware belirsizlik eşiği ─────────────────────────
-    # D+2 için D+1'den farklı tolerans — atmosfer fiziğini yansıtır
+    # ── Adım 4: Horizon-aware belirsizlik eşiği + Dinamik CALIB ─────────
+    # D+2 için D+1'den farklı tolerans — atmosfer fiziğini yansıtır.
+    # CALIB çarpanı spread'i "kalibre edilmiş" hâle şişirir — modelin aşırı
+    # güvenini aşındırır. Eski statik 1.8 yerine horizon+spread bazlı dinamik.
+    calib = dynamic_calib_factor(horizon, spread)
+    calibrated_spread = spread * (calib / 1.8)   # 1.8 referans; yeni çarpan ona göre
     low_t, mid_t = UNCERTAINTY_THRESHOLDS.get(min(horizon, 2), (0.8, 1.5))
-    if spread < low_t:
+    if calibrated_spread < low_t:
         uncertainty = "Düşük"
-    elif spread < mid_t:
+    elif calibrated_spread < mid_t:
         uncertainty = "Orta"
     else:
         uncertainty = "Yüksek"
@@ -225,6 +351,8 @@ def blend_day(models_data: dict, horizon: int = 1) -> dict:
         "models_used":      list(filtered.keys()),
         "consensus_ratio":  consensus_ratio,
         "horizon":          horizon,
+        "calib_factor":     calib,                   # Faz 2: dinamik CALIB_STD_FACTOR
+        "calibrated_spread": round(calibrated_spread, 2),
     }
 
 
@@ -445,6 +573,9 @@ async def get_ensemble(station: str):
         if not maxes:
             continue
         n = len(maxes)
+        # Faz 2: şekil metrikleri (bimodal + bootstrap CI)
+        shape  = bimodal_analysis(data["maxes"])
+        mode_ci = bootstrap_mode_ci(data["maxes"])
         days[date] = {
             "member_maxes":  [round(m, 1) for m in maxes],   # backward compatible
             "count":         n,
@@ -455,6 +586,14 @@ async def get_ensemble(station: str):
             "p75":           pct(maxes, 75),
             "p90":           pct(maxes, 90),
             "model_counts":  data["model_counts"],    # hangi modelden kaç üye
+            # Faz 2 şekil analizi
+            "is_bimodal":    shape["is_bimodal"],
+            "n_peaks":       shape["n_peaks"],
+            "peaks":         shape["peaks"],
+            "peak_separation": shape["separation"],
+            "mode_pct":      mode_ci["mode_pct"],
+            "mode_ci_low":   mode_ci["ci_low"],
+            "mode_ci_high":  mode_ci["ci_high"],
         }
 
     return {"station": station, "days": days}
