@@ -2432,6 +2432,207 @@ test("scanner.settle: record_model_actuals çağrısı kaynak kodda",
 
 # ══════════════════════════════════════════════════════════════════════════════
 print(f"\n{'═'*62}")
+print(" TEST 29: Faz 6a — Portföy VaR (Monte Carlo + Cholesky)")
+print(f"{'═'*62}")
+
+def _import_portfolio_var():
+    import importlib.util
+    path = Path(__file__).resolve().parent.parent / "bot" / "portfolio_var.py"
+    spec = importlib.util.spec_from_file_location("weather_pvar", path)
+    mod  = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_pvar_empty_portfolio():
+    """Boş trade listesi → tüm değerler sıfır."""
+    pv = _import_portfolio_var()
+    r  = pv.portfolio_var([])
+    ok(r["n_positions"] == 0 and r["expected_pnl"] == 0.0,
+       f"boş portföy için sıfır beklenir: {r}")
+
+test("portfolio_var: boş portföyde sıfır döner", test_pvar_empty_portfolio)
+
+
+def test_pvar_pearson_basics():
+    """Pearson: perfect correlation → 0.99'a klip; düz veri → None."""
+    pv = _import_portfolio_var()
+    r1 = pv.pearson([1, 2, 3, 4, 5], [2, 4, 6, 8, 10])
+    ok(r1 is not None and r1 > 0.95,
+       f"mükemmel pozitif korelasyon bekleniyor: {r1}")
+    r2 = pv.pearson([1, 2, 3], [1, 1, 1])
+    ok(r2 is None, f"sabit y ile None beklenir: {r2}")
+    r3 = pv.pearson([1, 2, 3, 4, 5], [5, 4, 3, 2, 1])
+    ok(r3 is not None and r3 < -0.95, f"negatif korelasyon: {r3}")
+
+test("pearson: temel durumlar (positif/negatif/sabit)", test_pvar_pearson_basics)
+
+
+def test_pvar_cholesky_identity():
+    """Birim matris için Cholesky = birim matris."""
+    pv = _import_portfolio_var()
+    I  = [[1.0, 0.0], [0.0, 1.0]]
+    L  = pv.cholesky(I)
+    ok(abs(L[0][0] - 1.0) < 1e-9 and abs(L[1][1] - 1.0) < 1e-9,
+       f"identity Cholesky: {L}")
+    ok(abs(L[1][0]) < 1e-9, f"off-diagonal 0 beklenir: {L}")
+
+test("cholesky: identity matris self-çarpı L", test_pvar_cholesky_identity)
+
+
+def test_pvar_cholesky_correlated():
+    """2x2 korelasyonlu matrisin Cholesky'si L·L^T = orijinal."""
+    pv  = _import_portfolio_var()
+    mat = [[1.0, 0.6], [0.6, 1.0]]
+    L   = pv.cholesky(mat)
+    # L · L^T
+    rec = [[sum(L[i][k]*L[j][k] for k in range(min(i,j)+1)) for j in range(2)] for i in range(2)]
+    for i in range(2):
+        for j in range(2):
+            ok(abs(rec[i][j] - mat[i][j]) < 1e-6,
+               f"Cholesky hatalı: L·L^T[{i}][{j}]={rec[i][j]} ≠ {mat[i][j]}")
+
+test("cholesky: 2x2 korelasyonlu matriste L·L^T reconstruct",
+     test_pvar_cholesky_correlated)
+
+
+def test_pvar_station_correlation_shape():
+    """N istasyon için N×N matris + diagonal 1.0 + simetri."""
+    pv = _import_portfolio_var()
+    db = _import_db_module()
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.db"
+        db.init_db(db_path)
+        corr = pv.station_correlation(["eglc", "lfpg", "ltfm"], days=60, db_path=db_path)
+    ok(len(corr) == 3 and len(corr[0]) == 3, f"3x3 matris beklenir: {len(corr)}")
+    for i in range(3):
+        ok(abs(corr[i][i] - 1.0) < 1e-9, f"diagonal 1.0: {corr[i][i]}")
+        for j in range(3):
+            ok(abs(corr[i][j] - corr[j][i]) < 1e-9, f"simetri yok ({i},{j})")
+
+test("station_correlation: boyut + diagonal + simetri",
+     test_pvar_station_correlation_shape)
+
+
+def test_pvar_simulate_independent_high_p():
+    """Yüksek p_win + bağımsız → beklenen P&L pozitif."""
+    pv = _import_portfolio_var()
+    positions = [
+        {"p_win": 0.8, "potential_win": 10.0, "cost": 3.0},
+        {"p_win": 0.8, "potential_win": 10.0, "cost": 3.0},
+    ]
+    corr = [[1.0, 0.0], [0.0, 1.0]]
+    pnls = pv.simulate_portfolio(positions, corr, n_sims=2000, seed=42)
+    mean = sum(pnls) / len(pnls)
+    # E[P&L] = 2·(0.8·10 - 0.2·3) = 2·7.4 = 14.8
+    ok(abs(mean - 14.8) < 1.5,
+       f"E[P&L] ≈ 14.8 beklenir, bulunan {mean:.2f}")
+
+test("simulate_portfolio: bağımsız+yüksek p → pozitif beklenen",
+     test_pvar_simulate_independent_high_p)
+
+
+def test_pvar_correlation_widens_tails():
+    """Yüksek korelasyon → P&L varyansı artar (kuyruklar genişler).
+
+    Binary payoff tavanı nedeniyle 5%ile her iki durumda da -ΣCost'a çarpabilir;
+    stddev daha temiz metrik. Ayrıca en kötü outcome'ın frekansı da artar.
+    """
+    import statistics as st
+    pv = _import_portfolio_var()
+    positions = [
+        {"p_win": 0.5, "potential_win": 10.0, "cost": 5.0},
+        {"p_win": 0.5, "potential_win": 10.0, "cost": 5.0},
+        {"p_win": 0.5, "potential_win": 10.0, "cost": 5.0},
+    ]
+    ind = pv.simulate_portfolio(positions, [[1.0,0.0,0.0],[0.0,1.0,0.0],[0.0,0.0,1.0]], n_sims=4000, seed=7)
+    cor = pv.simulate_portfolio(positions, [[1.0,0.85,0.85],[0.85,1.0,0.85],[0.85,0.85,1.0]], n_sims=4000, seed=7)
+    sd_ind = st.pstdev(ind)
+    sd_cor = st.pstdev(cor)
+    ok(sd_cor > sd_ind * 1.15,
+       f"korelasyonlu std daha yüksek beklenir: ind={sd_ind:.2f} cor={sd_cor:.2f}")
+    # en kötü outcome (-15) frekansı da artmalı
+    worst_ind = sum(1 for p in ind if p == -15.0) / len(ind)
+    worst_cor = sum(1 for p in cor if p == -15.0) / len(cor)
+    ok(worst_cor > worst_ind * 1.3,
+       f"korelasyonda worst-case daha sık: ind={worst_ind:.2%} cor={worst_cor:.2%}")
+
+test("simulate_portfolio: korelasyon arttıkça kuyruk genişler",
+     test_pvar_correlation_widens_tails)
+
+
+def test_pvar_deterministic_seed():
+    """Aynı trade ID'leri → aynı VaR (deterministik)."""
+    pv = _import_portfolio_var()
+    trades = [
+        {"id": "A", "station": "eglc", "mode_pct": 55, "potential_win": 8.0, "cost_usd": 2.5},
+        {"id": "B", "station": "lfpg", "mode_pct": 60, "potential_win": 7.5, "cost_usd": 2.5},
+    ]
+    db = _import_db_module()
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.db"
+        db.init_db(db_path)
+        r1 = pv.portfolio_var(trades, db_path=db_path, n_sims=1000)
+        r2 = pv.portfolio_var(trades, db_path=db_path, n_sims=1000)
+    ok(r1["var_95"] == r2["var_95"] and r1["expected_pnl"] == r2["expected_pnl"],
+       f"deterministik olmalı: {r1['var_95']} vs {r2['var_95']}")
+
+test("portfolio_var: deterministik seed (aynı ID → aynı VaR)",
+     test_pvar_deterministic_seed)
+
+
+def test_pvar_worst_case_bounded():
+    """Worst case = -Σ(cost)'tan büyük veya eşit olamaz."""
+    pv = _import_portfolio_var()
+    trades = [
+        {"id": "A", "station": "eglc", "mode_pct": 30, "potential_win": 5.0, "cost_usd": 5.0},
+        {"id": "B", "station": "lfpg", "mode_pct": 30, "potential_win": 5.0, "cost_usd": 5.0},
+    ]
+    db = _import_db_module()
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.db"
+        db.init_db(db_path)
+        r = pv.portfolio_var(trades, db_path=db_path, n_sims=500)
+    ok(r["worst"] >= -r["gross_exposure"] - 0.01,
+       f"worst case {r['worst']} > -gross {-r['gross_exposure']} olmalı")
+    ok(r["best"]  <= r["gross_potential_win"] + 0.01,
+       f"best case  {r['best']} < +win {r['gross_potential_win']} olmalı")
+
+test("portfolio_var: worst ≥ -ΣCost, best ≤ +ΣWin",
+     test_pvar_worst_case_bounded)
+
+
+def test_pvar_response_fields():
+    """Dönüş dict'i tüm beklenen alanları içeriyor."""
+    pv = _import_portfolio_var()
+    trades = [{"id": "X", "station": "eglc", "mode_pct": 50, "potential_win": 5, "cost_usd": 2}]
+    db = _import_db_module()
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.db"
+        db.init_db(db_path)
+        r = pv.portfolio_var(trades, db_path=db_path, n_sims=200)
+    required = {"n_positions","n_sims","expected_pnl","var_95","var_99","worst","best",
+                "stations","avg_abs_correlation","gross_exposure","gross_potential_win"}
+    missing  = required - set(r.keys())
+    ok(not missing, f"eksik alan(lar): {missing}")
+
+test("portfolio_var: tüm alanlar mevcut", test_pvar_response_fields)
+
+
+def test_pvar_endpoint_in_main():
+    """main.py /api/portfolio/var endpoint'i tanımlanmış."""
+    main_path = Path(__file__).resolve().parent.parent / "main.py"
+    src = main_path.read_text(encoding="utf-8")
+    ok('/api/portfolio/var' in src, "portfolio/var endpoint eksik")
+    ok("from bot.portfolio_var import portfolio_var" in src,
+       "portfolio_var import edilmiyor")
+
+test("main.py: /api/portfolio/var endpoint + import",
+     test_pvar_endpoint_in_main)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+print(f"\n{'═'*62}")
 print(f"  SONUÇ: {PASS} geçti / {FAIL} başarısız / {PASS+FAIL} toplam")
 if FAIL == 0:
     print("  🎉 Tüm testler geçti!")

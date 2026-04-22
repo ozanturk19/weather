@@ -1002,6 +1002,34 @@ async def get_bot_trades():
         }
     }
 
+@app.get("/api/portfolio/var")
+async def get_portfolio_var(source: str = "paper", days: int = 60):
+    """Açık pozisyonlar üzerinden Monte Carlo VaR (Faz 6a).
+
+    source: 'paper' (default) | 'live' | 'both'
+    days: korelasyon matrisi için geriye bakış penceresi (default 60)
+    """
+    try:
+        from bot.portfolio_var import portfolio_var
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"VaR modülü yüklenemedi: {e}")
+
+    trades_all = []
+    if source in ("paper", "both"):
+        trades_all.extend(_load_bot_trades())
+    if source in ("live", "both"):
+        trades_all.extend(_load_live_trades())
+
+    open_trades = [t for t in trades_all if t.get("status") in ("open", "filled", "pending_fill")]
+    try:
+        result = await asyncio.to_thread(portfolio_var, open_trades, days)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"VaR hesaplama hatası: {e}")
+    result["source"] = source
+    result["lookback_days"] = days
+    return result
+
+
 @app.post("/api/bot-trades/scan")
 async def bot_scan(x_api_token: str = Header(default="")):
     """Bot taramasını tetikle (scanner.py scan)."""
