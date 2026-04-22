@@ -2788,6 +2788,192 @@ test("main.py: /api/settlement-audit endpoint",
 
 # ══════════════════════════════════════════════════════════════════════════════
 print(f"\n{'═'*62}")
+print(" TEST 31: Faz 6c — Kalibrasyon dashboard (Brier + reliability)")
+print(f"{'═'*62}")
+
+
+def _import_calibration():
+    import importlib.util
+    path = Path(__file__).resolve().parent.parent / "bot" / "calibration.py"
+    spec = importlib.util.spec_from_file_location("weather_calib", path)
+    mod  = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _make_trade(station="eglc", date="2026-04-20", mode_pct=50, result="WIN"):
+    return {
+        "id": f"t_{station}_{date}_{mode_pct}_{result}",
+        "station": station,
+        "date": date,
+        "status": "closed",
+        "ens_mode_pct": mode_pct,
+        "result": result,
+    }
+
+
+def test_cal_empty_trades():
+    """Boş girdi → n=0 ve None değerler."""
+    c = _import_calibration()
+    r = c.compute_calibration([])
+    ok(r["n"] == 0 and r["brier"] is None,
+       f"empty result beklenir: {r}")
+
+test("compute_calibration: boş trade listesi", test_cal_empty_trades)
+
+
+def test_cal_perfect_calibration():
+    """Her tahmin gerçekle aynı → Brier 0, skill 1.0 civarı."""
+    c = _import_calibration()
+    # 100 trade: 50 pct → 50% win (tam uyum)
+    trades = []
+    for i in range(50):
+        trades.append(_make_trade(date=f"2026-04-{(i%28)+1:02d}",
+                                    mode_pct=50, result=("WIN" if i < 25 else "LOSS")))
+    r = c.compute_calibration(trades)
+    # Her tahmin 0.5, outcome 0/1 → Brier = mean(0.25) = 0.25 (random tahmin)
+    ok(abs(r["brier"] - 0.25) < 0.02, f"brier ≈0.25: {r['brier']}")
+    # brier_ref = 0.5·0.5 = 0.25 → skill ≈ 0
+    ok(abs(r["skill"]) < 0.05, f"skill ≈0 beklenir: {r['skill']}")
+
+test("compute_calibration: random (50%) tahmin → skill~0",
+     test_cal_perfect_calibration)
+
+
+def test_cal_high_confidence_wins():
+    """Yüksek güvenli tahminler hepsi kazandı → Brier düşük, skill pozitif."""
+    c = _import_calibration()
+    trades = [_make_trade(date=f"2026-04-{(i%28)+1:02d}", mode_pct=80, result="WIN")
+              for i in range(20)]
+    trades += [_make_trade(date=f"2026-05-{(i%28)+1:02d}", mode_pct=20, result="LOSS")
+               for i in range(20)]
+    r = c.compute_calibration(trades)
+    # p=0.8, y=1 → (0.2)² = 0.04 | p=0.2, y=0 → (0.2)² = 0.04 → Brier=0.04
+    ok(abs(r["brier"] - 0.04) < 0.01, f"brier ≈0.04: {r['brier']}")
+    ok(r["skill"] > 0.7, f"skill yüksek beklenir: {r['skill']}")
+
+test("compute_calibration: iyi kalibre → düşük Brier, yüksek skill",
+     test_cal_high_confidence_wins)
+
+
+def test_cal_bins_populated():
+    """Reliability bins doldurulur + mean_p, actual_freq alanları."""
+    c = _import_calibration()
+    trades = []
+    # 35-45% bin'inde 10 trade, 4'ü kazandı → mean_p≈0.4, actual≈0.4 (iyi kalibre)
+    for i in range(10):
+        trades.append(_make_trade(date=f"2026-04-{i+1:02d}",
+                                    mode_pct=40, result=("WIN" if i < 4 else "LOSS")))
+    r = c.compute_calibration(trades)
+    ok(len(r["bins"]) >= 1, f"en az 1 bin beklenir: {r}")
+    b = r["bins"][0]
+    ok(abs(b["mean_p"] - 0.4) < 0.001, f"mean_p 0.4: {b}")
+    ok(abs(b["actual_freq"] - 0.4) < 0.001, f"actual_freq 0.4: {b}")
+    ok(b["n"] == 10, f"n=10: {b}")
+
+test("compute_calibration: reliability bin hesapları",
+     test_cal_bins_populated)
+
+
+def test_cal_sharpness_constant_vs_varied():
+    """Sabit tahmin → sharpness=0; çeşitli → >0."""
+    c = _import_calibration()
+    same = [_make_trade(date=f"2026-04-{i+1:02d}", mode_pct=50, result="WIN")
+            for i in range(10)]
+    r1 = c.compute_calibration(same)
+    ok(r1["sharpness"] == 0.0, f"sabit tahmin sharpness=0: {r1}")
+
+    varied = []
+    for i, p in enumerate([20, 30, 40, 50, 60, 70, 80]):
+        varied.append(_make_trade(date=f"2026-05-{i+1:02d}", mode_pct=p, result="WIN"))
+    r2 = c.compute_calibration(varied)
+    ok(r2["sharpness"] > 0.1, f"çeşitli tahmin sharpness>0.1: {r2}")
+
+test("compute_calibration: sharpness (varyans) metriği",
+     test_cal_sharpness_constant_vs_varied)
+
+
+def test_cal_station_filter():
+    """station parametresi sadece o istasyonu hesaplar."""
+    c = _import_calibration()
+    trades = [
+        _make_trade(station="eglc", date=f"2026-04-{i+1:02d}", mode_pct=60, result="WIN")
+        for i in range(5)
+    ] + [
+        _make_trade(station="ltfm", date=f"2026-04-{i+1:02d}", mode_pct=60, result="LOSS")
+        for i in range(5)
+    ]
+    r_eglc = c.compute_calibration(trades, station="eglc")
+    r_ltfm = c.compute_calibration(trades, station="ltfm")
+    ok(r_eglc["n"] == 5 and r_eglc["base_rate"] == 1.0,
+       f"eglc 5 trade, tümü WIN: {r_eglc}")
+    ok(r_ltfm["n"] == 5 and r_ltfm["base_rate"] == 0.0,
+       f"ltfm 5 trade, tümü LOSS: {r_ltfm}")
+
+test("compute_calibration: station filtresi",
+     test_cal_station_filter)
+
+
+def test_cal_days_filter():
+    """days parametresi kesim tarihinden eski trade'leri atar."""
+    c = _import_calibration()
+    from datetime import datetime as _dt, timedelta as _td
+    today = _dt.now()
+    recent = (today - _td(days=3)).strftime("%Y-%m-%d")
+    old    = (today - _td(days=200)).strftime("%Y-%m-%d")
+    trades = [
+        _make_trade(date=recent, mode_pct=60, result="WIN"),
+        _make_trade(date=old,    mode_pct=60, result="LOSS"),
+    ]
+    r = c.compute_calibration(trades, days=30)
+    ok(r["n"] == 1, f"30 gün filtre → 1 trade beklenir: {r}")
+
+test("compute_calibration: days filtresi", test_cal_days_filter)
+
+
+def test_cal_per_station_min_samples():
+    """per_station min_samples altı istasyon dahil edilmez."""
+    c = _import_calibration()
+    trades = [_make_trade(station="eglc", date=f"2026-04-{i+1:02d}",
+                            mode_pct=50, result="WIN") for i in range(10)]
+    trades += [_make_trade(station="ltfm", date="2026-04-01", mode_pct=50, result="WIN")]
+    out = c.compute_per_station(trades, min_samples=5)
+    ok("eglc" in out, f"eglc dahil: {out}")
+    ok("ltfm" not in out, f"ltfm atlanmalı (1<5): {out}")
+
+test("compute_per_station: min_samples filtresi",
+     test_cal_per_station_min_samples)
+
+
+def test_cal_ignores_non_closed():
+    """status='open' trade'ler atlanır."""
+    c = _import_calibration()
+    trades = [
+        _make_trade(date="2026-04-01", mode_pct=60, result="WIN"),
+        {"id": "x", "station": "eglc", "date": "2026-04-02",
+         "status": "open", "ens_mode_pct": 60, "result": None},
+    ]
+    r = c.compute_calibration(trades)
+    ok(r["n"] == 1, f"sadece kapalı sayılır: {r}")
+
+test("compute_calibration: open trade atlanır",
+     test_cal_ignores_non_closed)
+
+
+def test_cal_endpoint_in_main():
+    """main.py /api/calibration endpoint tanımlı."""
+    main_path = Path(__file__).resolve().parent.parent / "main.py"
+    src = main_path.read_text(encoding="utf-8")
+    ok("/api/calibration" in src, "calibration endpoint eksik")
+    ok("compute_calibration" in src, "compute_calibration import eksik")
+    ok("compute_per_station" in src, "compute_per_station import eksik")
+
+test("main.py: /api/calibration endpoint",
+     test_cal_endpoint_in_main)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+print(f"\n{'═'*62}")
 print(f"  SONUÇ: {PASS} geçti / {FAIL} başarısız / {PASS+FAIL} toplam")
 if FAIL == 0:
     print("  🎉 Tüm testler geçti!")

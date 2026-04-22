@@ -1030,6 +1030,30 @@ async def get_portfolio_var(source: str = "paper", days: int = 60):
     return result
 
 
+@app.get("/api/calibration")
+async def get_calibration(days: int = 90, station: str = "", per_station: bool = True):
+    """Kalibrasyon dashboard verisi (Faz 6c).
+
+    Kapalı paper_trades üzerinden Brier + reliability + sharpness.
+    days: geriye bakış (default 90). station: opsiyonel filtre.
+    per_station: istasyon başı breakdown dahil edilsin mi.
+    """
+    try:
+        from bot.calibration import compute_calibration, compute_per_station
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Calibration modülü yüklenemedi: {e}")
+    trades = _load_bot_trades()
+    overall = compute_calibration(trades, days=days, station=station or None)
+    out = {
+        "days":    days,
+        "station": station or None,
+        "overall": overall,
+    }
+    if per_station and not station:
+        out["per_station"] = compute_per_station(trades, days=days)
+    return out
+
+
 @app.get("/api/settlement-audit")
 async def get_settlement_audit(days: int = 30, station: str = ""):
     """Çok-kaynaklı settle gözlemleri + uyumsuzluk istatistiği (Faz 6b).
