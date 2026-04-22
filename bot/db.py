@@ -153,6 +153,28 @@ CREATE INDEX IF NOT EXISTS idx_err_station      ON forecast_errors(station);
 CREATE INDEX IF NOT EXISTS idx_err_created      ON forecast_errors(created_at);
 
 -- ───────────────────────────────────────────────────────────────────────
+-- model_forecasts: her gün her model için ham max_temp kaydı (Faz 4)
+-- Settle sırasında actual_temp doldurulur → per-model RMSE hesaplanabilir
+-- ───────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS model_forecasts (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    station       TEXT NOT NULL,
+    date          TEXT NOT NULL,               -- forecast target date
+    model         TEXT NOT NULL,               -- gfs|ecmwf|icon|ukmo|meteofrance
+    horizon_days  INTEGER,                     -- 0, 1, 2
+    max_temp      REAL NOT NULL,               -- tahminin günlük maksimumu
+    actual_temp   REAL,                        -- settle sonrası doldurulur
+    abs_error     REAL,                        -- |max_temp - actual|
+    recorded_at   INTEGER DEFAULT (strftime('%s','now')),
+    settled_at    INTEGER,
+    UNIQUE (station, date, model)              -- günde bir model bir kayıt
+);
+
+CREATE INDEX IF NOT EXISTS idx_mf_station_model ON model_forecasts(station, model);
+CREATE INDEX IF NOT EXISTS idx_mf_date          ON model_forecasts(date);
+CREATE INDEX IF NOT EXISTS idx_mf_settled       ON model_forecasts(settled_at);
+
+-- ───────────────────────────────────────────────────────────────────────
 -- bias_corrections: Kalman filter bias history (Faz 3)
 -- Her settle sonrası istasyon için güncellenir
 -- ───────────────────────────────────────────────────────────────────────
@@ -383,6 +405,60 @@ def record_forecast_error(
              blend, top_pick, spread, uncertainty,
              actual_temp, error_c, abs_error_c, pick_err, trade_id),
         )
+
+
+# ── Model Forecast Recording (Faz 4) ────────────────────────────────────────
+def record_model_forecast(
+    station: str,
+    date: str,
+    model: str,
+    max_temp: float,
+    horizon_days: int | None = None,
+    db_path: Path = DB_PATH,
+) -> None:
+    """Tek model tahminini model_forecasts'a ekle (UPSERT).
+
+    Aynı (station, date, model) için birden fazla çağrı zararsız: sonuncu kazanır.
+    """
+    if max_temp is None:
+        return
+    try:
+        with get_db(db_path) as conn:
+            conn.execute(
+                """INSERT INTO model_forecasts
+                   (station, date, model, horizon_days, max_temp)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(station, date, model) DO UPDATE SET
+                     max_temp     = excluded.max_temp,
+                     horizon_days = excluded.horizon_days,
+                     recorded_at  = strftime('%s','now')""",
+                (station, date, model, horizon_days, float(max_temp)),
+            )
+    except Exception:
+        pass
+
+
+def record_model_actuals(
+    station: str,
+    date: str,
+    actual_temp: float,
+    db_path: Path = DB_PATH,
+) -> int:
+    """O (station, date) için tüm modellerin actual_temp + abs_error alanını
+    güncelle. Döner: güncellenen satır sayısı."""
+    try:
+        with get_db(db_path) as conn:
+            cur = conn.execute(
+                """UPDATE model_forecasts
+                   SET actual_temp = ?,
+                       abs_error   = ABS(max_temp - ?),
+                       settled_at  = strftime('%s','now')
+                   WHERE station = ? AND date = ? AND actual_temp IS NULL""",
+                (float(actual_temp), float(actual_temp), station, date),
+            )
+            return cur.rowcount
+    except Exception:
+        return 0
 
 
 def already_recorded_error(trade_id: str, db_path: Path = DB_PATH) -> bool:

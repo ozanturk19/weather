@@ -814,6 +814,13 @@ def settle():
             except Exception:
                 pass
 
+            # ── Faz 4: model_forecasts'a actual yaz (per-model RMSE) ──
+            try:
+                from bot.db import record_model_actuals
+                record_model_actuals(station, yesterday, float(actual))
+            except Exception:
+                pass
+
             emoji = "🟢" if won else "🔴"
             print(
                 f"  {emoji} {station.upper()} {label}  "

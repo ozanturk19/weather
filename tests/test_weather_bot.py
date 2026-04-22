@@ -15,6 +15,12 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+# Proje kökünü sys.path'e ekle — dynamic_weights.py gibi modüllerin
+# `from bot.db import ...` çağrıları çalışabilsin.
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
 PASS = 0
 FAIL = 0
 
@@ -2187,6 +2193,241 @@ def test_db_phase3_schema():
 
 test("db.py: paper_trades şemasında Faz 3 kolonları (signal_*)",
      test_db_phase3_schema)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+print(f"\n{'═'*62}")
+print(" TEST 28: Faz 4 — Dinamik Model Ağırlıkları")
+print(f"{'═'*62}")
+
+def _import_dynamic_weights():
+    import importlib.util
+    path = Path(__file__).resolve().parent.parent / "bot" / "dynamic_weights.py"
+    spec = importlib.util.spec_from_file_location("weather_dw", path)
+    mod  = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _setup_temp_db_with_forecasts(db, td, station="eglc",
+                                   per_model_errors=None, days=30):
+    """Geçici DB kur ve model_forecasts'a örnek veri ekle."""
+    db_path = Path(td) / "test.db"
+    db.init_db(db_path)
+    import sqlite3
+    from datetime import datetime as dt, timedelta as td_
+    if per_model_errors is None:
+        # icon MAE=1.0, ecmwf MAE=1.5, ukmo MAE=3.0 → icon ağır basar
+        per_model_errors = {"icon": 1.0, "ecmwf": 1.5, "ukmo": 3.0,
+                             "gfs": 2.0, "meteofrance": 1.8}
+    with sqlite3.connect(str(db_path)) as conn:
+        for i in range(days):
+            d = (dt.now() - td_(days=i)).strftime("%Y-%m-%d")
+            actual = 15.0 + (i % 5)   # değişen "gerçek"
+            for model, err in per_model_errors.items():
+                mt = actual + (err if (i % 2 == 0) else -err)
+                conn.execute(
+                    "INSERT INTO model_forecasts "
+                    "(station,date,model,horizon_days,max_temp,actual_temp,abs_error,settled_at) "
+                    "VALUES (?,?,?,?,?,?,?,strftime('%s','now'))",
+                    (station, d, model, 1, mt, actual, abs(mt - actual)),
+                )
+        conn.commit()
+    return db_path
+
+
+def test_dw_empty_db_returns_none():
+    """Veri yoksa compute_dynamic_weights None döner (statik fallback tetikler)."""
+    dw  = _import_dynamic_weights()
+    db  = _import_db_module()
+    import importlib
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.db"
+        db.init_db(db_path)
+        result = dw.compute_dynamic_weights("eglc", horizon_days=1, db_path=db_path)
+    ok(result is None, f"veri yok → None beklenir: {result}")
+
+test("compute_dynamic_weights: veri yok → None (statik fallback)",
+     test_dw_empty_db_returns_none)
+
+
+def test_dw_sufficient_data_returns_weights():
+    """≥MIN_SAMPLES_MODEL örnek varken normalize ağırlık dict."""
+    dw  = _import_dynamic_weights()
+    db  = _import_db_module()
+    with tempfile.TemporaryDirectory() as td:
+        db_path = _setup_temp_db_with_forecasts(db, td, "eglc")
+        result = dw.compute_dynamic_weights("eglc", horizon_days=1, db_path=db_path)
+    ok(result is not None, f"yeterli veri ile None döndürdü: {result}")
+    ok("icon" in result and "ukmo" in result,
+       f"temel modeller eksik: {result}")
+    # icon (düşük MAE) ukmo'dan (yüksek MAE) daha ağır olmalı
+    ok(result["icon"] > result["ukmo"],
+       f"icon > ukmo olmalı: {result}")
+
+test("compute_dynamic_weights: yeterli veri → 1/RMSE ağırlıklı dict",
+     test_dw_sufficient_data_returns_weights)
+
+
+def test_dw_normalization_average():
+    """Ağırlıkların ortalaması ~1.0 (len(good) / total normalize)."""
+    dw  = _import_dynamic_weights()
+    db  = _import_db_module()
+    with tempfile.TemporaryDirectory() as td:
+        db_path = _setup_temp_db_with_forecasts(db, td, "eglc")
+        result = dw.compute_dynamic_weights("eglc", horizon_days=1, db_path=db_path)
+    avg = sum(result.values()) / len(result)
+    ok(abs(avg - 1.0) < 0.01,
+       f"ortalama ağırlık ~1.0 beklenir, bulunan {avg}")
+
+test("compute_dynamic_weights: ağırlıklar ortalama ~1.0 normalize",
+     test_dw_normalization_average)
+
+
+def test_dw_effective_weights_fallback():
+    """effective_weights() veri yoksa statik döner, 'source' etiketi koyar."""
+    dw  = _import_dynamic_weights()
+    db  = _import_db_module()
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.db"
+        db.init_db(db_path)
+        w, src = dw.effective_weights("eglc", horizon_days=1, db_path=db_path)
+    ok(src == "static", f"source 'static' beklenir: {src}")
+    ok(w == dw.STATIC_WEIGHTS, f"statik ağırlıklar beklenir: {w}")
+
+test("effective_weights: veri yoksa ('static', STATIC_WEIGHTS)",
+     test_dw_effective_weights_fallback)
+
+
+def test_dw_effective_weights_dynamic():
+    """Yeterli veri varsa 'dynamic' kaynak ve güncel ağırlıklar."""
+    dw  = _import_dynamic_weights()
+    db  = _import_db_module()
+    with tempfile.TemporaryDirectory() as td:
+        db_path = _setup_temp_db_with_forecasts(db, td, "eglc")
+        w, src = dw.effective_weights("eglc", horizon_days=1, db_path=db_path)
+    ok(src == "dynamic", f"source 'dynamic' beklenir: {src}")
+    ok("icon" in w, f"icon ağırlığı yok: {w}")
+
+test("effective_weights: yeterli veri → ('dynamic', güncel ağırlıklar)",
+     test_dw_effective_weights_dynamic)
+
+
+def test_db_record_model_forecast():
+    """record_model_forecast upsert davranışını doğrula."""
+    db = _import_db_module()
+    import sqlite3
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.db"
+        db.init_db(db_path)
+        db.record_model_forecast("eglc", "2026-04-22", "icon", 15.3, horizon_days=1, db_path=db_path)
+        # Aynı kayıt — UPSERT, duplicate değil
+        db.record_model_forecast("eglc", "2026-04-22", "icon", 15.8, horizon_days=1, db_path=db_path)
+        with sqlite3.connect(str(db_path)) as conn:
+            rows = conn.execute(
+                "SELECT max_temp FROM model_forecasts WHERE station=? AND date=? AND model=?",
+                ("eglc", "2026-04-22", "icon")
+            ).fetchall()
+    ok(len(rows) == 1, f"aynı key için tek satır beklenir, bulunan {len(rows)}")
+    ok(abs(rows[0][0] - 15.8) < 0.01,
+       f"son yazılan değer 15.8, bulunan {rows[0][0]}")
+
+test("record_model_forecast: (station,date,model) upsert davranışı",
+     test_db_record_model_forecast)
+
+
+def test_db_record_model_actuals():
+    """record_model_actuals tüm modeller için actual + abs_error hesaplar."""
+    db = _import_db_module()
+    import sqlite3
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.db"
+        db.init_db(db_path)
+        for m, mt in [("icon", 15.0), ("ecmwf", 15.5), ("gfs", 14.2)]:
+            db.record_model_forecast("eglc", "2026-04-22", m, mt, db_path=db_path)
+        n = db.record_model_actuals("eglc", "2026-04-22", 15.0, db_path=db_path)
+        ok(n == 3, f"3 model güncellenmeli, güncellenen {n}")
+        with sqlite3.connect(str(db_path)) as conn:
+            rows = conn.execute(
+                "SELECT model, abs_error FROM model_forecasts WHERE station='eglc' AND date='2026-04-22'"
+            ).fetchall()
+    errs = {m: e for m, e in rows}
+    ok(abs(errs["icon"] - 0.0) < 0.01)
+    ok(abs(errs["ecmwf"] - 0.5) < 0.01)
+    ok(abs(errs["gfs"] - 0.8) < 0.01)
+
+test("record_model_actuals: tüm modeller actual_temp + abs_error alır",
+     test_db_record_model_actuals)
+
+
+def test_blend_day_accepts_weights():
+    """main.blend_day() weights parametresini kullanır, dinamik blend üretir."""
+    m = _import_main_module()
+    models_data = {
+        "icon":  {"max_temp": 15.0, "hours": []},
+        "ecmwf": {"max_temp": 18.0, "hours": []},
+        "gfs":   {"max_temp": 15.0, "hours": []},
+    }
+    # icon çok ağır → blend 15'e yakın
+    r1 = m.blend_day(models_data, horizon=1, weights={"icon": 10.0, "ecmwf": 0.1, "gfs": 0.1})
+    ok(r1["max_temp"] < 16.0,
+       f"icon ağır → blend ~15 beklenir, bulunan {r1['max_temp']}")
+    ok(r1["weights_source"] == "dynamic",
+       f"weights_source 'dynamic' beklenir: {r1}")
+    # statik — weights=None
+    r2 = m.blend_day(models_data, horizon=1, weights=None)
+    ok(r2["weights_source"] == "static",
+       f"weights_source 'static' beklenir: {r2}")
+
+test("blend_day: weights parametresi dinamik ağırlığı uygular",
+     test_blend_day_accepts_weights)
+
+
+def test_db_phase4_schema():
+    """paper_trades'te signal_* mevcut + model_forecasts tablosu var."""
+    db = _import_db_module()
+    import sqlite3
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.db"
+        db.init_db(db_path)
+        with sqlite3.connect(str(db_path)) as conn:
+            tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            mf_cols = {r[1] for r in conn.execute("PRAGMA table_info(model_forecasts)")}
+    ok("model_forecasts" in tables, f"model_forecasts tablosu yok: {tables}")
+    for c in ("station", "date", "model", "max_temp", "actual_temp", "abs_error"):
+        ok(c in mf_cols, f"model_forecasts şemasında {c} yok")
+
+test("db.py: model_forecasts tablosu + gereken kolonlar",
+     test_db_phase4_schema)
+
+
+def test_main_records_model_forecasts():
+    """main.py /api/weather endpoint'i record_model_forecast çağırıyor."""
+    main_path = Path(__file__).resolve().parent.parent / "main.py"
+    src = main_path.read_text(encoding="utf-8")
+    ok("record_model_forecast" in src,
+       "main.py per-model forecast kaydetmiyor")
+    ok("compute_dynamic_weights" in src,
+       "main.py dinamik ağırlık kullanmıyor")
+    ok("weights=dyn_weights" in src,
+       "blend_day'e weights=dyn_weights geçilmiyor")
+
+test("main.py: /api/weather dinamik ağırlık + per-model kaydı",
+     test_main_records_model_forecasts)
+
+
+def test_scanner_settle_records_model_actuals():
+    """scanner.settle() model_forecasts.actual_temp'i de güncelliyor."""
+    scanner_path = Path(__file__).resolve().parent.parent / "bot" / "scanner.py"
+    src = scanner_path.read_text(encoding="utf-8")
+    start = src.find("def settle(")
+    end   = src.find("\ndef ", start + 1)
+    body  = src[start:end]
+    ok("record_model_actuals" in body,
+       "settle() per-model actuals'ı yazmıyor")
+
+test("scanner.settle: record_model_actuals çağrısı kaynak kodda",
+     test_scanner_settle_records_model_actuals)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

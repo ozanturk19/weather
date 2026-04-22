@@ -239,14 +239,18 @@ def parse_hourly(data: dict) -> dict:
     return result
 
 
-def blend_day(models_data: dict, horizon: int = 1) -> dict:
+def blend_day(models_data: dict, horizon: int = 1,
+              weights: dict | None = None) -> dict:
     """
     Ağırlıklı blend — 4 iyileştirme:
     1) Adaptif outlier tespiti (2× std, sabit 5°C değil)
     2) Ağırlıklı standart sapma (hi-lo range değil)
     3) Horizon-aware eşikler (D+0/1/2 için farklı tolerans)
     4) Konsensüs skoru (±1°C içindeki model oranı)
+
+    weights: Faz 4 — opsiyonel dinamik ağırlık dict. None ise MODEL_WEIGHTS statik.
     """
+    mw = weights if weights else MODEL_WEIGHTS   # ağırlık kaynağı
     model_maxes = {
         name: v["max_temp"]
         for name, v in models_data.items()
@@ -258,6 +262,7 @@ def blend_day(models_data: dict, horizon: int = 1) -> dict:
             "spread": None, "uncertainty": "?",
             "outliers_removed": [], "models_used": [],
             "consensus_ratio": None, "horizon": horizon,
+            "weights_source": "static",
         }
 
     values = list(model_maxes.values())
@@ -283,8 +288,8 @@ def blend_day(models_data: dict, horizon: int = 1) -> dict:
     outliers_removed = [k for k in model_maxes if k not in filtered]
 
     # ── Adım 2: Ağırlıklı blend ─────────────────────────────────────────
-    total_w = sum(MODEL_WEIGHTS.get(k, 1.0) for k in filtered)
-    blend   = round(sum(v * MODEL_WEIGHTS.get(k, 1.0) for k, v in filtered.items()) / total_w, 1)
+    total_w = sum(mw.get(k, 1.0) for k in filtered)
+    blend   = round(sum(v * mw.get(k, 1.0) for k, v in filtered.items()) / total_w, 1)
 
     lo = round(min(filtered.values()), 1)
     hi = round(max(filtered.values()), 1)
@@ -294,7 +299,7 @@ def blend_day(models_data: dict, horizon: int = 1) -> dict:
     # Yeni: ECMWF 2x ağırlıklı, gerçek istatistiksel dağılım
     if len(filtered) > 1:
         variance = sum(
-            MODEL_WEIGHTS.get(k, 1.0) * (v - blend) ** 2
+            mw.get(k, 1.0) * (v - blend) ** 2
             for k, v in filtered.items()
         ) / total_w
         spread = round(math.sqrt(variance), 2)
@@ -353,6 +358,7 @@ def blend_day(models_data: dict, horizon: int = 1) -> dict:
         "horizon":          horizon,
         "calib_factor":     calib,                   # Faz 2: dinamik CALIB_STD_FACTOR
         "calibrated_spread": round(calibrated_spread, 2),
+        "weights_source":   "dynamic" if weights else "static",   # Faz 4
     }
 
 
@@ -428,10 +434,33 @@ async def get_weather(station: str, refresh: bool = False):
             for name, days in model_days.items()
             if date in days
         }
+        horizon = min(i, 2)
+
+        # Faz 4: istasyon + horizon bazlı dinamik ağırlık (yeterli veri varsa)
+        dyn_weights = None
+        try:
+            from bot.dynamic_weights import compute_dynamic_weights
+            dyn_weights = compute_dynamic_weights(station, horizon_days=horizon)
+        except Exception:
+            pass
+
         days_result[date] = {
             "models": per_model,
-            "blend":  blend_day(per_model, horizon=min(i, 2)),
+            "blend":  blend_day(per_model, horizon=horizon, weights=dyn_weights),
         }
+
+        # Faz 4: her modelin max_temp'ini DB'ye kaydet (rolling RMSE kaynağı)
+        try:
+            from bot.db import record_model_forecast
+            for model_name, day_data in per_model.items():
+                mt = day_data.get("max_temp")
+                if mt is not None:
+                    record_model_forecast(
+                        station=station, date=date, model=model_name,
+                        max_temp=mt, horizon_days=horizon,
+                    )
+        except Exception:
+            pass
 
     # Bias düzeltmesi: predictions.json'dan sistematik hatayı hesapla
     preds = _load_preds()
