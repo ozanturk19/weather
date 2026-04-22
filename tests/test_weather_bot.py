@@ -2633,6 +2633,161 @@ test("main.py: /api/portfolio/var endpoint + import",
 
 # ══════════════════════════════════════════════════════════════════════════════
 print(f"\n{'═'*62}")
+print(" TEST 30: Faz 6b — Çok-kaynaklı settlement audit")
+print(f"{'═'*62}")
+
+
+def test_sa_schema():
+    """settlement_audit tablosu + gereken kolonlar."""
+    db = _import_db_module()
+    import sqlite3
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.db"
+        db.init_db(db_path)
+        with sqlite3.connect(str(db_path)) as conn:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(settlement_audit)")}
+    for c in ("station", "date", "source", "actual_temp", "rounded_temp"):
+        ok(c in cols, f"settlement_audit şemasında {c} yok")
+
+test("db.py: settlement_audit tablosu + kolonlar", test_sa_schema)
+
+
+def test_sa_record_upsert():
+    """record_settlement_source: aynı (station,date,source) tek satır, UPSERT."""
+    db = _import_db_module()
+    import sqlite3
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.db"
+        db.init_db(db_path)
+        db.record_settlement_source("eglc", "2026-04-22", "open-meteo", 15.3, db_path=db_path)
+        db.record_settlement_source("eglc", "2026-04-22", "open-meteo", 15.7, db_path=db_path)
+        with sqlite3.connect(str(db_path)) as conn:
+            rows = conn.execute(
+                "SELECT actual_temp FROM settlement_audit WHERE station=? AND date=? AND source=?",
+                ("eglc", "2026-04-22", "open-meteo")
+            ).fetchall()
+    ok(len(rows) == 1, f"tek satır beklenir, bulunan {len(rows)}")
+    ok(abs(rows[0][0] - 15.7) < 0.01, f"son değer 15.7 olmalı: {rows[0][0]}")
+
+test("record_settlement_source: UPSERT davranışı", test_sa_record_upsert)
+
+
+def test_sa_multiple_sources_same_day():
+    """Aynı gün, farklı kaynaklar — audit'ta 2 satır."""
+    db = _import_db_module()
+    import sqlite3
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.db"
+        db.init_db(db_path)
+        db.record_settlement_source("eglc", "2026-04-22", "open-meteo", 15.2, db_path=db_path)
+        db.record_settlement_source("eglc", "2026-04-22", "metar",       16.4, db_path=db_path)
+        with sqlite3.connect(str(db_path)) as conn:
+            rows = conn.execute(
+                "SELECT source FROM settlement_audit WHERE station=? AND date=?",
+                ("eglc", "2026-04-22")
+            ).fetchall()
+    sources = {r[0] for r in rows}
+    ok(sources == {"open-meteo", "metar"}, f"2 kaynak beklenir: {sources}")
+
+test("settlement_audit: 2 kaynak aynı günde", test_sa_multiple_sources_same_day)
+
+
+def test_sa_get_audit_diff():
+    """get_settlement_audit: kaynaklar arası fark hesaplanır + disagreement flag."""
+    db = _import_db_module()
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.db"
+        db.init_db(db_path)
+        # 1.2°C fark → round(15.2)=15, round(16.4)=16, bucket diff=1 → disagreement
+        db.record_settlement_source("eglc", "2026-04-22", "open-meteo", 15.2, db_path=db_path)
+        db.record_settlement_source("eglc", "2026-04-22", "metar",       16.4, db_path=db_path)
+        # tam uyum — diff 0
+        db.record_settlement_source("lfpg", "2026-04-22", "open-meteo", 12.0, db_path=db_path)
+        db.record_settlement_source("lfpg", "2026-04-22", "metar",       12.3, db_path=db_path)
+
+        audit = db.get_settlement_audit(days=60, db_path=db_path)
+
+    by_key = {(a["station"], a["date"]): a for a in audit}
+    eglc = by_key[("eglc", "2026-04-22")]
+    lfpg = by_key[("lfpg", "2026-04-22")]
+    ok(eglc["disagreement"] is True, f"eglc disagreement bekleniyor: {eglc}")
+    ok(eglc["max_diff_bucket"] == 1, f"eglc bucket diff 1 beklenir: {eglc}")
+    ok(abs(eglc["max_diff_c"] - 1.2) < 0.05, f"eglc ham fark ~1.2: {eglc}")
+    ok(lfpg["disagreement"] is False, f"lfpg disagreement olmamalı: {lfpg}")
+    ok(lfpg["max_diff_bucket"] == 0, f"lfpg bucket diff 0: {lfpg}")
+
+test("get_settlement_audit: disagreement flag + diff hesapları",
+     test_sa_get_audit_diff)
+
+
+def test_sa_none_input_silent():
+    """None input → sessizce geçmeli (bot akışını bozmamalı)."""
+    db = _import_db_module()
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.db"
+        db.init_db(db_path)
+        # None → return; raise etmez
+        db.record_settlement_source("eglc", "2026-04-22", "open-meteo", None, db_path=db_path)
+        audit = db.get_settlement_audit(days=30, db_path=db_path)
+    ok(audit == [], f"None input kayıt etmemeli: {audit}")
+
+test("record_settlement_source: None güvenli (sessiz)",
+     test_sa_none_input_silent)
+
+
+def test_sa_disagreement_stats():
+    """settlement_disagreement_stats: istasyon başı oran ve ortalama fark."""
+    db = _import_db_module()
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.db"
+        db.init_db(db_path)
+        # lfpg 3 gün, 2'si disagreement, 1'i uyum
+        from datetime import datetime as _dt, timedelta as _td
+        for i, (om, mt) in enumerate([(15.0, 16.3), (12.0, 12.2), (18.0, 19.7)]):
+            d = (_dt.now() - _td(days=i + 1)).strftime("%Y-%m-%d")
+            db.record_settlement_source("lfpg", d, "open-meteo", om, db_path=db_path)
+            db.record_settlement_source("lfpg", d, "metar",       mt, db_path=db_path)
+        stats = db.settlement_disagreement_stats(days=60, db_path=db_path)
+    lfpg = stats.get("lfpg", {})
+    ok(lfpg.get("n_days") == 3, f"3 gün beklenir: {lfpg}")
+    ok(lfpg.get("n_disagreement") == 2, f"2 uyumsuzluk: {lfpg}")
+    ok(lfpg.get("disagreement_rate") > 0.6, f"oran > 0.6: {lfpg}")
+
+test("settlement_disagreement_stats: istasyon başı oran",
+     test_sa_disagreement_stats)
+
+
+def test_sa_scanner_records_both():
+    """scanner.settle() her iki kaynağı da record_settlement_source ile yazıyor."""
+    scanner_path = Path(__file__).resolve().parent.parent / "bot" / "scanner.py"
+    src = scanner_path.read_text(encoding="utf-8")
+    start = src.find("def settle(")
+    end   = src.find("\ndef ", start + 1)
+    body  = src[start:end]
+    ok("record_settlement_source" in body,
+       "settle() settlement_audit'a yazmıyor")
+    ok("\"open-meteo\"" in body and "\"metar\"" in body,
+       "settle() her iki kaynağı ayrı ayrı kaydetmiyor")
+
+test("scanner.settle: her iki kaynağı audit'a yazıyor",
+     test_sa_scanner_records_both)
+
+
+def test_sa_endpoint_in_main():
+    """main.py /api/settlement-audit endpoint tanımlı."""
+    main_path = Path(__file__).resolve().parent.parent / "main.py"
+    src = main_path.read_text(encoding="utf-8")
+    ok("/api/settlement-audit" in src, "settlement-audit endpoint eksik")
+    ok("get_settlement_audit" in src, "get_settlement_audit import eksik")
+    ok("settlement_disagreement_stats" in src,
+       "settlement_disagreement_stats import eksik")
+
+test("main.py: /api/settlement-audit endpoint",
+     test_sa_endpoint_in_main)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+print(f"\n{'═'*62}")
 print(f"  SONUÇ: {PASS} geçti / {FAIL} başarısız / {PASS+FAIL} toplam")
 if FAIL == 0:
     print("  🎉 Tüm testler geçti!")

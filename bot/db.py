@@ -208,6 +208,25 @@ CREATE TABLE IF NOT EXISTS model_weights (
 
 CREATE INDEX IF NOT EXISTS idx_weights_station_recorded ON model_weights(station, recorded_at);
 CREATE INDEX IF NOT EXISTS idx_weights_station_model    ON model_weights(station, model);
+
+-- ───────────────────────────────────────────────────────────────────────
+-- settlement_audit: çok-kaynaklı settle doğrulama (Faz 6b)
+-- Aynı (station, date) için her kaynak (open-meteo / metar / wu / ...)
+-- tek satır. Kaynaklar arası fark izleme için.
+-- ───────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS settlement_audit (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    station      TEXT NOT NULL,
+    date         TEXT NOT NULL,               -- gözlem tarihi
+    source       TEXT NOT NULL,               -- 'open-meteo' | 'metar' | 'wu' | ...
+    actual_temp  REAL,                        -- ham °C (yuvarlamasız)
+    rounded_temp INTEGER,                     -- settlement için yuvarlatılmış
+    recorded_at  INTEGER DEFAULT (strftime('%s','now')),
+    UNIQUE (station, date, source)
+);
+
+CREATE INDEX IF NOT EXISTS idx_sa_date    ON settlement_audit(date);
+CREATE INDEX IF NOT EXISTS idx_sa_station ON settlement_audit(station, date);
 """
 
 
@@ -489,6 +508,123 @@ def summary_stats(db_path: Path = DB_PATH) -> dict:
             "bias_total":    conn.execute("SELECT COUNT(*) FROM bias_corrections").fetchone()[0],
             "weights_total": conn.execute("SELECT COUNT(*) FROM model_weights").fetchone()[0],
         }
+
+
+# ── Settlement Audit (Faz 6b) ───────────────────────────────────────────────
+def record_settlement_source(
+    station: str,
+    date: str,
+    source: str,
+    actual_temp: float | None,
+    rounded_temp: int | None = None,
+    db_path: Path = DB_PATH,
+) -> None:
+    """Tek kaynaktan gelen gözlemi settlement_audit'a yaz (UPSERT).
+
+    Aynı (station, date, source) için yeniden çağrı zararsız: sonuncu kazanır.
+    Sessiz başarısızlık — settle akışını asla bozmasın.
+    """
+    if actual_temp is None:
+        return
+    try:
+        r = int(round(actual_temp)) if rounded_temp is None else int(rounded_temp)
+        with get_db(db_path) as conn:
+            conn.execute(
+                """INSERT INTO settlement_audit
+                   (station, date, source, actual_temp, rounded_temp)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(station, date, source) DO UPDATE SET
+                     actual_temp  = excluded.actual_temp,
+                     rounded_temp = excluded.rounded_temp,
+                     recorded_at  = strftime('%s','now')""",
+                (station, date, source, float(actual_temp), r),
+            )
+    except Exception:
+        pass
+
+
+def get_settlement_audit(
+    days: int = 30,
+    station: str | None = None,
+    db_path: Path = DB_PATH,
+) -> list[dict]:
+    """Son `days` gün için settlement audit — kaynaklar arası karşılaştırma.
+
+    Döner: [{station, date, sources: {source: actual_temp, ...},
+             max_diff_c, max_diff_bucket}, ...]  (tarih desc)
+    """
+    from datetime import datetime as _dt, timedelta as _td
+    cutoff = (_dt.now() - _td(days=days)).strftime("%Y-%m-%d")
+    sql = """
+        SELECT station, date, source, actual_temp, rounded_temp
+        FROM settlement_audit
+        WHERE date >= ?
+    """
+    params: list = [cutoff]
+    if station:
+        sql += " AND station = ?"
+        params.append(station)
+    sql += " ORDER BY date DESC, station, source"
+
+    try:
+        with get_db(db_path, readonly=True) as conn:
+            rows = conn.execute(sql, params).fetchall()
+    except Exception:
+        return []
+
+    # Grupla: (station, date) -> {source: actual_temp, ...}
+    groups: dict = {}
+    bucket: dict = {}
+    for r in rows:
+        key = (r[0], r[1])
+        groups.setdefault(key, {})[r[2]] = r[3]
+        bucket.setdefault(key, {})[r[2]] = r[4]
+
+    result: list = []
+    for (st, dt), src_map in groups.items():
+        temps = [v for v in src_map.values() if v is not None]
+        bucks = [v for v in bucket[(st, dt)].values() if v is not None]
+        max_diff_c       = round(max(temps) - min(temps), 2) if len(temps) >= 2 else 0.0
+        max_diff_bucket  = int(max(bucks) - min(bucks)) if len(bucks) >= 2 else 0
+        result.append({
+            "station":         st,
+            "date":            dt,
+            "sources":         src_map,
+            "rounded":         bucket[(st, dt)],
+            "n_sources":       len(src_map),
+            "max_diff_c":      max_diff_c,
+            "max_diff_bucket": max_diff_bucket,
+            "disagreement":    max_diff_bucket >= 1,  # bucket farkı = settlement risk
+        })
+    # Tarih desc sırasını koru
+    result.sort(key=lambda r: (r["date"], r["station"]), reverse=True)
+    return result
+
+
+def settlement_disagreement_stats(
+    days: int = 60, db_path: Path = DB_PATH
+) -> dict:
+    """İstasyon bazlı kaynak uyumsuzluk özet istatistiği."""
+    audit = get_settlement_audit(days=days, db_path=db_path)
+    by_station: dict = {}
+    for a in audit:
+        st = a["station"]
+        s  = by_station.setdefault(st, {"n_days": 0, "n_disagreement": 0,
+                                         "max_diff_c": 0.0, "sum_diff_c": 0.0})
+        if a["n_sources"] < 2:
+            continue
+        s["n_days"] += 1
+        s["sum_diff_c"] += a["max_diff_c"]
+        if a["disagreement"]:
+            s["n_disagreement"] += 1
+        if a["max_diff_c"] > s["max_diff_c"]:
+            s["max_diff_c"] = a["max_diff_c"]
+    # oran + ortalama
+    for st, s in by_station.items():
+        n = s["n_days"] or 1
+        s["disagreement_rate"] = round(s["n_disagreement"] / n, 3)
+        s["mean_diff_c"]       = round(s["sum_diff_c"] / n, 3)
+    return by_station
 
 
 if __name__ == "__main__":

@@ -1030,6 +1030,30 @@ async def get_portfolio_var(source: str = "paper", days: int = 60):
     return result
 
 
+@app.get("/api/settlement-audit")
+async def get_settlement_audit(days: int = 30, station: str = ""):
+    """Çok-kaynaklı settle gözlemleri + uyumsuzluk istatistiği (Faz 6b).
+
+    days: geriye bakış penceresi (default 30)
+    station: opsiyonel filtre
+    """
+    try:
+        from bot.db import get_settlement_audit as _gsa, settlement_disagreement_stats
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Audit modülü yüklenemedi: {e}")
+    entries = _gsa(days=days, station=station or None)
+    stats   = settlement_disagreement_stats(days=days)
+    n_disagree = sum(1 for e in entries if e.get("disagreement"))
+    return {
+        "days":            days,
+        "station":         station or None,
+        "n_entries":       len(entries),
+        "n_disagreement":  n_disagree,
+        "entries":         entries,
+        "station_stats":   stats,
+    }
+
+
 @app.post("/api/bot-trades/scan")
 async def bot_scan(x_api_token: str = Header(default="")):
     """Bot taramasını tetikle (scanner.py scan)."""

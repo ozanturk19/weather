@@ -750,26 +750,51 @@ def settle():
         try:
             actual = None
 
-            # Birincil: Open-Meteo — Polymarket'ın WU kaynağıyla uyumlu daily max
-            actual_om = get_actual_temp_open_meteo(station, yesterday)
-            if actual_om is not None:
-                actual = round(actual_om)
-                print(f"  🌡️  {station.upper()} Open-Meteo: {actual_om:.1f}°C → {actual}°C")
+            # ── Faz 6b: her iki kaynağı da çağır (disagreement audit için) ──
+            actual_om_raw: float | None = get_actual_temp_open_meteo(station, yesterday)
+            actual_metar_raw: float | None = None
+            try:
+                r = httpx.get(
+                    f"{WEATHER_API}/api/metar-history?station={station}", timeout=30
+                )
+                r.raise_for_status()
+                daily      = r.json().get("daily_maxes", [])
+                day_record = next((d for d in daily if d["date"] == yesterday), None)
+                if day_record and day_record.get("max_temp") is not None:
+                    actual_metar_raw = float(day_record["max_temp"])
+            except Exception as metar_e:
+                print(f"  ⚠️  METAR query başarısız ({station}): {metar_e}")
 
-            # Yedek: METAR API (Open-Meteo veri yoksa veya hata verdiyse)
-            if actual is None:
-                try:
-                    r = httpx.get(
-                        f"{WEATHER_API}/api/metar-history?station={station}", timeout=30
+            # Audit kaydı (sessiz) — her mevcut kaynak için ayrı satır
+            try:
+                from bot.db import record_settlement_source
+                if actual_om_raw is not None:
+                    record_settlement_source(station, yesterday, "open-meteo", actual_om_raw)
+                if actual_metar_raw is not None:
+                    record_settlement_source(station, yesterday, "metar", actual_metar_raw)
+            except Exception:
+                pass
+
+            # Birincil: Open-Meteo (Polymarket WU kaynağıyla uyumlu daily max)
+            if actual_om_raw is not None:
+                actual = round(actual_om_raw)
+                print(f"  🌡️  {station.upper()} Open-Meteo: {actual_om_raw:.1f}°C → {actual}°C")
+
+            # Yedek: METAR (Open-Meteo yoksa)
+            if actual is None and actual_metar_raw is not None:
+                actual = round(actual_metar_raw)
+                print(f"  🌡️  {station.upper()} METAR (yedek): {actual}°C")
+
+            # Uyumsuzluk uyarısı — her iki kaynak da var ama farklılar
+            if actual_om_raw is not None and actual_metar_raw is not None:
+                diff_c      = abs(actual_om_raw - actual_metar_raw)
+                diff_bucket = abs(round(actual_om_raw) - round(actual_metar_raw))
+                if diff_bucket >= 1:
+                    print(
+                        f"  ⚠️  {station.upper()} kaynak uyumsuzluk: "
+                        f"OM={actual_om_raw:.1f} METAR={actual_metar_raw:.1f} "
+                        f"(Δ={diff_c:.1f}°C, bucket Δ={diff_bucket})"
                     )
-                    r.raise_for_status()
-                    daily      = r.json().get("daily_maxes", [])
-                    day_record = next((d for d in daily if d["date"] == yesterday), None)
-                    if day_record:
-                        actual = round(day_record["max_temp"])
-                        print(f"  🌡️  {station.upper()} METAR (yedek): {actual}°C")
-                except Exception as metar_e:
-                    print(f"  ⚠️  METAR yedek başarısız ({station}): {metar_e}")
 
             if actual is None:
                 print(f"  ⏳ {station.upper()} {label}  — gerçek veri henüz yok (settlement bekle)")
