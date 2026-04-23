@@ -84,16 +84,21 @@ def load_live_trades() -> list:
     return []
 
 def save_live_trades(trades: list):
+    """SQLite-first yazım (Faz 7): önce DB, sonra JSON yedek.
+
+    Crash SQLite yazımı sonrası JSON dump öncesi olursa → DB tutarlı,
+    JSON eskide kalır; bir sonraki save'de JSON tazelenecek. Tersi mümkün
+    değil — DB yazımı başarısızsa JSON da yazılmaz."""
+    # 1. SQLite birincil yazım
+    try:
+        from bot.db import write_live_trades_list
+        write_live_trades_list(trades)
+    except Exception as e:
+        print(f"  ⚠️  SQLite live yazım hatası (JSON'a devam): {e}")
+    # 2. JSON yedek (insan-okunur + eski araç uyumluluğu)
     tmp = TRADES_FILE.with_suffix(".tmp")
     tmp.write_text(json.dumps(trades, indent=2, ensure_ascii=False), encoding="utf-8")
     tmp.replace(TRADES_FILE)
-    # SQLite ayna senkronizasyonu — sessiz başarısızlık
-    try:
-        from bot.db import sync_live_trades, init_db
-        init_db()
-        sync_live_trades()
-    except Exception:
-        pass
 
 # ── CLOB Client Kurulumu ────────────────────────────────────────────────────
 def setup_client():
@@ -306,6 +311,43 @@ def place_limit_order(
     if balance < MIN_USDC_RESERVE + cost:
         print(f"  ⛔ Yetersiz bakiye: ${balance:.2f} USDC (min rezerv + maliyet = ${MIN_USDC_RESERVE + cost:.2f})")
         return None
+
+    # ── Faz 7: Portfolio VaR gate ──────────────────────────────────────────
+    # Mevcut açık + bu yeni emir ile simüle; VaR_95 sert tavan aşılırsa blokla.
+    # Korelasyon kaynağı: forecast_errors (istasyonlar arası hata korelasyonu).
+    try:
+        from bot.portfolio_var import portfolio_var
+        hypothetical = [
+            {
+                "id":            t.get("order_id", t.get("id", "")),
+                "station":       t["station"],
+                "potential_win": float(t.get("shares", 0)) - float(t.get("cost_usd") or 0),
+                "cost_usd":      float(t.get("cost_usd") or 0),
+                "mode_pct":      t.get("ens_mode_pct") or t.get("mode_pct"),
+            }
+            for t in live_trades
+            if t["status"] in ("pending_fill", "filled")
+        ]
+        hypothetical.append({
+            "id":            paper_id,
+            "station":       station,
+            "potential_win": float(shares) - cost,
+            "cost_usd":      cost,
+            "mode_pct":      None,     # new order — mode_pct bilinmiyorsa 0.5 varsayılır
+        })
+        var_report = portfolio_var(hypothetical, n_sims=500)
+        var95 = float(var_report.get("var_95", 0.0))
+        # Sert tavan: MAX_DAILY_SPEND_USDC'nin 1.5 katı kadar kayıp bile çok
+        var_cap = MAX_DAILY_SPEND_USDC * 1.5
+        if var95 < -var_cap:
+            print(
+                f"  ⛔ VaR gate: portföy var_95={var95:.2f} < -${var_cap:.0f} "
+                f"(açık={len(hypothetical)}) — yeni emir bloke"
+            )
+            return None
+    except Exception as e:
+        # VaR hesap başarısızsa order'ı engelleme, sadece uyar (fallback: geçir)
+        print(f"  ⚠️  VaR gate hesap hatası, atlanıyor: {e}")
 
     # ── BTC botu nonce çakışma koruması ─────────────────────────────────────
     wallet = wallet_address_from_pk(PK)

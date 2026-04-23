@@ -105,7 +105,24 @@ MIN_SIGNAL_SCORE = 55
 
 
 def should_pause_station(station: str) -> bool:
-    """İstasyon-bazlı skill pause aktif mi? (negatif skill korunağı)"""
+    """İstasyon-bazlı skill pause aktif mi? (negatif skill korunağı).
+
+    Faz 7: SQLite station_status tablosunu öncelikli kontrol eder. Tabloya
+    runtime'da yazılabilir (override), eksikse statik STATION_SKILL_PAUSE set
+    fallback olarak kullanılır. Böylece kod değişikliği olmadan pause/resume
+    yapılabilir.
+    """
+    try:
+        from bot.db import DB_PATH, get_db
+        with get_db(DB_PATH, readonly=True) as conn:
+            row = conn.execute(
+                "SELECT paused FROM station_status WHERE station = ?",
+                (station,),
+            ).fetchone()
+            if row is not None:
+                return bool(row[0])
+    except Exception:
+        pass
     return station in STATION_SKILL_PAUSE
 
 
@@ -133,16 +150,17 @@ def load_trades() -> list:
     return []
 
 def save_trades(trades: list):
+    """SQLite-first yazım (Faz 7): önce DB, sonra JSON yedek."""
+    # 1. SQLite birincil yazım
+    try:
+        from bot.db import write_paper_trades_list
+        write_paper_trades_list(trades)
+    except Exception as e:
+        print(f"  ⚠️  SQLite paper yazım hatası (JSON'a devam): {e}")
+    # 2. JSON yedek (insan-okunur + eski araç uyumluluğu)
     TRADES_FILE.write_text(
         json.dumps(trades, indent=2, ensure_ascii=False), encoding="utf-8"
     )
-    # SQLite ayna senkronizasyonu — sessiz başarısızlık (bot akışı bozmasın)
-    try:
-        from bot.db import sync_paper_trades, init_db
-        init_db()
-        sync_paper_trades()
-    except Exception:
-        pass
 
 # ── Adaptif Bias Hesabı ─────────────────────────────────────────────────────
 def compute_station_biases(trades: list) -> dict:
@@ -399,6 +417,23 @@ def scan_date(station: str, target_date: str, trades: list,
                 f"bias düzeltme {bias:+d}°C  ({raw_top_pick}°C → {top_pick}°C)"
             )
 
+        # ── Settlement Delta Düzeltmesi (Faz 7) ─────────────────────────────
+        # WU ↔ Open-Meteo sistematik farkı öğrenilmiş medyan (proxy: METAR-OM).
+        # settlement_audit tablosundan rolling 60g medyan; yeterli veri yoksa 0.
+        try:
+            from bot.settlement_delta import learn_station_delta
+            sdelta = learn_station_delta(station)
+        except Exception:
+            sdelta = 0.0
+        if sdelta:
+            pre_sdelta = top_pick
+            top_pick = int(round(top_pick + sdelta))
+            if top_pick != pre_sdelta:
+                print(
+                    f"  🎯 {station.upper()} {label}  "
+                    f"settlement delta {sdelta:+.1f}°C  ({pre_sdelta}°C → {top_pick}°C)"
+                )
+
         # Aynı station + tarih + top_pick için zaten pozisyon var mı?
         already_same = any(
             t["station"] == station and t["date"] == target_date
@@ -501,6 +536,8 @@ def scan_date(station: str, target_date: str, trades: list,
             )
             return None
 
+    # trade_shares Faz 7'de signal_score'a göre aşağıda hesaplanır; burada
+    # henüz bilinmediği için baz cost'u EV filtresinin ihtiyacı için kur.
     cost          = round(SHARES * price, 2)
     potential_win = round(SHARES - cost, 2)
     cheap_tag     = "💰" if price < 0.20 else "←"
@@ -533,6 +570,21 @@ def scan_date(station: str, target_date: str, trades: list,
         )
         return None
 
+    # ── Faz 7: sinyal skoru → dinamik pozisyon boyutu ───────────────────────
+    # Tier bazlı çarpan: Premium 1.5x, Strong 1.2x, Moderate 1.0x (zayıf bloke).
+    try:
+        from bot.position_sizing import compute_shares
+        trade_shares = compute_shares(SHARES, signal_score)
+    except Exception:
+        trade_shares = SHARES
+    if trade_shares != SHARES:
+        print(
+            f"  📏 {station.upper()} {label}  "
+            f"dinamik size: {SHARES} → {trade_shares} share "
+            f"(Q{signal_score})"
+        )
+    # cost/potential_win trade_shares kullanarak yeniden hesaplanır (aşağıda).
+
     # 2. pick bilgisi: ensemble'ın 2. adayı neydi?
     second_tag = ""
     if second_pick is not None and second_pct is not None:
@@ -563,9 +615,9 @@ def scan_date(station: str, target_date: str, trades: list,
         "bucket_title":  bucket["title"],
         "condition_id":  cond_id,
         "entry_price":   price,
-        "shares":        SHARES,
-        "cost_usd":      cost,
-        "potential_win": potential_win,
+        "shares":        trade_shares,
+        "cost_usd":      round(trade_shares * price, 2),
+        "potential_win": round(trade_shares - trade_shares * price, 2),
         "liquidity":     liq,
         "status":        "open",
         "entered_at":    datetime.now().isoformat(),
@@ -574,13 +626,16 @@ def scan_date(station: str, target_date: str, trades: list,
         "pnl":           None,
         "settled_at":    None,
     }
+    # Dinamik cost/potential_win log için de güncelle
+    cost          = trade["cost_usd"]
+    potential_win = trade["potential_win"]
 
     edge_str = f" · edge{((mode_pct/100)-price):+.0%}" if mode_pct is not None else ""
     score_str = f" · Q{signal_score}({signal_grade[0]})" if signal_score is not None else ""
     print(
         f"  ✅ {station.upper()} {label}  "
         f"🎯{top_pick}°C (blend={blend:.1f}){mode_tag}{second_tag} @ {pct}¢ {cheap_tag}  "
-        f"{SHARES} share · risk=${cost:.2f} · pot +${potential_win:.2f}{edge_str}{score_str}"
+        f"{trade_shares} share · risk=${cost:.2f} · pot +${potential_win:.2f}{edge_str}{score_str}"
     )
     result_trades = [trade]
 

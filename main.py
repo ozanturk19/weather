@@ -537,6 +537,13 @@ async def get_ensemble(station: str):
         "ecmwf": "ecmwf_ifs025",
         "aifs":  "ecmwf_aifs025",
     }
+    # Faz 7: Beklenen üye sayıları (ctrl dahil). Çok düşerse sessiz degradation
+    # var demektir → log'da uyar, dashboard'da izlenebilir.
+    EXPECTED_MEMBERS = {
+        "icon":  40,
+        "ecmwf": 50,
+        "aifs":  50,
+    }
 
     base_url = (
         f"https://ensemble-api.open-meteo.com/v1/ensemble"
@@ -571,11 +578,33 @@ async def get_ensemble(station: str):
         return result
 
     async def fetch_model(client: httpx.AsyncClient, model_id: str) -> dict:
-        """Tek model için ensemble verisi çek. Hata durumunda boş dict."""
+        """Tek model için ensemble verisi çek. Hata durumunda boş dict.
+
+        Faz 7: üye sayısını doğrula — beklenenin %80'inden azsa uyar. Modelin
+        tamamen kaybolması (0 üye) üst katmanda zaten handle ediliyor; ama
+        kısmi fail ("5/50 member") sessizce tahmin ağırlıklarını bozar.
+        """
         try:
             r = await client.get(base_url + f"&models={model_id}", timeout=20)
             if r.is_success:
-                return parse_ensemble_response(r.json())
+                raw = r.json()
+                # Üye sayısı doğrulaması
+                hourly = raw.get("hourly", {})
+                n_members = sum(
+                    1 for k in hourly if k.startswith("temperature_2m_member")
+                )
+                # model_id → logical name (ters arama)
+                model_name = next(
+                    (k for k, v in ENSEMBLE_MODELS.items() if v == model_id),
+                    model_id,
+                )
+                expected = EXPECTED_MEMBERS.get(model_name, 0)
+                if expected and n_members < expected * 0.8:
+                    print(
+                        f"  ⚠️  {model_name} ensemble üye sayısı düşük: "
+                        f"{n_members}/{expected} (< %80 eşiği)"
+                    )
+                return parse_ensemble_response(raw)
         except Exception:
             pass
         return {}

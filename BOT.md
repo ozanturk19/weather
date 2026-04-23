@@ -177,6 +177,32 @@ AUTO_SELL_MIN_EDGE = 0.02   # fill çok yüksekse SELL atlanır
 | **auto-sell** | 99.8¢ fill-sonrası SELL | Nakit döngüsü 48sa → anında |
 | **crash-tests** | 11 grup × 41 crash test | Bot resilience |
 | **Faz 5** | Kalibrasyon-odaklı filtre üçlüsü | Skill −0.36 → +0.05..+0.15 hedefi |
+| **Faz 7** | SQLite-first yazım + settlement delta + dinamik size + VaR gate + Bayes prior + station pause DB + AIFS member validation | Mimari sağlamlaştırma: tek-kaynak doğruluk, kaynaklar arası sapma öğrenme, sinyal→boyut, tail-risk gate |
+
+---
+
+## 7b. Faz 7 Özeti (2026-04-23)
+
+"Current state report" üzerine hayata geçirilen iyileştirmeler:
+
+| Madde | Dosya | Ne değişti |
+|---|---|---|
+| SQLite birincil | `bot/db.py`, `trader.py`, `scanner.py` | `write_paper_trades_list()` + `write_live_trades_list()` + `rebuild_json_from_db()`. `save_*()` önce DB, sonra JSON yedek |
+| Settlement delta | `bot/settlement_delta.py` (YENİ) | WU ↔ Open-Meteo rolling 60g medyan delta (proxy: METAR-OM). `apply_delta()` `scan_date` içinde Kalman bias sonrası `top_pick`'e eklenir |
+| Dinamik size | `bot/position_sizing.py` (YENİ) | `signal_score` → SHARES çarpanı: Premium 1.5x, Strong 1.2x, Moderate 1.0x |
+| VaR gate | `bot/trader.py::place_limit_order` | Hipotetik portföyü simüle et; `var_95 < -1.5×MAX_DAILY` ise emri bloke |
+| Station pause DB | `bot/db.py::station_status` tablosu | `should_pause_station()` önce DB'den okur, yoksa statik set fallback |
+| Bayes cold-start | `bot/dynamic_weights.py` | `posterior = (n·observed + k·prior)/(n+k)` — az veride model-özel prior ile shrinkage |
+| AIFS üye valid. | `main.py` | Model üye sayısı beklenen %80'in altındaysa uyarı log |
+| Stray skill | repo kökü | `web-designer.skill` silindi |
+
+**Rapordaki 2 yanlış iddia (zaten yapılmış):**
+- §2.2 "CALIB_STD_FACTOR statik" — Aslında `dynamic_calib_factor(horizon, spread)` (main.py:105) zaten dinamik.
+- §2.5 "Bimodal trades yine de girer" — Scanner `peak_sep > BIMODAL_MAX_SEPARATION=1` olan trade'leri zaten pas geçiyor.
+
+**Ertelenen (ayrı iş):**
+- 90 günlük backtest koşumu (geçmiş tur "0-sonuç" cevap vermişti; datetime window hatası ihtimali araştırılmalı)
+- NO-trade özelliği (scanner tek YES tarafını değerlendiriyor; NO satın alma ayrı bir branch)
 
 ---
 
@@ -252,10 +278,10 @@ ssh root@135.181.206.109 "cd /root/weather && ./deploy.sh"
 
 ---
 
-## 12. Test Süiti (280/280)
+## 12. Test Süiti (291/291)
 
 ```bash
-python3 tests/test_weather_bot.py   # 239 birim + entegrasyon testi
+python3 tests/test_weather_bot.py   # 250 birim + entegrasyon testi
 python3 tests/test_crash.py         # 41 crash/defensive test
 ```
 
@@ -270,7 +296,8 @@ python3 tests/test_crash.py         # 41 crash/defensive test
 - 31: Kalibrasyon dashboard (Faz 6c)
 - 32: ECMWF AIFS entegrasyonu (Faz 6d)
 - 33: Otomatik satış (99.8¢ post-fill)
-- **34: Kalibrasyon-odaklı filtreler (Faz 5) ← yeni**
+- 34: Kalibrasyon-odaklı filtreler (Faz 5)
+- **35: SQLite-first + settlement delta + dinamik size (Faz 7) ← yeni**
 
 **Crash test grupları (test_crash.py):**
 JSON corruption · ekstrem sıcaklıklar · DB hataları · kalibrasyon edge · VaR (non-PSD, zero-var) · settlement (None, UPSERT, corrupt DB) · auto-sell (empty, timeout) · concurrency (parallel JSON write, WAL read) · API integrity · env/deploy · bucket defensive.

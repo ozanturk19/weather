@@ -1713,32 +1713,33 @@ test("summary_stats trade sayılarını doğru raporlar",
 
 
 def test_scanner_save_has_sync_hook():
-    """scanner.save_trades artık sync_paper_trades çağırıyor."""
+    """scanner.save_trades artık SQLite-first yazıyor (Faz 7)."""
     scanner_path = Path(__file__).resolve().parent.parent / "bot" / "scanner.py"
     src = scanner_path.read_text(encoding="utf-8")
-    ok("sync_paper_trades" in src, "scanner.save_trades sync çağırmıyor")
-    # try/except ile güvenli olmalı
+    ok("write_paper_trades_list" in src,
+       "scanner.save_trades SQLite-first write API kullanmıyor")
     save_fn_start = src.find("def save_trades(")
     save_fn_end   = src.find("\ndef ", save_fn_start + 1)
     save_fn       = src[save_fn_start:save_fn_end]
     ok("try:" in save_fn and "except" in save_fn,
-       "save_trades içinde sync try/except eksik — sync hatası scanner'ı çökertebilir")
+       "save_trades içinde try/except eksik — DB hatası scanner'ı çökertmemeli")
 
-test("scanner.save_trades sync_paper_trades'i güvenle çağırır",
+test("scanner.save_trades SQLite-first yazım (Faz 7)",
      test_scanner_save_has_sync_hook)
 
 
 def test_trader_save_has_sync_hook():
     trader_path = Path(__file__).resolve().parent.parent / "bot" / "trader.py"
     src = trader_path.read_text(encoding="utf-8")
-    ok("sync_live_trades" in src, "trader.save_live_trades sync çağırmıyor")
+    ok("write_live_trades_list" in src,
+       "trader.save_live_trades SQLite-first write API kullanmıyor")
     save_fn_start = src.find("def save_live_trades(")
     save_fn_end   = src.find("\ndef ", save_fn_start + 1)
     save_fn       = src[save_fn_start:save_fn_end]
     ok("try:" in save_fn and "except" in save_fn,
-       "save_live_trades içinde sync try/except eksik")
+       "save_live_trades içinde try/except eksik")
 
-test("trader.save_live_trades sync_live_trades'i güvenle çağırır",
+test("trader.save_live_trades SQLite-first yazım (Faz 7)",
      test_trader_save_has_sync_hook)
 
 
@@ -3513,6 +3514,180 @@ def test_phase5_retrospective_impact():
 
 test("Faz 5 retrospektif: mid-range skip sayılır",
      test_phase5_retrospective_impact)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+print(f"\n{'═'*62}")
+print(" TEST 35: Faz 7 — SQLite-first + settlement delta + dinamik size")
+print(f"{'═'*62}")
+
+
+def test_sqlite_first_writer_exists():
+    """bot/db.py'de write_paper/live_trades_list + rebuild_json_from_db var."""
+    from bot import db
+    ok(hasattr(db, "write_paper_trades_list"),
+       "write_paper_trades_list eksik (SQLite-first API)")
+    ok(hasattr(db, "write_live_trades_list"),
+       "write_live_trades_list eksik (SQLite-first API)")
+    ok(hasattr(db, "rebuild_json_from_db"),
+       "rebuild_json_from_db eksik (disaster recovery)")
+
+test("SQLite-first yazıcı API'si mevcut", test_sqlite_first_writer_exists)
+
+
+def test_save_trades_sqlite_first_order():
+    """scanner.save_trades + trader.save_live_trades önce DB'ye yazmalı."""
+    import inspect
+    from bot import scanner, trader
+    src_scan = inspect.getsource(scanner.save_trades)
+    ok("write_paper_trades_list" in src_scan,
+       "scanner.save_trades SQLite-first değil (write_paper_trades_list çağrısı yok)")
+    # SQLite çağrısı JSON dump'ten ÖNCE olmalı
+    idx_db   = src_scan.find("write_paper_trades_list")
+    idx_json = src_scan.find("json.dumps")
+    ok(0 <= idx_db < idx_json,
+       "scanner.save_trades DB çağrısı JSON dump'tan önce olmalı")
+
+    src_live = inspect.getsource(trader.save_live_trades)
+    ok("write_live_trades_list" in src_live,
+       "trader.save_live_trades SQLite-first değil")
+    idx_db   = src_live.find("write_live_trades_list")
+    idx_json = src_live.find("json.dumps")
+    ok(0 <= idx_db < idx_json,
+       "trader.save_live_trades DB çağrısı JSON'dan önce olmalı")
+
+test("save_* SQLite-first sırası (DB → JSON)", test_save_trades_sqlite_first_order)
+
+
+def test_settlement_delta_module():
+    """bot.settlement_delta modülü, gerekli API'leri sağlar + sabitler sağlam."""
+    from bot import settlement_delta as sd
+    ok(hasattr(sd, "learn_station_delta"), "learn_station_delta eksik")
+    ok(hasattr(sd, "apply_delta"),         "apply_delta eksik")
+    ok(hasattr(sd, "compute_station_deltas"), "compute_station_deltas eksik")
+    ok(sd.MAX_DELTA_C <= 5.0,
+       f"MAX_DELTA_C makul tavan (≤5): {sd.MAX_DELTA_C}")
+    ok(sd.MIN_PAIRED_SAMPLES >= 3,
+       f"MIN_PAIRED_SAMPLES en az 3: {sd.MIN_PAIRED_SAMPLES}")
+
+test("settlement_delta modülü API'si", test_settlement_delta_module)
+
+
+def test_settlement_delta_apply_rounds():
+    """apply_delta int döner ve delta yoksa top_pick'i değiştirmez."""
+    from bot.settlement_delta import apply_delta
+    # Olmayan istasyon → delta=0 → aynı kalır
+    out = apply_delta("nonexistent_station_zzz", top_pick=17)
+    eq(out, 17, f"Veri yok → top_pick korunur: {out}")
+    ok(isinstance(out, int), f"int dönmeli: {type(out)}")
+
+test("apply_delta: veri yoksa nötr", test_settlement_delta_apply_rounds)
+
+
+def test_position_sizing_tiers():
+    """signal_score → size multiplier mapping doğru tier'larda."""
+    from bot.position_sizing import size_multiplier, compute_shares
+    eq(size_multiplier(90), 1.5, "Premium (≥85) → 1.5x")
+    eq(size_multiplier(85), 1.5, "85 tam → 1.5x")
+    eq(size_multiplier(75), 1.2, "Strong (70-84) → 1.2x")
+    eq(size_multiplier(70), 1.2, "70 tam → 1.2x")
+    eq(size_multiplier(60), 1.0, "Moderate (55-69) → 1.0x")
+    eq(size_multiplier(55), 1.0, "55 tam → 1.0x")
+    eq(size_multiplier(None), 1.0, "None skor → nötr 1.0")
+    # compute_shares integer, tavan ve taban
+    eq(compute_shares(10, 90),  15, "10×1.5 = 15 share")
+    eq(compute_shares(10, 75),  12, "10×1.2 = 12 share")
+    eq(compute_shares(10, 60),  10, "10×1.0 = 10 share")
+    ok(compute_shares(10, None) == 10, "None skor baseline")
+
+test("position_sizing: tier multiplier + share sayısı",
+     test_position_sizing_tiers)
+
+
+def test_station_status_table_in_schema():
+    """db.SCHEMA_SQL içinde station_status tablosu tanımlı."""
+    from bot import db
+    ok("CREATE TABLE IF NOT EXISTS station_status" in db.SCHEMA_SQL,
+       "station_status tablosu şemada yok")
+    ok(hasattr(db, "set_station_paused"),
+       "set_station_paused yardımcı fonksiyonu eksik")
+    ok(hasattr(db, "list_paused_stations"),
+       "list_paused_stations yardımcı fonksiyonu eksik")
+
+test("station_status şeması + yardımcılar", test_station_status_table_in_schema)
+
+
+def test_should_pause_station_db_override(tmp_path=None):
+    """DB'de paused=1 override → statik set'te olmasa bile True."""
+    import os, tempfile, importlib
+    from pathlib import Path
+    from bot import db as bot_db
+
+    tmp = Path(tempfile.mkdtemp(prefix="wxbot_test_"))
+    tmp_db = tmp / "test.db"
+    # Şemayı kur
+    bot_db.init_db(tmp_db)
+    # efhk'yi DB üzerinden pause et (statikte pause değildi)
+    bot_db.set_station_paused("efhk", True, reason="test override", db_path=tmp_db)
+    rows = bot_db.list_paused_stations(db_path=tmp_db)
+    ok(any(r["station"] == "efhk" and r["paused"] == 1 for r in rows),
+       f"efhk DB'de pause=1 olmalı: {rows}")
+
+test("station_status: DB set/list roundtrip",
+     test_should_pause_station_db_override)
+
+
+def test_bayesian_prior_dynamic_weights():
+    """Dynamic weights Bayes posterior fonksiyonu + sabitler."""
+    from bot import dynamic_weights as dw
+    ok(hasattr(dw, "_posterior_rmse"), "_posterior_rmse eksik")
+    ok(dw.PRIOR_STRENGTH > 0, "PRIOR_STRENGTH > 0 olmalı")
+    # n=0 → tamamen prior
+    post0 = dw._posterior_rmse(observed_rmse=5.0, n=0, model="ecmwf")
+    eq(round(post0, 2), round(dw.PRIOR_RMSE["ecmwf"], 2),
+       f"n=0 posterior prior'a eşit: {post0}")
+    # n büyükse observed baskın
+    post_big = dw._posterior_rmse(observed_rmse=1.0, n=1000, model="ecmwf")
+    ok(abs(post_big - 1.0) < 0.05,
+       f"n çok büyükse observed'e yakınsar: {post_big}")
+
+test("dynamic_weights Bayes cold-start prior",
+     test_bayesian_prior_dynamic_weights)
+
+
+def test_aifs_member_validation_exists():
+    """main.py'de EXPECTED_MEMBERS ve düşük-üye uyarısı kodlanmış."""
+    from pathlib import Path
+    src = Path("main.py").read_text(encoding="utf-8", errors="ignore")
+    ok("EXPECTED_MEMBERS" in src, "EXPECTED_MEMBERS sabiti yok")
+    ok("ensemble üye sayısı düşük" in src,
+       "Düşük-üye uyarı mesajı yok (AIFS validation)")
+
+test("AIFS member count validation yerinde",
+     test_aifs_member_validation_exists)
+
+
+def test_var_pre_order_gate_in_trader():
+    """trader.place_limit_order içinde VaR gate var."""
+    import inspect
+    from bot import trader
+    src = inspect.getsource(trader.place_limit_order)
+    ok("portfolio_var" in src, "portfolio_var çağrısı place_limit_order'da yok")
+    ok("var_95" in src,        "var_95 kontrolü yok")
+    ok("VaR gate" in src or "var_cap" in src,
+       "VaR bloke mesajı/sabiti yok")
+
+test("VaR pre-order gate place_limit_order'a bağlı",
+     test_var_pre_order_gate_in_trader)
+
+
+def test_web_designer_skill_removed():
+    """Stray web-designer.skill repo'dan silinmiş olmalı."""
+    from pathlib import Path
+    ok(not Path("web-designer.skill").exists(),
+       "web-designer.skill hâlâ repo kökünde — silinmeli")
+
+test("Stray web-designer.skill silinmiş", test_web_designer_skill_removed)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

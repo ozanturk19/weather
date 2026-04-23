@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 """
-SQLite altyapısı — mevcut JSON sistemi üzerinde mirror + yeni tablolar.
+SQLite altyapısı — birincil kayıt hedefi, JSON insan-okunur yedek (Faz 7).
 
-Tasarım ilkeleri:
-  - JSON = tek kaynak (paper_trades.json, live_trades.json değişmez).
-  - SQLite = sorgulanabilir ayna + yeni veri tabloları (forecast_errors,
-    bias_corrections, model_weights). Bot çökerse SQLite silinebilir;
-    JSON'dan yeniden oluşturulur.
+Tasarım ilkeleri (2026-04 güncel):
+  - SQLite = **birincil yazma hedefi**. Her trade state değişikliği önce DB'ye
+    atomic transaction olarak yazılır, sonra JSON'a dump edilir.
+  - JSON = insan-okunur yedek + eski araçlarla uyumluluk (paper_trades.json,
+    live_trades.json). JSON bozulursa `rebuild_json_from_db()` ile yeniden
+    oluşturulabilir. DB bozulursa `sync_from_json()` ile JSON'dan kurulur.
   - WAL + synchronous=NORMAL: crash sonrası otomatik kurtarma, hızlı yazma.
+
+  Write akışı (save_live_trades / save_trades içinde):
+    1. write_*_trades_list(trades)  → SQLite transaction (crash-safe)
+    2. json.dumps(trades) → disk    → yedek + okuma kolaylığı
 
 Kullanım:
   from bot.db import get_db, sync_all, init_db
@@ -227,6 +232,17 @@ CREATE TABLE IF NOT EXISTS settlement_audit (
 
 CREATE INDEX IF NOT EXISTS idx_sa_date    ON settlement_audit(date);
 CREATE INDEX IF NOT EXISTS idx_sa_station ON settlement_audit(station, date);
+
+-- ───────────────────────────────────────────────────────────────────────
+-- Station Status: pause/resume durumunu kalıcılaştırır (Faz 7).
+-- Sadece kod içinde statik set tutmak yerine, runtime'da toggle edilebilir.
+-- ───────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS station_status (
+    station      TEXT PRIMARY KEY,
+    paused       INTEGER NOT NULL DEFAULT 0,      -- 0=aktif, 1=durduruldu
+    reason       TEXT,                             -- insan-okunur sebep
+    updated_at   INTEGER DEFAULT (strftime('%s','now'))
+);
 """
 
 
@@ -355,6 +371,72 @@ def sync_live_trades(db_path: Path = DB_PATH, json_path: Path = LIVE_JSON) -> in
             row = {f: _bool_to_int(raw.get(f)) for f in LIVE_FIELDS}
             conn.execute(sql, row)
     return len(data)
+
+
+# ── Birincil Yazım (SQLite-first, Faz 7) ────────────────────────────────────
+def write_paper_trades_list(
+    trades: list, db_path: Path = DB_PATH, clear_first: bool = True
+) -> int:
+    """Paper trade listesini tek transaction ile DB'ye yaz.
+
+    SQLite-first akış: JSON dosyasına dokunmaz; çağıran önce bunu, sonra JSON
+    dump'ı yapar. Crash olursa DB tutarlı kalır.
+    clear_first=True (default): status değişenlerin eski kopyalarını temizler.
+    """
+    if not isinstance(trades, list):
+        return 0
+    placeholders = ", ".join(":" + f for f in PAPER_FIELDS)
+    columns      = ", ".join(PAPER_FIELDS)
+    sql = f"INSERT OR REPLACE INTO paper_trades ({columns}) VALUES ({placeholders})"
+    init_db(db_path)
+    with get_db(db_path) as conn:
+        if clear_first:
+            conn.execute("DELETE FROM paper_trades")
+        for raw in trades:
+            row = {f: _bool_to_int(raw.get(f)) for f in PAPER_FIELDS}
+            conn.execute(sql, row)
+    return len(trades)
+
+
+def write_live_trades_list(
+    trades: list, db_path: Path = DB_PATH, clear_first: bool = True
+) -> int:
+    """Live trade listesini tek transaction ile DB'ye yaz (SQLite-first)."""
+    if not isinstance(trades, list):
+        return 0
+    placeholders = ", ".join(":" + f for f in LIVE_FIELDS)
+    columns      = ", ".join(LIVE_FIELDS)
+    sql = f"INSERT OR REPLACE INTO live_trades ({columns}) VALUES ({placeholders})"
+    init_db(db_path)
+    with get_db(db_path) as conn:
+        if clear_first:
+            conn.execute("DELETE FROM live_trades")
+        for raw in trades:
+            row = {f: _bool_to_int(raw.get(f)) for f in LIVE_FIELDS}
+            conn.execute(sql, row)
+    return len(trades)
+
+
+def rebuild_json_from_db(
+    db_path: Path = DB_PATH,
+    paper_path: Path = PAPER_JSON,
+    live_path:  Path = LIVE_JSON,
+) -> dict:
+    """DB bozulmadığı halde JSON kaybolduysa tersine dump (disaster recovery)."""
+    result = {"paper": 0, "live": 0}
+    try:
+        with get_db(db_path, readonly=True) as conn:
+            papers = [dict(r) for r in conn.execute("SELECT * FROM paper_trades")]
+            lives  = [dict(r) for r in conn.execute("SELECT * FROM live_trades")]
+        paper_path.write_text(json.dumps(papers, indent=2, ensure_ascii=False),
+                              encoding="utf-8")
+        live_path.write_text(json.dumps(lives, indent=2, ensure_ascii=False),
+                             encoding="utf-8")
+        result["paper"] = len(papers)
+        result["live"]  = len(lives)
+    except Exception:
+        pass
+    return result
 
 
 def sync_all(db_path: Path = DB_PATH) -> dict:
@@ -625,6 +707,41 @@ def settlement_disagreement_stats(
         s["disagreement_rate"] = round(s["n_disagreement"] / n, 3)
         s["mean_diff_c"]       = round(s["sum_diff_c"] / n, 3)
     return by_station
+
+
+# ── Station Status (pause/resume) ───────────────────────────────────────────
+def set_station_paused(
+    station: str,
+    paused: bool,
+    reason: str | None = None,
+    db_path: Path = DB_PATH,
+) -> None:
+    """İstasyonun pause durumunu DB'ye yazar (override). Faz 7."""
+    with get_db(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO station_status (station, paused, reason, updated_at)
+            VALUES (?, ?, ?, strftime('%s','now'))
+            ON CONFLICT(station) DO UPDATE SET
+                paused     = excluded.paused,
+                reason     = excluded.reason,
+                updated_at = excluded.updated_at
+            """,
+            (station.lower(), 1 if paused else 0, reason),
+        )
+
+
+def list_paused_stations(db_path: Path = DB_PATH) -> list:
+    """Pause edilmiş istasyonları döner (dashboard/audit için)."""
+    try:
+        with get_db(db_path, readonly=True) as conn:
+            rows = conn.execute(
+                "SELECT station, paused, reason, updated_at "
+                "FROM station_status ORDER BY station"
+            ).fetchall()
+    except Exception:
+        return []
+    return [dict(r) for r in rows]
 
 
 if __name__ == "__main__":
