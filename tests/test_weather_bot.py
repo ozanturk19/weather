@@ -3067,6 +3067,262 @@ test("dynamic_weights.STATIC_WEIGHTS: aifs senkron",
 
 # ══════════════════════════════════════════════════════════════════════════════
 print(f"\n{'═'*62}")
+print(" TEST 33: Otomatik Satış (99.8¢ post-fill) — nakit döngüsü")
+print(f"{'═'*62}")
+
+
+def _import_trader_module():
+    """trader.py'yi py_clob_client / web3 / eth_account / httpx stub'larıyla yükle."""
+    import importlib
+    import sys as _sys
+    from unittest.mock import MagicMock as _MM
+    stubs = [
+        "py_clob_client", "py_clob_client.client", "py_clob_client.clob_types",
+        "py_clob_client.constants", "py_clob_client.order_builder",
+        "py_clob_client.order_builder.constants",
+        "web3", "eth_account", "httpx", "dotenv",
+    ]
+    for name in stubs:
+        if name not in _sys.modules:
+            _sys.modules[name] = _MM()
+    # dotenv'den load_dotenv / set_key isim gerekli
+    _sys.modules["dotenv"].load_dotenv = lambda *a, **kw: None
+    _sys.modules["dotenv"].set_key     = lambda *a, **kw: None
+    mod = importlib.import_module("bot.trader")
+    return mod
+
+
+def test_auto_sell_constants_present():
+    """AUTO_SELL_PRICE=0.998 sabitleri yerinde."""
+    tm = _import_trader_module()
+    ok(tm.AUTO_SELL_PRICE == 0.998,
+       f"AUTO_SELL_PRICE yanlış: {tm.AUTO_SELL_PRICE}")
+    ok(tm.AUTO_SELL_FALLBACK == 0.99,
+       f"AUTO_SELL_FALLBACK yanlış: {tm.AUTO_SELL_FALLBACK}")
+    ok(0 < tm.AUTO_SELL_MIN_EDGE < 0.10,
+       f"AUTO_SELL_MIN_EDGE makul değil: {tm.AUTO_SELL_MIN_EDGE}")
+
+test("trader.AUTO_SELL_PRICE = 0.998 ve yardımcı sabitler",
+     test_auto_sell_constants_present)
+
+
+def test_snap_to_tick():
+    """_snap_to_tick: tick=0.01 ile 0.998 → 0.99, tick=0.001 ile 0.998 → 0.998."""
+    tm = _import_trader_module()
+    eq(tm._snap_to_tick(0.998, 0.01), 0.99,  "0.01 tick: 0.998 → 0.99")
+    eq(tm._snap_to_tick(0.998, 0.001), 0.998, "0.001 tick: 0.998 → 0.998")
+    eq(tm._snap_to_tick(0.9987, 0.0001), 0.9987, "0.0001 tick korunur")
+    # Güvenli fallback
+    eq(tm._snap_to_tick(0.50, 0), 0.50, "tick=0 güvenli")
+
+test("_snap_to_tick: tick'e göre yuvarlama",
+     test_snap_to_tick)
+
+
+def test_get_tick_size_fallback():
+    """get_tick_size hata fırlatırsa 0.01 döner."""
+    tm = _import_trader_module()
+    client = MagicMock()
+    client.get_tick_size.side_effect = Exception("API down")
+    eq(tm._get_tick_size(client, "x123"), 0.01)
+    # None dönerse de 0.01
+    client2 = MagicMock()
+    client2.get_tick_size.return_value = None
+    eq(tm._get_tick_size(client2, "x"), 0.01)
+    # Geçerli değer dönerse onu kullanır
+    client3 = MagicMock()
+    client3.get_tick_size.return_value = 0.001
+    eq(tm._get_tick_size(client3, "x"), 0.001)
+
+test("_get_tick_size: hata / None / geçerli",
+     test_get_tick_size_fallback)
+
+
+def test_place_auto_sell_updates_trade():
+    """Başarılı sell order'da trade alanları güncelleniyor."""
+    tm = _import_trader_module()
+    client = MagicMock()
+    client.get_tick_size.return_value = 0.001
+    client.create_order.return_value   = {"signed": True}
+    client.post_order.return_value     = {"orderID": "sell_id_123abcdef0"}
+
+    trade = {
+        "id": "ltfm_2026-05-01_120000_live",
+        "station": "ltfm", "date": "2026-05-01",
+        "condition_id": "0xdeadbeef",
+        "shares": 5,
+        "fill_price": 0.30,
+        "status": "filled",
+        "notes": "",
+    }
+    oid = tm.place_auto_sell(client, trade)
+    eq(oid, "sell_id_123abcdef0")
+    eq(trade["status"], "sell_pending")
+    eq(trade["sell_order_id"], "sell_id_123abcdef0")
+    eq(trade["sell_price"], 0.998)
+    ok("sell_placed_at" in trade, "sell_placed_at eksik")
+    ok("AUTOSELL" in trade["notes"], f"notes güncellenmedi: {trade['notes']}")
+    # post_order post_only=True ile çağrılmalı
+    _, kwargs = client.post_order.call_args
+    ok(kwargs.get("post_only") is True, f"post_only=True olmalı: {kwargs}")
+
+test("place_auto_sell: başarıda trade alanları + post_only",
+     test_place_auto_sell_updates_trade)
+
+
+def test_place_auto_sell_skips_low_margin():
+    """fill_price sell_price'a çok yakınsa emir atlanır."""
+    tm = _import_trader_module()
+    client = MagicMock()
+    client.get_tick_size.return_value = 0.001
+
+    trade = {
+        "station": "ltfm", "date": "2026-05-01",
+        "condition_id": "0xdeadbeef",
+        "shares": 5,
+        "fill_price": 0.99,          # 99¢'e aldık → 99.8¢ margin < MIN_EDGE
+        "status": "filled",
+        "notes": "",
+    }
+    oid = tm.place_auto_sell(client, trade)
+    eq(oid, None, "margin yetersiz → None beklenir")
+    # Trade değiştirilmemeli
+    eq(trade["status"], "filled")
+    ok("sell_order_id" not in trade, "sell_order_id eklenmemeli")
+    # Post order hiç çağrılmamalı
+    eq(client.post_order.called, False)
+
+test("place_auto_sell: fill çok yüksekse emir atlanır",
+     test_place_auto_sell_skips_low_margin)
+
+
+def test_place_auto_sell_tick001_snaps_down():
+    """tick=0.01 ise 0.998 → 0.99, post_order yine de çağrılır."""
+    tm = _import_trader_module()
+    client = MagicMock()
+    client.get_tick_size.return_value = 0.01
+    client.create_order.return_value   = {"signed": True}
+    client.post_order.return_value     = {"orderID": "sell_id_xyz_0000001"}
+
+    trade = {
+        "station": "eglc", "date": "2026-05-02",
+        "condition_id": "0xabc",
+        "shares": 5,
+        "fill_price": 0.25,
+        "status": "filled",
+        "notes": "eski not",
+    }
+    oid = tm.place_auto_sell(client, trade)
+    ok(oid is not None, "başarılı olmalı")
+    eq(trade["sell_price"], 0.99, f"tick=0.01'de 0.99 beklenir: {trade['sell_price']}")
+    ok("eski not" in trade["notes"], "eski not korunmalı")
+
+test("place_auto_sell: tick=0.01 → 0.99'a snap",
+     test_place_auto_sell_tick001_snaps_down)
+
+
+def test_place_auto_sell_handles_exception():
+    """create_order/post_order exception fırlatırsa None döner, trade bozulmaz."""
+    tm = _import_trader_module()
+    client = MagicMock()
+    client.get_tick_size.return_value = 0.001
+    client.create_order.side_effect   = Exception("CLOB 500")
+
+    trade = {
+        "station": "ltfm", "date": "2026-05-01",
+        "condition_id": "0xabc",
+        "shares": 5,
+        "fill_price": 0.30,
+        "status": "filled",
+        "notes": "",
+    }
+    oid = tm.place_auto_sell(client, trade)
+    eq(oid, None)
+    eq(trade["status"], "filled", "trade status bozulmamalı")
+    ok("sell_order_id" not in trade, "sell_order_id eklenmemeli")
+
+test("place_auto_sell: istisna → None, trade korunur",
+     test_place_auto_sell_handles_exception)
+
+
+def test_check_fills_hooks_auto_sell():
+    """check_fills kaynağında fill transition'ından sonra place_auto_sell çağrısı var."""
+    trader_path = Path(__file__).resolve().parent.parent / "bot" / "trader.py"
+    src = trader_path.read_text(encoding="utf-8")
+    # check_fills fonksiyonundaki 'filled' blok alt alta place_auto_sell çağırmalı
+    idx_fill    = src.find('t["status"]     = "filled"')
+    idx_autosell = src.find("place_auto_sell(client, t)")
+    ok(idx_fill    > 0, "fill transition bulunamadı")
+    ok(idx_autosell > idx_fill,
+       "place_auto_sell çağrısı fill transition'dan sonra olmalı")
+    # İkisi arasında makul mesafe (aynı fonksiyonda olması için)
+    ok(idx_autosell - idx_fill < 1500,
+       f"çağrı transition'dan çok uzakta: {idx_autosell - idx_fill} karakter")
+
+test("check_fills: fill → place_auto_sell hook'u kaynak kodda",
+     test_check_fills_hooks_auto_sell)
+
+
+def test_auto_sell_cli_registered():
+    """trader.py CLI dispatch'te 'auto-sell' komutu kayıtlı."""
+    trader_path = Path(__file__).resolve().parent.parent / "bot" / "trader.py"
+    src = trader_path.read_text(encoding="utf-8")
+    ok('"auto-sell"' in src, "auto-sell CLI girişi yok")
+    ok("cmd_auto_sell_filled" in src, "cmd_auto_sell_filled tanımı yok")
+
+test("CLI: auto-sell komutu kayıtlı",
+     test_auto_sell_cli_registered)
+
+
+def test_cmd_auto_sell_filled_filters_targets():
+    """cmd_auto_sell_filled yalnızca filled ve sell_order_id'si olmayanları hedefler."""
+    tm = _import_trader_module()
+
+    trades_state = [
+        # Hedef: filled, sell_order_id yok
+        {"id": "a", "station": "eglc", "date": "2026-05-01",
+         "condition_id": "0x1", "shares": 5, "fill_price": 0.25,
+         "status": "filled", "notes": ""},
+        # Atlanır: zaten sell_order_id var
+        {"id": "b", "station": "lfpg", "date": "2026-05-01",
+         "condition_id": "0x2", "shares": 5, "fill_price": 0.25,
+         "status": "filled", "sell_order_id": "existing", "notes": ""},
+        # Atlanır: pending_fill
+        {"id": "c", "station": "limc", "date": "2026-05-01",
+         "condition_id": "0x3", "shares": 5, "limit_price": 0.25,
+         "status": "pending_fill", "notes": ""},
+        # Atlanır: redeemed=True
+        {"id": "d", "station": "lemd", "date": "2026-05-01",
+         "condition_id": "0x4", "shares": 5, "fill_price": 0.25,
+         "status": "filled", "redeemed": True, "notes": ""},
+    ]
+
+    # Mock'lar
+    client = MagicMock()
+    client.get_tick_size.return_value = 0.001
+    client.create_order.return_value  = {"signed": True}
+    client.post_order.return_value    = {"orderID": "newsell_1234567890"}
+
+    with patch.object(tm, "load_live_trades", return_value=trades_state), \
+         patch.object(tm, "save_live_trades")                         as mock_save, \
+         patch.object(tm, "setup_client",     return_value=client):
+        placed = tm.cmd_auto_sell_filled(price=0.998)
+
+    eq(placed, 1, f"yalnızca 1 hedef beklenir: {placed}")
+    # Hedef trade güncellenmiş olmalı
+    eq(trades_state[0]["status"], "sell_pending")
+    eq(trades_state[0]["sell_order_id"], "newsell_1234567890")
+    # Diğerleri değişmemeli
+    eq(trades_state[1]["sell_order_id"], "existing")
+    eq(trades_state[2]["status"], "pending_fill")
+    ok(mock_save.called, "save_live_trades çağrılmalı")
+
+test("cmd_auto_sell_filled: filtreleme + güncelleme",
+     test_cmd_auto_sell_filled_filters_targets)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+print(f"\n{'═'*62}")
 print(f"  SONUÇ: {PASS} geçti / {FAIL} başarısız / {PASS+FAIL} toplam")
 if FAIL == 0:
     print("  🎉 Tüm testler geçti!")

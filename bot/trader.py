@@ -6,12 +6,15 @@ Limit order (maker = %0 fee) gönder, dolum izle, P&L hesapla.
 Kullanım:
   python trader.py balance                   # USDC bakiyesi
   python trader.py status                    # Açık live pozisyonlar
-  python trader.py check-fills               # Dolum kontrolü (cron)
+  python trader.py check-fills               # Dolum kontrolü (cron) — fill olunca auto-sell
   python trader.py cancel-stale              # Stale order iptali (cron)
   python trader.py settle                    # Dünkü pozisyonları kapat
+  python trader.py auto-sell [price]         # Filled pozisyonlar için 99.8¢ SELL (retroaktif)
   python trader.py setup-creds               # API credential türet ve .env'e yaz
   python trader.py approve-usdc              # USDC allowance ver (ilk kurulum)
 """
+
+from __future__ import annotations
 
 import json
 import os
@@ -390,6 +393,96 @@ def place_limit_order(
     )
     return {"order_id": order_id, "limit_price": limit_price, "status": "pending_fill"}
 
+# ── Otomatik Satış (Fill Sonrası) ──────────────────────────────────────────
+# Kullanıcı isteği: "claim çok bekliyoruz, bu nakit döngüsünü çok bozuyor".
+# Fill'lendiği anda 99.8¢'e SELL limit koy — piyasa alırsa anında USDC,
+# alamazsa redeem/claim'de zaten ~$1.00 geliyor. Kayıp yok.
+AUTO_SELL_PRICE     = 0.998
+AUTO_SELL_FALLBACK  = 0.99     # market tick 0.01 ise
+AUTO_SELL_MIN_EDGE  = 0.02     # fill fiyatının en az bu kadar üstü olmalı
+
+def _get_tick_size(client, token_id: str) -> float:
+    """Market tick size'ını çek — 0.01 / 0.001 / 0.0001. Alınamazsa 0.01."""
+    try:
+        ts = client.get_tick_size(token_id)
+        return float(ts) if ts else 0.01
+    except Exception:
+        return 0.01
+
+def _snap_to_tick(price: float, tick: float) -> float:
+    """Fiyatı tick'e yuvarla (aşağı doğru, üst sınırı aşmasın)."""
+    if tick <= 0:
+        return round(price, 2)
+    ticks = int(price / tick)
+    snapped = ticks * tick
+    # 6 hane hassasiyet — float bellek gürültüsünü temizler
+    return round(snapped, 6)
+
+def place_auto_sell(client, trade: dict, price: float = AUTO_SELL_PRICE) -> str | None:
+    """
+    Fill edilmiş pozisyon için 99.8¢ (veya tick'e göre yuvarlanmış) SELL limit aç.
+
+    Koruma:
+      - fill_price + MIN_EDGE > sell_price ise at-lama (kâr marjı yok)
+      - post_only=True → maker fee %0, piyasayı taker olarak yememek
+      - GTC → birisi bu fiyattan almak isteyince anında eşleşir
+
+    Trade alanları güncellenir (sadece başarıda):
+      status="sell_pending", sell_price, sell_order_id, sell_placed_at, notes
+    Döner: order_id veya None.
+    """
+    from py_clob_client.clob_types import OrderArgs, OrderType
+    from py_clob_client.order_builder.constants import SELL
+
+    token_id = str(trade.get("condition_id", ""))
+    shares   = float(trade.get("shares", LIVE_SHARES))
+    fill_px  = float(trade.get("fill_price") or trade.get("limit_price") or 0)
+    label    = STATION_LABELS.get(trade.get("station", ""), (trade.get("station") or "").upper())
+
+    if not token_id or shares <= 0:
+        return None
+
+    # Tick size'a göre fiyatı yuvarla
+    tick       = _get_tick_size(client, token_id)
+    sell_price = _snap_to_tick(price, tick)
+
+    # Tick nedeniyle 0.998 → 0.99'a düşerse fallback'i dene (aynı)
+    if sell_price < price - tick:
+        sell_price = _snap_to_tick(AUTO_SELL_FALLBACK, tick)
+
+    # Kâr marjı koruması: fill'in en az MIN_EDGE üstü olmalı
+    if sell_price < fill_px + AUTO_SELL_MIN_EDGE:
+        print(f"  ⏭️  AUTO-SELL atlandı  {trade.get('station','?').upper()} {label}  "
+              f"fill {fill_px:.2f} + margin > sell {sell_price:.3f}")
+        return None
+
+    try:
+        args   = OrderArgs(
+            token_id = token_id,
+            price    = sell_price,
+            size     = shares,
+            side     = SELL,
+        )
+        signed = client.create_order(args)
+        resp   = client.post_order(signed, OrderType.GTC, post_only=True)
+        order_id = resp.get("orderID") or resp.get("order_id") or resp.get("id")
+        if not order_id:
+            print(f"  ⚠️  AUTO-SELL order ID alınamadı: {resp}")
+            return None
+
+        trade["status"]         = "sell_pending"
+        trade["sell_price"]     = sell_price
+        trade["sell_order_id"]  = order_id
+        trade["sell_placed_at"] = datetime.now().isoformat()
+        trade["notes"]          = (trade.get("notes", "") + f" | AUTOSELL@{sell_price}").strip(" | ")
+
+        print(f"  📤 AUTO-SELL  {trade.get('station','?').upper()} {label}  "
+              f"{int(shares)} share @ {sell_price:.3f}  → {order_id[:16]}...")
+        return order_id
+    except Exception as e:
+        print(f"  ⚠️  AUTO-SELL başarısız {trade.get('station','?').upper()}: {e}")
+        return None
+
 # ── Dolum Kontrolü ──────────────────────────────────────────────────────────
 def check_fills() -> int:
     """
@@ -441,6 +534,13 @@ def check_fills() -> int:
                     f"{t['shares']} share"
                 )
                 updated += 1
+
+                # 🚀 Fill sonrası otomatik 99.8¢ SELL limit — nakit döngüsü için
+                # Başarısızlığı fill akışını bozmayacak (silent fail içeride loglanır)
+                try:
+                    place_auto_sell(client, t)
+                except Exception as e:
+                    print(f"  ⚠️  AUTO-SELL hook hatası: {e}")
 
             elif status in ("CANCELLED", "CANCELED"):
                 t["status"] = "cancelled"
@@ -1263,6 +1363,49 @@ def cmd_cleanup():
     )
     print(f"\n  🗑️  {cleaned} pozisyon temizlendi  |  {remaining} aktif pozisyon kaldı\n")
 
+# ── Retroaktif Auto-Sell (Zaten Fill Olmuş Pozisyonlar İçin) ────────────────
+def cmd_auto_sell_filled(price: float = AUTO_SELL_PRICE) -> int:
+    """
+    `status=filled` ama `sell_order_id` olmayan pozisyonlara retroaktif
+    olarak 99.8¢ SELL limit koy. Yeni fill'ler zaten check_fills içinde
+    otomatik koyuyor — bu komut eski filled pozisyonlar için tek seferlik.
+
+    Kullanım:
+      python trader.py auto-sell              # 99.8¢
+      python trader.py auto-sell 0.99         # özel fiyat
+    """
+    trades  = load_live_trades()
+    targets = [
+        t for t in trades
+        if t.get("status") == "filled"
+        and not t.get("sell_order_id")
+        and not t.get("redeemed")
+    ]
+
+    print(f"\n{'='*62}")
+    print(f"  📤 RETROAKTİF AUTO-SELL — hedef fiyat {price:.3f}")
+    print(f"{'='*62}")
+
+    if not targets:
+        print("  ℹ️  Uygun trade yok (tüm filled pozisyonlarda sell_order_id zaten var)")
+        return 0
+
+    client = setup_client()
+    placed = 0
+    skipped = 0
+
+    for t in targets:
+        oid = place_auto_sell(client, t, price=price)
+        if oid:
+            placed += 1
+        else:
+            skipped += 1
+
+    save_live_trades(trades)
+    print(f"\n  ✅ {placed}/{len(targets)} AUTO-SELL emri yerleştirildi  (atlanan: {skipped})\n")
+    return placed
+
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "status"
@@ -1271,6 +1414,12 @@ if __name__ == "__main__":
     if cmd == "sell":
         threshold = float(sys.argv[2]) if len(sys.argv) > 2 else 0.70
         cmd_sell(threshold)
+        sys.exit(0)
+
+    # auto-sell komutu opsiyonel fiyat argümanı alır (varsayılan 0.998)
+    if cmd == "auto-sell":
+        sell_price = float(sys.argv[2]) if len(sys.argv) > 2 else AUTO_SELL_PRICE
+        cmd_auto_sell_filled(sell_price)
         sys.exit(0)
 
     commands = {
@@ -1283,6 +1432,7 @@ if __name__ == "__main__":
         "redeem":        cmd_redeem,
         "cleanup":       cmd_cleanup,
         "sell":          lambda: cmd_sell(0.70),
+        "auto-sell":     lambda: cmd_auto_sell_filled(AUTO_SELL_PRICE),
         "setup-creds":   cmd_setup_creds,
         "approve-usdc":  cmd_approve_usdc,
     }
