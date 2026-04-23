@@ -35,6 +35,16 @@ MAX_DELTA_C = 3.0
 # Rolling pencere
 DEFAULT_WINDOW_DAYS = 60
 
+# Faz 8: horizon-specific dampening
+# settlement_audit horizon'dan bağımsız actual temp tutar, fakat delta'yı
+# UYGULAMA aşamasında horizon'a göre zayıflatmak gerek. D+2 forecast'ında
+# bias kaynakları çeşitlenir (model skew + settlement skew birbirini örter);
+# D+2'de delta'yı %30 tone-down et. D+1 tam kuvvet.
+HORIZON_DELTA_DAMPENING: dict[int, float] = {
+    1: 1.0,   # D+1: tam uygula
+    2: 0.7,   # D+2: %30 azalt (model bias + settlement bias karışabilir)
+}
+
 
 def compute_station_deltas(
     days: int = DEFAULT_WINDOW_DAYS,
@@ -122,13 +132,24 @@ def learn_station_delta(
     station: str,
     days: int = DEFAULT_WINDOW_DAYS,
     db_path: Path | None = None,
+    horizon_days: int | None = None,
 ) -> float:
-    """Tek istasyon için delta — yeterli veri yoksa 0.0."""
+    """Tek istasyon için delta — yeterli veri yoksa 0.0.
+
+    Faz 8: horizon_days verilmişse HORIZON_DELTA_DAMPENING çarpanı uygulanır.
+    D+2 (horizon_days=2) için delta %70'e zayıflatılır (bias çakışmalarına
+    karşı). audit tablosu horizon bağımsız olduğu için aynı medyan kullanılır,
+    sadece uygulama ölçeklenir.
+    """
     deltas = compute_station_deltas(days=days, db_path=db_path)
     info = deltas.get(station)
     if info is None:
         return 0.0
-    return float(info["delta"])
+    raw = float(info["delta"])
+    if horizon_days is None:
+        return raw
+    factor = HORIZON_DELTA_DAMPENING.get(int(horizon_days), 1.0)
+    return round(raw * factor, 2)
 
 
 def apply_delta(
@@ -136,9 +157,15 @@ def apply_delta(
     top_pick: int,
     days: int = DEFAULT_WINDOW_DAYS,
     db_path: Path | None = None,
+    horizon_days: int | None = None,
 ) -> int:
-    """top_pick'e settlement delta'yı uygular (round) → adjusted top_pick."""
-    delta = learn_station_delta(station, days=days, db_path=db_path)
+    """top_pick'e settlement delta'yı uygular (round) → adjusted top_pick.
+
+    horizon_days geçilirse horizon-specific dampening aktif (Faz 8).
+    """
+    delta = learn_station_delta(
+        station, days=days, db_path=db_path, horizon_days=horizon_days,
+    )
     if delta == 0:
         return top_pick
     return int(round(top_pick + delta))

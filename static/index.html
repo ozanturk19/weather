@@ -764,18 +764,58 @@ body { transition:background .25s, color .2s; }
 .lb-pos {
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-left: 3px solid var(--accent);
+  border-left: 4px solid var(--accent);
   border-radius: 8px;
   padding: 12px 14px;
   font-size: 12px;
-  transition: border-color .15s, box-shadow .15s;
+  transition: border-color .15s, box-shadow .15s, background .15s;
 }
 .lb-pos:hover { box-shadow: var(--shadow); }
-.lb-pos.won    { border-left-color: var(--green); }
-.lb-pos.lost   { border-left-color: var(--red); }
-.lb-pos.filled { border-left-color: #3b82f6; }
-.lb-pos.pending{ border-left-color: var(--amber); }
-.lb-pos.cancel { border-left-color: var(--text-3); opacity:.75; }
+.lb-pos.won,
+.lb-pos.upnl-pos   { border-left-color: var(--green); background: linear-gradient(90deg, var(--green-dim) 0%, var(--bg-card) 35%); }
+.lb-pos.lost,
+.lb-pos.upnl-neg   { border-left-color: var(--red);   background: linear-gradient(90deg, var(--red-dim)   0%, var(--bg-card) 35%); }
+.lb-pos.filled     { border-left-color: #3b82f6; }
+.lb-pos.pending    { border-left-color: var(--amber); background: linear-gradient(90deg, rgba(245,158,11,.06) 0%, var(--bg-card) 35%); }
+.lb-pos.cancel     { border-left-color: var(--text-3); opacity:.75; }
+
+/* Big date chip in header — immediately visible */
+.lb-pos-datechip {
+  font-family: var(--mono);
+  font-size: 12px; font-weight: 700;
+  color: var(--text);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  padding: 3px 9px;
+  border-radius: 6px;
+  letter-spacing: .02em;
+  white-space: nowrap;
+}
+body.dark .lb-pos-datechip { background: #0b1220; }
+.lb-pos.upnl-pos .lb-pos-datechip { color: var(--green); border-color: rgba(16,185,129,.35); }
+.lb-pos.upnl-neg .lb-pos-datechip { color: var(--red);   border-color: rgba(239,68,68,.35); }
+
+/* Prominent P&L banner inside open-position cards */
+.lb-pnl-banner {
+  display:flex; align-items:baseline; justify-content:space-between;
+  gap:10px; margin: 8px 0 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-family: var(--mono);
+  background: var(--bg-subtle);
+}
+.lb-pnl-banner .lb-pnl-val {
+  font-size: 20px; font-weight: 800; letter-spacing: -.02em;
+}
+.lb-pnl-banner .lb-pnl-flow {
+  font-size: 11px; color: var(--text-3);
+}
+.lb-pnl-banner.pos { background: rgba(16,185,129,.10); }
+.lb-pnl-banner.neg { background: rgba(239,68,68,.10); }
+.lb-pnl-banner.pos .lb-pnl-val { color: var(--green); }
+.lb-pnl-banner.neg .lb-pnl-val { color: var(--red); }
+.lb-pnl-banner.neutral { background: var(--bg-subtle); }
+.lb-pnl-banner.neutral .lb-pnl-val { color: var(--text-2); font-size: 13px; font-weight:600; }
 .lb-pos-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
 .lb-pos-station { font-family: var(--display); font-size:15px; font-weight:700; color: var(--text); }
 .lb-pos-date { font-family: var(--mono); font-size:11px; color: var(--text-3); }
@@ -1717,29 +1757,44 @@ function _renderLbOpen() {
         const curP = live.current_price;
         const uPnl = live.unrealized_pnl;
         const uPct = live.unrealized_pct;
-        let livePnlHtml;
+        // Card accent: positive P&L → green, negative → red, else status-based
+        let pnlKlass = '';
+        let bannerHtml;
         if (t.status === 'pending_fill') {
-          livePnlHtml = `<span style="color:var(--text-3)">Fill bekleniyor @ ${_lbCents(t.limit_price)}</span>`;
+          bannerHtml = `
+            <div class="lb-pnl-banner neutral">
+              <span class="lb-pnl-val">Fill bekleniyor</span>
+              <span class="lb-pnl-flow">limit @ ${_lbCents(t.limit_price)}</span>
+            </div>`;
         } else if (curP == null || uPnl == null) {
-          livePnlHtml = `<span style="color:var(--text-3)">Canlı fiyat alınamadı</span>`;
+          bannerHtml = `
+            <div class="lb-pnl-banner neutral">
+              <span class="lb-pnl-val">—</span>
+              <span class="lb-pnl-flow">canlı fiyat alınamadı</span>
+            </div>`;
         } else {
-          const cls = uPnl >= 0 ? 'good' : 'bad';
           const sign = uPnl >= 0 ? '+' : '';
-          const pctStr = uPct != null ? ` (${sign}${_fmt(uPct,2)}%)` : '';
-          livePnlHtml =
-            `<span>${_lbCents(fillP)} → <b class="${cls}">${_lbCents(curP)}</b></span>` +
-            ` <span class="${cls}" style="font-weight:700">${sign}${_usd(uPnl)}${pctStr}</span>`;
+          const bannerCls = uPnl >= 0 ? 'pos' : 'neg';
+          pnlKlass = uPnl >= 0 ? 'upnl-pos' : 'upnl-neg';
+          const pctStr = uPct != null ? `${sign}${_fmt(uPct,1)}%` : '';
+          bannerHtml = `
+            <div class="lb-pnl-banner ${bannerCls}">
+              <span class="lb-pnl-val">${sign}${_usd(uPnl)}</span>
+              <span class="lb-pnl-flow">${_lbCents(fillP)} → ${_lbCents(curP)} · ${pctStr}</span>
+            </div>`;
         }
         return `
-          <div class="lb-pos ${_lbPosKlass(t)}">
+          <div class="lb-pos ${_lbPosKlass(t)} ${pnlKlass}">
             <div class="lb-pos-head">
               <div class="lb-pos-station">${LB_FLAGS[t.station]||''} ${(t.station||'').toUpperCase()}</div>
+              <div class="lb-pos-datechip">📅 ${_lbShortDate(t.date)}</div>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:4px">
+              <div class="lb-pos-bucket">🎯 ${t.top_pick != null ? t.top_pick+'°C' : '—'} <span style="color:var(--text-3);font-weight:400;font-size:11px">— ${_escape(t.bucket_title||'')}</span></div>
               ${_lbStatusBadge(t)}
             </div>
-            <div class="lb-pos-bucket">🎯 ${t.top_pick != null ? t.top_pick+'°C' : '—'} <span style="color:var(--text-3);font-weight:400;font-size:11px">— ${_escape(t.bucket_title||'')}</span></div>
-            <div style="margin:6px 0 8px;font-size:12px;line-height:1.5">${livePnlHtml}</div>
+            ${bannerHtml}
             <dl class="lb-pos-rows">
-              <dt>Tarih</dt>          <dd>${_lbShortDate(t.date)}</dd>
               <dt>Giriş Fiyatı</dt>   <dd>${_lbCents(fillP)}</dd>
               <dt>Shares</dt>         <dd>${shares}</dd>
               <dt>Maliyet</dt>        <dd>${_usd(cost)}</dd>

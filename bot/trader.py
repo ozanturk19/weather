@@ -50,6 +50,20 @@ ORDER_EXPIRY_D2_HOURS = 20    # D+2: 2 gün var, sonraki scan yeniden dener
 MIN_PRICE            = 0.05   # çok ucuz → şüpheli
 MAX_PRICE            = 0.40   # pahalı → edge yok
 
+# Faz 8: D+1 stale-cancel progressive bump
+# D+1 stale order aynı fiyatla retry edilince market kapanana kadar hiç fill
+# olmuyor (23 Nisan LTAC vakası: 0.20'de sıkıştı). Her bump'ta limit fiyatını
+# +3¢ artır, MAX_PRICE tavanına kadar. Bump sayısı trade["stale_bumps"]'te.
+STALE_BUMP_STEP      = 0.03   # her bump'ta fiyata eklenecek miktar
+
+# Faz 8: Flip-flop re-entry guard
+# Aynı station+date için pending varken model farklı top_pick söylerse, eskiyi
+# iptal edip yeniye giriyorduk. 23 Nisan EHAM: 16 → cancel → 15 → gerçek 16.
+# İki taraflı komisyon kaybı + kayıp. Yeni pick gerçekten güçlü bir sinyal
+# değilse (signal_score veya mode_pct düşükse) re-entry'yi iptal et.
+FLIP_REENTRY_MIN_SIGNAL   = 70  # en az "Strong" tier
+FLIP_REENTRY_MIN_MODE_PCT = 70  # ya da çok güçlü konsensüs
+
 STATION_LABELS = {
     "eglc": "Londra   ", "lfpg": "Paris    ", "limc": "Milano   ",
     "lemd": "Madrid   ", "ltfm": "İstanbul ", "ltac": "Ankara   ",
@@ -99,6 +113,39 @@ def save_live_trades(trades: list):
     tmp = TRADES_FILE.with_suffix(".tmp")
     tmp.write_text(json.dumps(trades, indent=2, ensure_ascii=False), encoding="utf-8")
     tmp.replace(TRADES_FILE)
+
+# ── Paper Trade Yardımcısı (Faz 8 flip-flop guard için) ────────────────────
+def _load_paper_trade(paper_id: str) -> dict | None:
+    """paper_id'ye karşılık gelen paper_trades kaydını bul.
+
+    Önce SQLite'a bakar (birincil kayıt), sonra JSON'a (yedek). Hata ya da
+    kayıt yoksa None döner. Flip-flop guard için signal_score / ens_mode_pct
+    çekmekte kullanılır.
+    """
+    if not paper_id:
+        return None
+    # 1. SQLite birincil
+    try:
+        from bot.db import DB_PATH, get_db
+        with get_db(DB_PATH, readonly=True) as conn:
+            row = conn.execute(
+                "SELECT * FROM paper_trades WHERE id = ? LIMIT 1",
+                (paper_id,),
+            ).fetchone()
+            if row is not None:
+                return dict(row)
+    except Exception:
+        pass
+    # 2. JSON yedek
+    try:
+        if PAPER_FILE.exists():
+            papers = json.loads(PAPER_FILE.read_text(encoding="utf-8"))
+            for p in papers:
+                if p.get("id") == paper_id:
+                    return p
+    except Exception:
+        pass
+    return None
 
 # ── CLOB Client Kurulumu ────────────────────────────────────────────────────
 def setup_client():
@@ -301,6 +348,26 @@ def place_limit_order(
                 print(f"  ⚠️  Eski emir iptal edilemedi: {e}")
         save_live_trades(live_trades)
         live_trades = load_live_trades()   # güncel listeyi yeniden yükle
+
+        # ── Faz 8: Flip-flop re-entry guard ─────────────────────────────────
+        # Aynı gün içinde model pick değiştirdiyse, yeni pick gerçekten güçlü
+        # mü? signal_score ≥ 70 (Strong) YA DA mode_pct ≥ 70 (güçlü konsensüs)
+        # aranır; ikisi de zayıfsa re-entry iptal — flip-flop maliyetini önle.
+        paper_rec = _load_paper_trade(paper_id)
+        if paper_rec is not None:
+            sig_score = paper_rec.get("signal_score")
+            mode_pct  = paper_rec.get("ens_mode_pct")
+            strong_signal = (
+                (sig_score is not None and sig_score >= FLIP_REENTRY_MIN_SIGNAL) or
+                (mode_pct  is not None and mode_pct  >= FLIP_REENTRY_MIN_MODE_PCT)
+            )
+            if not strong_signal:
+                print(
+                    f"  ⚠️ FLIP-FLOP GUARD {station.upper()} {label} "
+                    f"— signal_score={sig_score}, mode_pct={mode_pct} "
+                    f"— re-entry iptal"
+                )
+                return None
 
     if price < MIN_PRICE or price > MAX_PRICE:
         print(f"  ⬜ {station.upper()} {label} — fiyat aralık dışı ({price:.2f})")
@@ -638,15 +705,37 @@ def cancel_stale_orders() -> int:
             print(f"  ⚠️  İptal başarısız {t['order_id'][:16]}: {e}")
             continue
 
-        # D+1 stale: aynı fiyatla yeniden gir (market hâlâ açık, fill şansı var)
+        # D+1 stale: fiyatı progresif olarak artır + yeniden gir
+        # (market hâlâ açık, fill şansı var)
         if horizon == "D+1" and t["date"] == tomorrow:
+            # Faz 8: progressive bump — aynı fiyata saplanıp kalmayalım
+            # stale_bumps: kaçıncı retry olduğumuzu takip eder (orijinal=0)
+            prev_bumps = int(t.get("stale_bumps", 0) or 0)
+            orig_limit = float(t["limit_price"])
+            bumped     = round(
+                min(orig_limit + STALE_BUMP_STEP * (prev_bumps + 1), MAX_PRICE),
+                2,
+            )
+            if bumped > orig_limit:
+                new_price = bumped
+                old_cents = round(orig_limit * 100)
+                new_cents = round(new_price * 100)
+                print(
+                    f"  🔼 BUMP +{round(STALE_BUMP_STEP*100)}¢  "
+                    f"{t['station'].upper()} {t['top_pick']}°C  "
+                    f"{old_cents}¢ → {new_cents}¢"
+                )
+            else:
+                # Zaten tavanda — aynı fiyatla yeniden dene (eski davranış)
+                new_price = orig_limit
+
             # Disk'e yazıp sonra yeniden gir — place_limit_order disk'ten okur,
             # henüz kaydedilmediyse eski pending_fill görür ve duplicate engeller.
             save_live_trades(trades)
             try:
                 new_result = place_limit_order(
                     condition_id = t["condition_id"],
-                    price        = t["limit_price"],   # aynı fiyat
+                    price        = new_price,
                     station      = t["station"],
                     date         = t["date"],
                     top_pick     = t["top_pick"],
@@ -658,6 +747,13 @@ def cancel_stale_orders() -> int:
                     print(f"  🔄 YENİDEN GİRİLDİ  {t['station'].upper()} {label}")
                     # place_limit_order kendi save_live_trades'ini yaptı; reload
                     trades = load_live_trades()
+                    # Yeni trade kaydına bump sayacını taşı
+                    bumps_now = prev_bumps + 1 if new_price > orig_limit else prev_bumps
+                    for nt in trades:
+                        if nt.get("order_id") == new_result.get("order_id"):
+                            nt["stale_bumps"] = bumps_now
+                            break
+                    save_live_trades(trades)
             except Exception as e:
                 print(f"  ⚠️  Yeniden giriş başarısız: {e}")
 

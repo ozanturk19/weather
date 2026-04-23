@@ -3690,6 +3690,449 @@ def test_web_designer_skill_removed():
 test("Stray web-designer.skill silinmiş", test_web_designer_skill_removed)
 
 
+# ═════════════════════════════════════════════════════════════════
+# TEST 36: Faz 8 — profitability (stale bump, flip guard, micro-hedge,
+#          horizon delta, dynamic weights, circuit breaker)
+# ═════════════════════════════════════════════════════════════════
+print(f"\n{'═'*62}")
+print(" TEST 36: Faz 8 — profitability geliştirmeleri")
+print(f"{'═'*62}")
+
+
+# ── 36.1: D+1 stale bump — limit fiyatı +3¢ artırılarak yeniden giriliyor ──
+def test_cancel_stale_progressive_bump():
+    """D+1 stale retry'de place_limit_order yeni (bumped) fiyatla çağrılır."""
+    tm = _import_trader_module()
+    now      = datetime.now()
+    tomorrow = (now + timedelta(days=1)).strftime("%Y-%m-%d")
+    expired_iso = (now - timedelta(hours=1)).isoformat()
+
+    stale_trade = {
+        "id": "eglc_stale_live", "paper_id": "eglc_paper",
+        "station": "eglc", "date": tomorrow, "top_pick": 18,
+        "bucket_title": "18°C", "condition_id": "0xaa",
+        "order_id": "order_stale_1", "limit_price": 0.20,
+        "shares": 5, "cost_usdc": 1.00,
+        "placed_at": (now - timedelta(hours=6)).isoformat(),
+        "expires_at": expired_iso, "horizon": "D+1",
+        "status": "pending_fill", "stale_bumps": 0,
+    }
+
+    client = MagicMock()
+    client.cancel.return_value = {"ok": True}
+
+    captured = {}
+    def fake_place(**kwargs):
+        captured.update(kwargs)
+        return {"order_id": "new_bumped_order", "limit_price": kwargs["price"],
+                "status": "pending_fill"}
+
+    with patch.object(tm, "load_live_trades", return_value=[stale_trade]), \
+         patch.object(tm, "save_live_trades"), \
+         patch.object(tm, "setup_client",   return_value=client), \
+         patch.object(tm, "place_limit_order", side_effect=fake_place):
+        cancelled = tm.cancel_stale_orders()
+
+    ok(cancelled >= 1, f"Stale iptal edildi beklendi: {cancelled}")
+    ok("price" in captured,
+       "place_limit_order yeni emir için çağrılmalı")
+    # +3¢ beklenir: 0.20 → 0.23
+    eq(round(captured["price"], 2), 0.23,
+       f"D+1 stale bump: 0.20 → 0.23 beklenir, gerçek: {captured.get('price')}")
+    eq(captured["station"], "eglc")
+    eq(captured["top_pick"], 18)
+
+test("cancel_stale: D+1 retry'de +3¢ progressive bump",
+     test_cancel_stale_progressive_bump)
+
+
+def test_cancel_stale_bump_capped_at_max_price():
+    """MAX_PRICE'a ulaşılmışsa bump durur (aynı fiyatla retry)."""
+    tm = _import_trader_module()
+    now      = datetime.now()
+    tomorrow = (now + timedelta(days=1)).strftime("%Y-%m-%d")
+    # limit zaten MAX_PRICE tavanında — bump yapılmamalı
+    stale = {
+        "id": "x1", "paper_id": "p1", "station": "ltfm",
+        "date": tomorrow, "top_pick": 20, "bucket_title": "20°C",
+        "condition_id": "0xbb", "order_id": "ord_x1",
+        "limit_price": tm.MAX_PRICE, "shares": 5,
+        "cost_usdc": 2.0,
+        "placed_at": (now - timedelta(hours=10)).isoformat(),
+        "expires_at": (now - timedelta(hours=1)).isoformat(),
+        "horizon": "D+1", "status": "pending_fill", "stale_bumps": 5,
+    }
+    client = MagicMock()
+    client.cancel.return_value = {"ok": True}
+    captured = {}
+    def fake_place(**kw):
+        captured.update(kw)
+        return {"order_id": "again", "limit_price": kw["price"],
+                "status": "pending_fill"}
+    with patch.object(tm, "load_live_trades", return_value=[stale]), \
+         patch.object(tm, "save_live_trades"), \
+         patch.object(tm, "setup_client", return_value=client), \
+         patch.object(tm, "place_limit_order", side_effect=fake_place):
+        tm.cancel_stale_orders()
+    # Fiyat değişmemeli — zaten tavanda
+    eq(round(captured.get("price", 0), 2), round(tm.MAX_PRICE, 2),
+       f"MAX_PRICE tavanında fiyat korunmalı: {captured.get('price')}")
+
+test("cancel_stale: MAX_PRICE tavanında bump yapılmaz",
+     test_cancel_stale_bump_capped_at_max_price)
+
+
+# ── 36.2: Model-flip re-entry guard ────────────────────────────────────────
+def test_flip_flop_guard_blocks_weak_signal():
+    """Zayıf sinyalli (signal_score<70, mode_pct<70) re-entry iptal edilir."""
+    tm = _import_trader_module()
+    now = datetime.now()
+    tomorrow = (now + timedelta(days=1)).strftime("%Y-%m-%d")
+    # Önceki pending farklı pick'te (flip-flop senaryosu)
+    stale_pending = {
+        "id": "eham_old", "paper_id": "eham_old_paper",
+        "station": "eham", "date": tomorrow, "top_pick": 16,
+        "bucket_title": "16°C", "condition_id": "0xcc",
+        "order_id": "old_order_id", "limit_price": 0.22,
+        "shares": 5, "cost_usdc": 1.10,
+        "placed_at": now.isoformat(),
+        "expires_at": (now + timedelta(hours=4)).isoformat(),
+        "horizon": "D+1", "status": "pending_fill",
+    }
+
+    client = MagicMock()
+    client.cancel.return_value = {"ok": True}
+
+    with patch.object(tm, "load_live_trades", return_value=[stale_pending]), \
+         patch.object(tm, "save_live_trades"), \
+         patch.object(tm, "setup_client", return_value=client), \
+         patch.object(tm, "_load_paper_trade",
+                      return_value={"id": "eham_new_paper",
+                                    "signal_score": 55, "ens_mode_pct": 45}), \
+         patch.object(tm, "get_balance", return_value=100.0), \
+         patch.object(tm, "has_pending_tx", return_value=False):
+        result = tm.place_limit_order(
+            condition_id="0xdd", price=0.20, station="eham",
+            date=tomorrow, top_pick=15, bucket_title="15°C",
+            paper_id="eham_new_paper", shares=5,
+        )
+    eq(result, None, "Zayıf sinyalde re-entry None dönmeli (flip guard)")
+    # Eski emri iptal ettiyse ok — yeni emir açılmamış olmalı
+    eq(client.create_order.called, False,
+       "Flip guard devrede: yeni CLOB order açılmamalı")
+
+test("flip-flop guard: zayıf sinyalde re-entry iptal",
+     test_flip_flop_guard_blocks_weak_signal)
+
+
+def test_flip_flop_guard_allows_strong_signal():
+    """Güçlü sinyalli (signal_score≥70) re-entry normal akışa girer."""
+    tm = _import_trader_module()
+    now = datetime.now()
+    tomorrow = (now + timedelta(days=1)).strftime("%Y-%m-%d")
+    stale_pending = {
+        "id": "eglc_old", "paper_id": "eglc_old_paper",
+        "station": "eglc", "date": tomorrow, "top_pick": 16,
+        "bucket_title": "16°C", "condition_id": "0xee",
+        "order_id": "old_strong_order", "limit_price": 0.22,
+        "shares": 5, "cost_usdc": 1.10,
+        "placed_at": now.isoformat(),
+        "expires_at": (now + timedelta(hours=4)).isoformat(),
+        "horizon": "D+1", "status": "pending_fill",
+    }
+
+    client = MagicMock()
+    client.cancel.return_value = {"ok": True}
+    client.create_order.return_value = {"signed": True}
+    client.post_order.return_value   = {"orderID": "new_strong_order_abcd1234"}
+    client.get_order_book.return_value = MagicMock(bids=[])
+
+    # portfolio_var'i nötralize et — VaR gate açıkken yanıltmasın
+    import types
+    fake_pv = types.ModuleType("bot.portfolio_var")
+    fake_pv.portfolio_var = lambda *a, **kw: {"var_95": 0.0}
+    import sys as _sys
+    _sys.modules["bot.portfolio_var"] = fake_pv
+
+    with patch.object(tm, "load_live_trades", return_value=[stale_pending]), \
+         patch.object(tm, "save_live_trades"), \
+         patch.object(tm, "setup_client", return_value=client), \
+         patch.object(tm, "_load_paper_trade",
+                      return_value={"id": "eglc_new_paper",
+                                    "signal_score": 80, "ens_mode_pct": 55}), \
+         patch.object(tm, "get_balance", return_value=100.0), \
+         patch.object(tm, "has_pending_tx", return_value=False), \
+         patch.object(tm, "get_best_bid", return_value=None):
+        result = tm.place_limit_order(
+            condition_id="0xff", price=0.20, station="eglc",
+            date=tomorrow, top_pick=15, bucket_title="15°C",
+            paper_id="eglc_new_paper", shares=5,
+        )
+    ok(result is not None,
+       "Güçlü sinyalde re-entry başarılı olmalı (None dönmemeli)")
+    ok(client.create_order.called,
+       "Güçlü sinyalde yeni CLOB order oluşturulmalı")
+
+test("flip-flop guard: güçlü sinyalde re-entry geçer",
+     test_flip_flop_guard_allows_strong_signal)
+
+
+# ── 36.3: Micro-hedge (off-by-one koruması) ────────────────────────────────
+def test_micro_hedge_opens_adjacent_bucket():
+    """Moderate sinyalde blend drift yönüne ±1°C küçük hedge açılır."""
+    s = _import_scanner_module()
+
+    # Weather API mock (blend=18.4 — drift=+0.4 → hedge_pick=19)
+    weather_resp = MagicMock()
+    weather_resp.raise_for_status = MagicMock()
+    weather_resp.json = lambda: {"days": {"2026-05-01": {"blend": {
+        "max_temp": 18.4, "spread": 1.2, "uncertainty": "Düşük",
+        "bias_active": False,
+    }}}}
+
+    # Ensemble API mock — mode_pct=45 (mid-range gate ∈ [50,80) DIŞINDA),
+    # second peak (25) uzak → 2-bucket tetiklenmez; komşu 19°C %20.
+    members = [18]*9 + [19]*4 + [25]*7   # 20 üye: 18→45%, 19→20%, 25→35%
+    # second peak (top_2) mode_pct=35 → second_pick=25 (abs(25-18)=7 > 1)
+    # → 2-bucket tetiklenmez ✓
+    ens_resp = MagicMock()
+    ens_resp.raise_for_status = MagicMock()
+    ens_resp.json = lambda: {"days": {"2026-05-01": {
+        "member_maxes": members,
+        "is_bimodal": False, "peak_separation": None,
+        "mode_ci_low": 35, "mode_ci_high": 55,
+    }}}
+
+    # Polymarket API: bucket 18 (ana), bucket 19 (hedge), bucket 25 (far 2nd)
+    pm_resp = MagicMock()
+    pm_resp.raise_for_status = MagicMock()
+    pm_resp.json = lambda: {
+        "buckets": [
+            {"threshold": 18, "is_below": False, "is_above": False,
+             "yes_price": 0.20, "condition_id": "0x100",
+             "title": "18°C"},
+            {"threshold": 19, "is_below": False, "is_above": False,
+             "yes_price": 0.18, "condition_id": "0x101",
+             "title": "19°C"},
+            {"threshold": 25, "is_below": False, "is_above": False,
+             "yes_price": 0.10, "condition_id": "0x102",
+             "title": "25°C"},
+        ],
+        "liquidity": 5000,
+    }
+
+    def fake_get(url, **kw):
+        # URL'e göre doğru response döndür
+        if "/api/weather" in url:
+            return weather_resp
+        if "/api/ensemble" in url:
+            return ens_resp
+        if "/api/polymarket" in url:
+            return pm_resp
+        raise RuntimeError(f"Beklenmeyen URL: {url}")
+
+    # efhk pause'de değil (tek karlı istasyon). DB pause'u da olmasın.
+    with patch("bot.scanner.httpx.get", side_effect=fake_get), \
+         patch.object(s, "should_pause_station", return_value=False):
+        result = s.scan_date("efhk", "2026-05-01", trades=[])
+
+    ok(isinstance(result, list) and len(result) >= 2,
+       f"result listesi beklenir + hedge ile en az 2 trade: {result}")
+    hedges = [t for t in result if t.get("trade_type") == "micro_hedge"]
+    eq(len(hedges), 1, f"tek bir micro_hedge beklenir: {hedges}")
+    # drift=+0.4 → hedge_pick = 18+1 = 19
+    eq(hedges[0]["top_pick"], 19,
+       f"Hedge pick 19 olmalı (drift +): {hedges[0]['top_pick']}")
+    # %40 boyut: ana trade_shares * 0.40 round ≥ 1
+    main = [t for t in result if t.get("trade_type") != "micro_hedge"][0]
+    expected_h_shares = max(1, round(main["shares"] * s.MICRO_HEDGE_SIZE_RATIO))
+    eq(hedges[0]["shares"], expected_h_shares,
+       f"Hedge shares = round(main*{s.MICRO_HEDGE_SIZE_RATIO}): "
+       f"{hedges[0]['shares']} vs beklenen {expected_h_shares}")
+
+test("micro-hedge: moderate sinyal + uzak 2. peak → ±1°C hedge açılır",
+     test_micro_hedge_opens_adjacent_bucket)
+
+
+# ── 36.4: Horizon-specific settlement delta ─────────────────────────────────
+def test_horizon_delta_dampening():
+    """horizon_days=2 ise delta %70'e azaltılır."""
+    import tempfile
+    from pathlib import Path as _P
+    from bot import db as bot_db
+    from bot import settlement_delta as sd
+
+    tmp = _P(tempfile.mkdtemp(prefix="wxbot_cb_"))
+    tmp_db = tmp / "test.db"
+    bot_db.init_db(tmp_db)
+
+    # 6 gün için: open-meteo + metar çifti Δ = +1.0°C (paired)
+    with bot_db.get_db(tmp_db) as conn:
+        for i in range(6):
+            d = f"2026-04-{10+i:02d}"
+            conn.execute(
+                "INSERT INTO settlement_audit (station, date, source, actual_temp, rounded_temp) "
+                "VALUES (?, ?, ?, ?, ?)",
+                ("eglc", d, "open-meteo", 15.0, 15),
+            )
+            conn.execute(
+                "INSERT INTO settlement_audit (station, date, source, actual_temp, rounded_temp) "
+                "VALUES (?, ?, ?, ?, ?)",
+                ("eglc", d, "metar", 16.0, 16),
+            )
+    # Medyan delta = +1.0
+    d_h1 = sd.learn_station_delta("eglc", db_path=tmp_db, horizon_days=1)
+    d_h2 = sd.learn_station_delta("eglc", db_path=tmp_db, horizon_days=2)
+    d_none = sd.learn_station_delta("eglc", db_path=tmp_db, horizon_days=None)
+
+    eq(round(d_none, 2), 1.00, f"Raw delta 1.0 olmalı: {d_none}")
+    eq(round(d_h1,   2), 1.00, f"D+1: raw * 1.0 = 1.00: {d_h1}")
+    eq(round(d_h2,   2), 0.70, f"D+2: raw * 0.7 = 0.70: {d_h2}")
+
+test("settlement_delta: horizon_days=2 dampening (%70)",
+     test_horizon_delta_dampening)
+
+
+# ── 36.5: Horizon-aware dynamic weights geçirildi mi? ───────────────────────
+def test_main_passes_horizon_to_dynamic_weights():
+    """main.py compute_dynamic_weights çağrısı horizon_days parametresi ile."""
+    src = Path("main.py").read_text(encoding="utf-8", errors="ignore")
+    ok("compute_dynamic_weights(station, horizon_days=horizon)" in src
+       or "compute_dynamic_weights(station, horizon_days=" in src,
+       "main.py compute_dynamic_weights'a horizon_days geçirmiyor")
+    # API imzası: effective_weights ve compute_dynamic_weights horizon_days kabul etmeli
+    from bot import dynamic_weights as dw
+    import inspect
+    sig_eff = inspect.signature(dw.effective_weights)
+    sig_dyn = inspect.signature(dw.compute_dynamic_weights)
+    ok("horizon_days" in sig_eff.parameters,
+       "effective_weights horizon_days parametresi eksik")
+    ok("horizon_days" in sig_dyn.parameters,
+       "compute_dynamic_weights horizon_days parametresi eksik")
+
+test("horizon-aware dynamic weights: parametre entegrasyonu",
+     test_main_passes_horizon_to_dynamic_weights)
+
+
+# ── 36.6: Circuit breaker — istasyon win-rate koruması ──────────────────────
+def test_circuit_breaker_triggers_on_low_win_rate():
+    """8 kayıp / 2 kazanç → %20 win-rate → breaker True."""
+    import tempfile
+    from pathlib import Path as _P
+    from bot import db as bot_db
+    from bot import circuit_breaker as cb
+
+    tmp = _P(tempfile.mkdtemp(prefix="wxbot_cb2_"))
+    tmp_db = tmp / "test.db"
+    bot_db.init_db(tmp_db)
+
+    # 10 closed live trade — 8 loss, 2 win, aynı istasyon (ltfm)
+    with bot_db.get_db(tmp_db) as conn:
+        for i in range(10):
+            result = "LOSS" if i < 8 else "WIN"
+            status = "settled_loss" if result == "LOSS" else "settled_win"
+            settled_iso = (datetime.now() - timedelta(days=10-i)).isoformat()
+            conn.execute(
+                """INSERT INTO live_trades
+                   (id, station, date, status, result, settled_at, placed_at,
+                    top_pick, bucket_title, condition_id, order_id,
+                    limit_price, shares, cost_usdc, pnl_usdc, horizon)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (f"ltfm_{i}", "ltfm", "2026-04-" + str(10+i).zfill(2),
+                 status, result, settled_iso, settled_iso,
+                 20, "20°C", "0xtest", f"order_{i}",
+                 0.2, 5, 1.0, 4.0 if result == "WIN" else -1.0, "D+1"),
+            )
+
+    # Doğrudan çağrı: True dönmeli
+    eq(cb.check_station_circuit_breaker("ltfm", db_path=tmp_db), True,
+       "%20 win-rate → circuit breaker True")
+    # Başka (veri yok) istasyonlar False
+    eq(cb.check_station_circuit_breaker("eglc", db_path=tmp_db), False,
+       "Kapalı live trade yok → False (veri yetersiz)")
+
+    # enforce çalıştırınca DB'ye pause yazılmalı
+    result = cb.enforce_circuit_breakers(
+        stations=["ltfm", "eglc"], db_path=tmp_db,
+    )
+    ok("ltfm" in result["paused"],
+       f"ltfm paused listesinde olmalı: {result}")
+    rows = bot_db.list_paused_stations(db_path=tmp_db)
+    ltfm_row = next((r for r in rows if r["station"] == "ltfm"), None)
+    ok(ltfm_row is not None and ltfm_row["paused"] == 1,
+       f"DB'de ltfm paused=1 olmalı: {ltfm_row}")
+
+test("circuit_breaker: düşük win-rate → pause yazılır",
+     test_circuit_breaker_triggers_on_low_win_rate)
+
+
+def test_circuit_breaker_no_trigger_on_healthy_rate():
+    """5 kazanç / 5 kayıp → %50 win-rate → breaker False."""
+    import tempfile
+    from pathlib import Path as _P
+    from bot import db as bot_db
+    from bot import circuit_breaker as cb
+
+    tmp = _P(tempfile.mkdtemp(prefix="wxbot_cb3_"))
+    tmp_db = tmp / "test.db"
+    bot_db.init_db(tmp_db)
+
+    with bot_db.get_db(tmp_db) as conn:
+        for i in range(10):
+            result = "WIN" if i < 5 else "LOSS"
+            status = "settled_win" if result == "WIN" else "settled_loss"
+            iso = (datetime.now() - timedelta(days=10-i)).isoformat()
+            conn.execute(
+                """INSERT INTO live_trades
+                   (id, station, date, status, result, settled_at, placed_at,
+                    top_pick, bucket_title, condition_id, order_id,
+                    limit_price, shares, cost_usdc, pnl_usdc, horizon)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (f"eglc_{i}", "eglc", "2026-04-" + str(10+i).zfill(2),
+                 status, result, iso, iso,
+                 18, "18°C", "0xtest", f"order_{i}",
+                 0.2, 5, 1.0, 4.0, "D+1"),
+            )
+
+    eq(cb.check_station_circuit_breaker("eglc", db_path=tmp_db), False,
+       "%50 win-rate → breaker False")
+
+test("circuit_breaker: sağlıklı win-rate → tetiklenmez",
+     test_circuit_breaker_no_trigger_on_healthy_rate)
+
+
+def test_circuit_breaker_module_api():
+    """Circuit breaker modülü gerekli API'leri sağlar."""
+    from bot import circuit_breaker as cb
+    ok(hasattr(cb, "check_station_circuit_breaker"),
+       "check_station_circuit_breaker eksik")
+    ok(hasattr(cb, "enforce_circuit_breakers"),
+       "enforce_circuit_breakers eksik")
+    ok(0 < cb.CB_MIN_WIN_RATE < 1, f"CB_MIN_WIN_RATE aralık: {cb.CB_MIN_WIN_RATE}")
+    ok(cb.CB_LOOKBACK_TRADES >= 5,
+       f"CB_LOOKBACK_TRADES ≥ 5: {cb.CB_LOOKBACK_TRADES}")
+    ok(cb.CB_PAUSE_DAYS >= 1,
+       f"CB_PAUSE_DAYS ≥ 1: {cb.CB_PAUSE_DAYS}")
+
+test("circuit_breaker: modül API'si ve sabitler",
+     test_circuit_breaker_module_api)
+
+
+def test_station_status_auto_resume_schema():
+    """station_status tablosu auto_resume_at kolonu içerir."""
+    from bot import db as bot_db
+    ok("auto_resume_at" in bot_db.SCHEMA_SQL,
+       "SCHEMA_SQL'de auto_resume_at yok")
+    # set_station_paused auto_resume_at parametresini kabul etmeli
+    import inspect
+    sig = inspect.signature(bot_db.set_station_paused)
+    ok("auto_resume_at" in sig.parameters,
+       "set_station_paused auto_resume_at parametresi eksik")
+
+test("station_status: auto_resume_at kolonu + param mevcut",
+     test_station_status_auto_resume_schema)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 print(f"\n{'═'*62}")
 print(f"  SONUÇ: {PASS} geçti / {FAIL} başarısız / {PASS+FAIL} toplam")

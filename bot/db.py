@@ -238,10 +238,11 @@ CREATE INDEX IF NOT EXISTS idx_sa_station ON settlement_audit(station, date);
 -- Sadece kod içinde statik set tutmak yerine, runtime'da toggle edilebilir.
 -- ───────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS station_status (
-    station      TEXT PRIMARY KEY,
-    paused       INTEGER NOT NULL DEFAULT 0,      -- 0=aktif, 1=durduruldu
-    reason       TEXT,                             -- insan-okunur sebep
-    updated_at   INTEGER DEFAULT (strftime('%s','now'))
+    station        TEXT PRIMARY KEY,
+    paused         INTEGER NOT NULL DEFAULT 0,    -- 0=aktif, 1=durduruldu
+    reason         TEXT,                           -- insan-okunur sebep
+    auto_resume_at INTEGER,                        -- unix ts; null=manuel pause
+    updated_at     INTEGER DEFAULT (strftime('%s','now'))
 );
 """
 
@@ -292,6 +293,18 @@ def _migrate_add_columns(conn) -> None:
     for col, typ in new_cols:
         if col not in existing:
             conn.execute(f"ALTER TABLE paper_trades ADD COLUMN {col} {typ}")
+
+    # Faz 8: station_status tablosuna auto_resume_at
+    try:
+        st_existing = {
+            row[1] for row in conn.execute("PRAGMA table_info(station_status)")
+        }
+        if "auto_resume_at" not in st_existing:
+            conn.execute(
+                "ALTER TABLE station_status ADD COLUMN auto_resume_at INTEGER"
+            )
+    except Exception:
+        pass
 
 
 # ── JSON → SQLite Mirror Senkronizasyonu ────────────────────────────────────
@@ -714,20 +727,28 @@ def set_station_paused(
     station: str,
     paused: bool,
     reason: str | None = None,
+    auto_resume_at: int | None = None,
     db_path: Path = DB_PATH,
 ) -> None:
-    """İstasyonun pause durumunu DB'ye yazar (override). Faz 7."""
+    """İstasyonun pause durumunu DB'ye yazar (override). Faz 7+Faz 8.
+
+    auto_resume_at (unix ts): verilirse, should_pause_station bu zaman
+    geçtikten sonra otomatik unpause olarak davranır (circuit breaker için).
+    """
+    init_db(db_path)
     with get_db(db_path) as conn:
         conn.execute(
             """
-            INSERT INTO station_status (station, paused, reason, updated_at)
-            VALUES (?, ?, ?, strftime('%s','now'))
+            INSERT INTO station_status
+                (station, paused, reason, auto_resume_at, updated_at)
+            VALUES (?, ?, ?, ?, strftime('%s','now'))
             ON CONFLICT(station) DO UPDATE SET
-                paused     = excluded.paused,
-                reason     = excluded.reason,
-                updated_at = excluded.updated_at
+                paused         = excluded.paused,
+                reason         = excluded.reason,
+                auto_resume_at = excluded.auto_resume_at,
+                updated_at     = excluded.updated_at
             """,
-            (station.lower(), 1 if paused else 0, reason),
+            (station.lower(), 1 if paused else 0, reason, auto_resume_at),
         )
 
 

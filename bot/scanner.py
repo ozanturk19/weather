@@ -103,24 +103,39 @@ STATION_SKILL_PAUSE = {"lfpg", "ltac", "limc"}
 # "Zayıf" sinyalleri (<50) gate'te düşür.
 MIN_SIGNAL_SCORE = 55
 
+# ── Faz 8: Micro-hedge (off-by-one koruması) ──────────────────────────────
+# 23 Nisan'da 7 filled pozisyonun 5'i off-by-one miss oldu (pick ±1°C uzak).
+# Ana pick yüksek güvenli olsa bile blend ile top_pick arasındaki drift
+# ensemble'ın kenara düştüğünü ima ediyor olabilir. Moderate sinyalde
+# (≥55) ±1°C komşuya ana boyutun %40'ı kadar hedge koy (ucuz sigorta).
+MICRO_HEDGE_SIZE_RATIO  = 0.40
+MICRO_HEDGE_MIN_SIGNAL  = 55
+
 
 def should_pause_station(station: str) -> bool:
     """İstasyon-bazlı skill pause aktif mi? (negatif skill korunağı).
 
     Faz 7: SQLite station_status tablosunu öncelikli kontrol eder. Tabloya
     runtime'da yazılabilir (override), eksikse statik STATION_SKILL_PAUSE set
-    fallback olarak kullanılır. Böylece kod değişikliği olmadan pause/resume
-    yapılabilir.
+    fallback olarak kullanılır.
+    Faz 8: auto_resume_at < now() ise otomatik unpause — circuit breaker
+    kısa dönem durdurmalarını süre dolunca kaldırır.
     """
     try:
+        import time as _time
         from bot.db import DB_PATH, get_db
         with get_db(DB_PATH, readonly=True) as conn:
             row = conn.execute(
-                "SELECT paused FROM station_status WHERE station = ?",
+                "SELECT paused, auto_resume_at FROM station_status WHERE station = ?",
                 (station,),
             ).fetchone()
             if row is not None:
-                return bool(row[0])
+                paused = bool(row[0])
+                auto_resume = row[1]
+                if paused and auto_resume is not None and int(auto_resume) <= int(_time.time()):
+                    return False  # süre doldu → otomatik unpause (read-only; yazım
+                                  # circuit_breaker.enforce_circuit_breakers tarafında)
+                return paused
     except Exception:
         pass
     return station in STATION_SKILL_PAUSE
@@ -417,12 +432,20 @@ def scan_date(station: str, target_date: str, trades: list,
                 f"bias düzeltme {bias:+d}°C  ({raw_top_pick}°C → {top_pick}°C)"
             )
 
-        # ── Settlement Delta Düzeltmesi (Faz 7) ─────────────────────────────
+        # ── Settlement Delta Düzeltmesi (Faz 7 + Faz 8 horizon-aware) ───────
         # WU ↔ Open-Meteo sistematik farkı öğrenilmiş medyan (proxy: METAR-OM).
         # settlement_audit tablosundan rolling 60g medyan; yeterli veri yoksa 0.
+        # Faz 8: horizon_days geçiyoruz → D+2'de delta %70'e dampening (bias
+        # kaynaklarının çakışmasına karşı koruma).
         try:
             from bot.settlement_delta import learn_station_delta
-            sdelta = learn_station_delta(station)
+            try:
+                _td = datetime.strptime(target_date, "%Y-%m-%d").date()
+                _today = datetime.now().date()
+                _horizon = max(1, (_td - _today).days)
+            except Exception:
+                _horizon = None
+            sdelta = learn_station_delta(station, horizon_days=_horizon)
         except Exception:
             sdelta = 0.0
         if sdelta:
@@ -727,6 +750,95 @@ def scan_date(station: str, target_date: str, trades: list,
                     f"{SHARES} share · risk=${s_cost:.2f} · edge{s_edge:+.0%}"
                 )
                 result_trades.append(second_trade)
+
+    # ── Faz 8: Micro-hedge (off-by-one koruması) ────────────────────────────
+    # Ana pick açıldıysa, ensemble 2. peak bitişik değilse (2-bucket tetiklemedi)
+    # ve sinyal en az "moderate" (≥55) ise, blend-top_pick drift yönüne göre
+    # ±1°C komşuya ana boyutun %40'ı kadar küçük hedge koy. 23 Nisan off-by-one
+    # (5/7) kayıplarına karşı ucuz sigorta.
+    two_bucket_fired = any(t.get("two_bucket") for t in result_trades)
+    micro_cond = (
+        len(result_trades) == 1
+        and not two_bucket_fired
+        and signal_score is not None
+        and signal_score >= MICRO_HEDGE_MIN_SIGNAL
+    )
+    if micro_cond:
+        drift      = float(blend) - float(top_pick)
+        hedge_dir  = 1 if drift >= 0 else -1
+        hedge_pick = top_pick + hedge_dir
+        h_bucket   = find_top_pick_bucket(buckets, hedge_pick)
+        station_max_h = STATION_MAX_PRICE.get(station, MAX_PRICE)
+        if h_bucket is not None:
+            h_price = h_bucket.get("yes_price", 0) or 0
+            # Ensemble olasılığı: komşu bucket için member count'a bak
+            if members:
+                h_count   = sum(1 for m in members if round(m) == hedge_pick)
+                h_mode_pct = round(h_count / len(members) * 100) if h_count else 0
+            else:
+                h_mode_pct = 0
+            h_edge = (h_mode_pct / 100.0) - h_price
+            # Aynı hedge zaten açıksa tekrar açma
+            already_hedge = any(
+                t["station"] == station and t["date"] == target_date
+                and t["top_pick"] == hedge_pick and t["status"] == "open"
+                for t in trades
+            )
+            if (
+                not already_hedge
+                and MIN_PRICE <= h_price < station_max_h
+                and h_edge > 0
+            ):
+                h_shares = max(1, round(trade_shares * MICRO_HEDGE_SIZE_RATIO))
+                h_cost   = round(h_shares * h_price, 2)
+                h_potwin = round(h_shares - h_cost, 2)
+                h_cond_raw = h_bucket.get("condition_id", "")
+                if isinstance(h_cond_raw, str) and h_cond_raw.startswith("0x"):
+                    h_cond = str(int(h_cond_raw, 16))
+                else:
+                    h_cond = str(h_cond_raw)
+                hedge_trade = {
+                    "id":            f"{station}_{target_date}_{datetime.now().strftime('%H%M%S')}_hedge",
+                    "station":       station,
+                    "date":          target_date,
+                    "blend":         round(blend, 1),
+                    "spread":        round(spread, 2),
+                    "uncertainty":   unc,
+                    "top_pick":      hedge_pick,
+                    "raw_top_pick":  hedge_pick,
+                    "bias_applied":  0,
+                    "ens_mode_pct":  h_mode_pct,
+                    "ens_2nd_pick":  top_pick,
+                    "ens_2nd_pct":   mode_pct,
+                    "ens_is_bimodal":   is_bimodal,
+                    "ens_peak_sep":     peak_sep,
+                    "ens_mode_ci_low":  mode_ci_low,
+                    "ens_mode_ci_high": mode_ci_high,
+                    # Ana sinyalin skorunu taşı (hedge bağımlı kararlı sinyale)
+                    "signal_score":     signal_score,
+                    "signal_grade":     signal_grade,
+                    "bucket_title":  h_bucket["title"],
+                    "condition_id":  h_cond,
+                    "entry_price":   h_price,
+                    "shares":        h_shares,
+                    "cost_usd":      h_cost,
+                    "potential_win": h_potwin,
+                    "liquidity":     liq,
+                    "status":        "open",
+                    "entered_at":    datetime.now().isoformat(),
+                    "actual_temp":   None,
+                    "result":        None,
+                    "pnl":           None,
+                    "settled_at":    None,
+                    "trade_type":    "micro_hedge",
+                }
+                h_pct = round(h_price * 100)
+                print(
+                    f"  🛡️  MICRO-HEDGE  {station.upper()} {label}  "
+                    f"🎯{hedge_pick}°C (drift {drift:+.1f}) @ {h_pct}¢  "
+                    f"{h_shares} share · risk=${h_cost:.2f} · edge{h_edge:+.0%}"
+                )
+                result_trades.append(hedge_trade)
 
     return result_trades
 
