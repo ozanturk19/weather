@@ -4205,6 +4205,163 @@ test("settle_live: filter kaynak kodu filled+sell_pending içeriyor",
      test_settle_live_filter_includes_both_statuses)
 
 
+# ═════════════════════════════════════════════════════════════════
+# TEST 38: Faz 9 — Apr 22 bug fixes
+#   (a) cmd_redeem: "positions'ta yok" → redeemed=True YAZMASIN (retry)
+#   (b) settle_live: on-chain resolution OM'u override etsin (WU authority)
+# ═════════════════════════════════════════════════════════════════
+print(f"\n{'═'*62}")
+print(" TEST 38: Faz 9 — redeem false-positive + on-chain override")
+print(f"{'═'*62}")
+
+
+def test_redeem_does_not_false_flag_when_position_missing():
+    """Positions API token dönmediğinde redeemed=True YAZILMAMALI."""
+    tm = _import_trader_module()
+    trade = {
+        "id": "epwa_win", "station": "epwa", "date": "2026-04-22",
+        "top_pick": 16, "bucket_title": "16°C", "condition_id": "99999",
+        "status": "settled_win", "result": "WIN", "pnl_usdc": 3.25,
+        "shares": 5, "cost_usdc": 1.75, "fill_price": 0.35,
+        "horizon": "D+1", "limit_price": 0.35,
+    }
+    saved: list = []
+
+    # Mock httpx.get: positions API boş liste döner (EPWA token'ı yok)
+    # Web3 de mock — gerçek redeem çağrısı olmamalı
+    class FakeResp:
+        is_success = True
+        def json(self): return []
+    with patch.object(tm.httpx, "get", return_value=FakeResp()), \
+         patch.object(tm, "load_live_trades", return_value=[trade]), \
+         patch.object(tm, "save_live_trades",
+                      side_effect=lambda t: saved.extend(t)), \
+         patch.object(tm, "_get_w3"), \
+         patch.object(tm, "_redeem_ctf") as mock_redeem:
+        tm.cmd_redeem()
+
+    ok(len(saved) == 1, "1 trade kaydedilmeli")
+    out = saved[0]
+    eq(out.get("redeemed"), False if out.get("redeemed") is not None else None,
+       f"Positions'ta yoksa redeemed False/None kalmalı, oldu: {out.get('redeemed')}")
+    ok(not mock_redeem.called, "_redeem_ctf çağrılmamalı (token yok)")
+    ok(out.get("redeem_attempts", 0) >= 1,
+       f"redeem_attempts artmalı, oldu: {out.get('redeem_attempts')}")
+
+test("cmd_redeem: positions'ta yoksa redeemed=True YAZMAZ (retry queue)",
+     test_redeem_does_not_false_flag_when_position_missing)
+
+
+def test_redeem_abandons_after_five_attempts():
+    """5 deneme sonrası redeem_abandoned olarak kapatılmalı."""
+    tm = _import_trader_module()
+    trade = {
+        "id": "stuck", "station": "xxx", "date": "2026-04-01",
+        "top_pick": 15, "bucket_title": "15°C", "condition_id": "77777",
+        "status": "settled_win", "result": "WIN", "pnl_usdc": 1.0,
+        "shares": 5, "cost_usdc": 1.0, "fill_price": 0.20,
+        "horizon": "D+1", "limit_price": 0.20,
+        "redeem_attempts": 4,  # 5. deneme → abandon
+    }
+    saved: list = []
+    class FakeResp:
+        is_success = True
+        def json(self): return []
+    with patch.object(tm.httpx, "get", return_value=FakeResp()), \
+         patch.object(tm, "load_live_trades", return_value=[trade]), \
+         patch.object(tm, "save_live_trades",
+                      side_effect=lambda t: saved.extend(t)), \
+         patch.object(tm, "_get_w3"):
+        tm.cmd_redeem()
+
+    out = saved[0]
+    eq(out.get("status"), "redeem_abandoned",
+       f"5. denemede status=redeem_abandoned olmalı, oldu: {out.get('status')}")
+    eq(out.get("redeemed"), True, "Zincirden çıkması için redeemed=True işaretli")
+
+test("cmd_redeem: 5 başarısız denemeden sonra abandon",
+     test_redeem_abandons_after_five_attempts)
+
+
+def test_settle_live_onchain_overrides_open_meteo():
+    """On-chain redeemable+value>0 ise OM LOSS'u WIN'e çevirmeli."""
+    tm = _import_trader_module()
+    yday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    trade = {
+        "id": "eglc_apr22", "station": "eglc", "date": yday,
+        "top_pick": 15, "bucket_title": "15°C",
+        "condition_id": "55555",  # token_id
+        "limit_price": 0.27, "shares": 5, "cost_usdc": 1.33,
+        "fill_price": 0.27, "horizon": "D+1",
+        "placed_at": yday + "T10:00:00",
+        "status": "filled",
+    }
+    saved: list = []
+
+    # OM der ki: 16.5°C (round 17°C) → bucket 15°C = LOSS
+    # Ama on-chain positions API: token_id=55555 redeemable=True value=$5
+    # → gerçek sonuç WIN
+    class FakeResp:
+        is_success = True
+        def json(self):
+            return [{
+                "asset": "55555", "redeemable": True,
+                "currentValue": 5.0, "size": 5.0,
+            }]
+    with patch.object(tm, "load_live_trades", return_value=[trade]), \
+         patch.object(tm, "save_live_trades",
+                      side_effect=lambda t: saved.extend(t)), \
+         patch.object(tm, "get_actual_temp_open_meteo", return_value=16.5), \
+         patch.object(tm.httpx, "get", return_value=FakeResp()):
+        tm.settle_live()
+
+    out = saved[0]
+    eq(out.get("status"), "settled_win",
+       f"On-chain override: LOSS→WIN bekleniyor, oldu: {out.get('status')}")
+    eq(out.get("result"), "WIN")
+    ok("on-chain override" in (out.get("notes") or ""),
+       f"Notes on-chain override içermeli, oldu: {out.get('notes')}")
+
+test("settle_live: on-chain resolution OM'u override eder (WU authority)",
+     test_settle_live_onchain_overrides_open_meteo)
+
+
+def test_settle_live_onchain_agrees_no_override():
+    """On-chain OM ile aynı fikirde ise override mesajı olmamalı."""
+    tm = _import_trader_module()
+    yday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    trade = {
+        "id": "epwa_agree", "station": "epwa", "date": yday,
+        "top_pick": 16, "bucket_title": "16°C", "condition_id": "88888",
+        "limit_price": 0.35, "shares": 5, "cost_usdc": 1.75,
+        "fill_price": 0.35, "horizon": "D+1",
+        "placed_at": yday + "T10:00:00", "status": "filled",
+    }
+    saved: list = []
+    # OM: 16.2°C → 16°C WIN; on-chain da WIN → override yok
+    class FakeResp:
+        is_success = True
+        def json(self):
+            return [{
+                "asset": "88888", "redeemable": True,
+                "currentValue": 5.0, "size": 5.0,
+            }]
+    with patch.object(tm, "load_live_trades", return_value=[trade]), \
+         patch.object(tm, "save_live_trades",
+                      side_effect=lambda t: saved.extend(t)), \
+         patch.object(tm, "get_actual_temp_open_meteo", return_value=16.2), \
+         patch.object(tm.httpx, "get", return_value=FakeResp()):
+        tm.settle_live()
+
+    out = saved[0]
+    eq(out.get("status"), "settled_win")
+    ok("on-chain override" not in (out.get("notes") or ""),
+       f"Uyuşuyorsa override mesajı olmamalı, oldu: {out.get('notes')}")
+
+test("settle_live: on-chain+OM uyuşuyorsa override mesajı yok",
+     test_settle_live_onchain_agrees_no_override)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 print(f"\n{'═'*62}")
 print(f"  SONUÇ: {PASS} geçti / {FAIL} başarısız / {PASS+FAIL} toplam")

@@ -836,6 +836,29 @@ def settle_live():
         print("  Settle edilecek live pozisyon yok.\n")
         return
 
+    # Faz 9: on-chain resolution authority (WU eşdeğeri).
+    # Open-Meteo Polymarket'ın WU kaynağıyla ~%95 uyumlu ama ±1°C bias
+    # oluşabilir (örn. Apr 22 London: OM=16.5°C, WU=15°C → yanlış LOSS).
+    # Çözüm: pozisyon on-chain "redeemable=True" ise currentValue > 0.01
+    # = gerçek WIN, = 0 = gerçek LOSS. Bu OM/METAR tahmininin üstüne gelir.
+    onchain_resolved: dict = {}
+    try:
+        wallet = wallet_address_from_pk(PK)
+        r = httpx.get(
+            f"https://data-api.polymarket.com/positions"
+            f"?user={wallet}&sizeThreshold=0.001",
+            timeout=15,
+        )
+        if r.is_success:
+            for p in r.json():
+                if p.get("redeemable"):
+                    onchain_resolved[str(p.get("asset", ""))] = {
+                        "won": float(p.get("currentValue", 0)) >= 0.01,
+                        "current_value": float(p.get("currentValue", 0)),
+                    }
+    except Exception as e:
+        print(f"  ⚠️  On-chain resolution fetch hatası: {e} — sadece OM kullanılır")
+
     settled = 0
     for trade in to_settle:
         station = trade["station"]
@@ -877,6 +900,21 @@ def settle_live():
                 print(f"  ❓ {station.upper()} {label} — bucket sonuç belirlenemedi")
                 continue
 
+            # Faz 9: on-chain resolution WU'ya eşdeğer ground truth.
+            # OM kararı ile uyuşmuyorsa on-chain'i kullan (OM bias override).
+            token_id = str(trade.get("condition_id", ""))
+            oc = onchain_resolved.get(token_id)
+            src_note = f"actual={actual}°C"
+            if oc is not None and oc["won"] != won:
+                print(
+                    f"  🔁 {station.upper()} {label} — on-chain override: "
+                    f"OM={'WIN' if won else 'LOSS'} → "
+                    f"WU={'WIN' if oc['won'] else 'LOSS'} "
+                    f"(on-chain val=${oc['current_value']:.2f})"
+                )
+                won = oc["won"]
+                src_note += f" | on-chain override (val=${oc['current_value']:.2f})"
+
             fill_p = trade.get("fill_price") or trade["limit_price"]
             if won:
                 pnl = round(trade["shares"] * (1.0 - fill_p), 2)
@@ -888,7 +926,7 @@ def settle_live():
                 "result":      "WIN" if won else "LOSS",
                 "pnl_usdc":   pnl,
                 "settled_at": datetime.now().isoformat(),
-                "notes":      f"actual={actual}°C",
+                "notes":      src_note,
             })
             settled += 1
 
@@ -1158,11 +1196,21 @@ def cmd_redeem():
         pos      = positions_by_asset.get(token_id)
 
         if pos is None:
-            # Positions API'de yok → token transfer edilmiş veya çok küçük
-            print(f"  ℹ️  {label} — positions'ta bulunamadı, muhtemelen zaten ödendi")
-            t["redeemed"] = True
-            t["redeemed_at"] = datetime.utcnow().isoformat()
-            updated += 1
+            # Faz 9: "positions'ta yok → zaten ödendi" VARSAYIMI TEHLIKELI.
+            # Apr 22 EPWA bug'ında market oracle henüz raporlamadan API
+            # pozisyonu dönmemişti, bu path yanlış redeemed=True yazdı;
+            # token cüzdanda $5 boş durdu. Artık positive confirmation şart:
+            # ≥5 retry'den sonra vazgeç, o vakte kadar redeemed=False kalır.
+            attempts = int(t.get("redeem_attempts", 0)) + 1
+            t["redeem_attempts"] = attempts
+            if attempts >= 5:
+                print(f"  ⚠️  {label} — 5 denemedir positions'ta yok, vazgeçiliyor (redeem_abandoned)")
+                t["status"] = "redeem_abandoned"
+                t["redeemed"] = True  # retry zincirinden çıkar
+                t["redeemed_at"] = datetime.utcnow().isoformat()
+                updated += 1
+            else:
+                print(f"  ⏳ {label} — positions API'de henüz yok (deneme {attempts}/5), sonraki run'da tekrar")
             continue
 
         current_val = float(pos.get("currentValue", 0))
