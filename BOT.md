@@ -1,208 +1,374 @@
-# Polymarket Weather Trading Bot — Mimari & Dokümantasyon
+# Polymarket Weather Trading Bot — Proje Kılavuzu
 
-## Genel Bakış
-
-Bu bot, hava durumu tahmin modelimizin çıktısını Polymarket'teki sıcaklık marketlerine bağlar.
-Model en olası settlement sıcaklığını (top pick) hesaplar, ilgili bucket ucuzsa otomatik pozisyon açar.
-
----
-
-## Sistem Bileşenleri
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                   VPS (135.181.206.109)                  │
-│                                                          │
-│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐  │
-│  │  FastAPI    │    │   Scanner   │    │  Backtest   │  │
-│  │  main.py   │    │  bot/       │    │  engine.py  │  │
-│  │  :8001     │    │  scanner.py │    │             │  │
-│  └──────┬──────┘    └──────┬──────┘    └─────────────┘  │
-│         │                  │                             │
-│         ▼                  ▼                             │
-│  ┌─────────────────────────────────────────────────┐    │
-│  │             Open-Meteo API                      │    │
-│  │  GFS · ECMWF · ICON · UKMO · MeteoFrance        │    │
-│  └─────────────────────────────────────────────────┘    │
-└─────────────────────────────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────────────────────────┐
-│              Polymarket                                  │
-│  Gamma API (fiyat okuma) + CLOB API (emir verme)        │
-│  Settlement: Wunderground (5 şehir) + NOAA (İstanbul)   │
-└─────────────────────────────────────────────────────────┘
-```
+> **Son güncelleme:** 2026-04-23 (Faz 5 — kalibrasyon-odaklı filtreler)
+> **Çalışma ortamı:** VPS (135.181.206.109) · FastAPI :8001 · 12 istasyon
+> **Toplam test:** 280/280 geçiyor (239 normal + 41 crash)
 
 ---
 
-## İstasyonlar & Settlement
+## 1. Genel Bakış
 
-| İstasyon | Şehir | PM Hacim/Gün | Settlement | Durum |
+Bot, 6 sayısal hava tahmin modelinin (ECMWF, ICON, GFS, UKMO, MeteoFrance, ECMWF-AIFS) 139-üyeli ensemble'ını Polymarket'in günlük maksimum sıcaklık marketlerine bağlar. Akış:
+
+```
+ensemble blend → bias düzeltme → top-pick bucket → fiyat & edge → sinyal kalitesi → BUY emir
+                                                                                        ↓
+                                                                          99.8¢ otomatik SELL (fill sonrası)
+```
+
+Filtre katmanları her adımda kötü sinyalleri elemeyi hedefler. **Canlı kalibrasyon 90g skill = −0.36** bulgusu üzerine Faz 5'te mid-range over-confidence bandı devre dışı bırakıldı.
+
+---
+
+## 2. Mimari
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                VPS (135.181.206.109) :8001                    │
+│                                                                │
+│  FastAPI (main.py)  ◄────── static/index.html (dashboard)      │
+│       │                                                        │
+│       ├─► /api/weather       (blend, bias_active, uncertainty) │
+│       ├─► /api/ensemble      (139 üye + bimodal + CI)          │
+│       ├─► /api/polymarket    (buckets, condition_id, yes_price)│
+│       ├─► /api/metar-history (METAR daily max — settle yedek)  │
+│       ├─► /api/calibration   (Brier, reliability, skill, bins) │
+│       ├─► /api/portfolio/var (Monte-Carlo VaR 95/99)           │
+│       ├─► /api/settlement-audit (kaynak disagreement)          │
+│       └─► /api/live-trades   (auto-sell durumu + açık poz)     │
+│                                                                │
+│  bot/                                                          │
+│    ├─ scanner.py         (scan → paper trade)                  │
+│    ├─ trader.py          (live CLOB — BUY + auto-SELL)         │
+│    ├─ kalman.py          (adaptif bias — Faz 3)                │
+│    ├─ signal_score.py    (0-100 kompozit kalite)               │
+│    ├─ dynamic_weights.py (istasyon×model RMSE — Faz 4)         │
+│    ├─ portfolio_var.py   (Gaussian copula + Cholesky)          │
+│    ├─ calibration.py     (Brier skill, reliability bin)        │
+│    └─ db.py              (SQLite WAL — model_forecasts, audit) │
+│                                                                │
+│  SQLite → /root/weather/bot/weather.db                         │
+│  JSON   → paper_trades.json / live_trades.json                 │
+└──────────────────────────────────────────────────────────────┘
+                       │
+    ┌──────────────────┼─────────────────────┐
+    ▼                  ▼                     ▼
+ Open-Meteo         Polymarket            Settlement
+ (6 model +        Gamma API              Open-Meteo arşiv
+  139-üye ens)     CLOB API               + METAR yedek
+```
+
+---
+
+## 3. Strateji — GİRİŞ (Entry)
+
+`bot/scanner.py → scan_date()` her istasyon × (D+1, D+2) için aşağıdaki **katmanlı filtre zincirini** uygular. Bir filtre pas derse trade açılmaz.
+
+### 3.1 Sıralı Filtre Zinciri (8 katman)
+
+| # | Katman | Sabit | Değer | Tanıma/Kaynak |
 |---|---|---|---|---|
-| EGLC | Londra City | ~$450K | Wunderground EGLC | Aktif |
-| LFPG | Paris CDG | ~$219K | Wunderground LFPG | Aktif |
-| LIMC | Milano Malpensa | ~$112K | Wunderground LIMC | Aktif |
-| LEMD | Madrid Barajas | ~$105K | Wunderground LEMD | Aktif |
-| LTFM | İstanbul | ~$90K | NOAA weather.gov | Aktif |
-| LTAC | Ankara Esenboğa | ~$22K | Wunderground LTAC | Aktif |
-| EHAM | Amsterdam Schiphol | ~$86K | Wunderground EHAM | Aktif |
-| EDDM | Münih | ~$75K | Wunderground EDDM | Aktif |
-| EPWA | Varşova Chopin | ~$77K | Wunderground EPWA | Aktif |
-| EFHK | Helsinki Vantaa | ~$42K | Wunderground EFHK | Aktif |
+| **1** | **İstasyon skill pause** (Faz 5) | `STATION_SKILL_PAUSE` | `{lfpg, ltac, limc}` | 90g skill < −0.7, n≥10 |
+| **2** | Ensemble konsensüs | `MIN_MODE_PCT` | 30 | üyelerin %30+ı aynı bucket'ta |
+| **3** | CI kırılganlık (Faz 2) | `MIN_MODE_CI_LOW` | 20 | bootstrap %5 alt sınırı |
+| **4** | **Mid-range over-confidence** (Faz 5) | `MID_RANGE_SKIP_[LOW,HIGH]` | [50, 80) | kalibrasyon kırık zone — **skip** |
+| **5** | Bimodal uyarı | `BIMODAL_MAX_SEPARATION` | 1°C | tepe ayrımı > 1°C → pas |
+| **6** | Uncertainty filtresi | `SKIP_UNCERTAINTY` | {yüksek, high} | API metadata |
+| **7** | Fiyat aralığı | `MIN_PRICE` / `MAX_PRICE` | 0.05 / 0.40 | likidite + edge |
+| **7b** | İstasyon fiyat tavanı | `STATION_MAX_PRICE` | `{lfpg: 0.18}` | Paris'e ek sıkı tavan |
+| **8** | EV edge | `MIN_EDGE` | 0.05 | mode_pct − price ≥ 5pp |
+| **9** | **Signal score gate** (Faz 5) | `MIN_SIGNAL_SCORE` | 55 | 0-100 kompozit, "zayıf"ı blokla |
+
+Tüm filtreler geçtiğinde **BUY emir** açılır. Paper + live modda aynı zincir çalışır.
+
+### 3.2 Bias Düzeltme (Adaptif — Faz 3 Kalman)
+
+- Son 8+ kapalı trade için Kalman filtresi `yi = top_pick_i + ε_i` takip eder.
+- Öğrenilen sistematik hata `top_pick'e +/- eklenir (max ±2°C).
+- Örnek: EDDM geçmişte +1.4°C over-forecast → `top_pick += 1`.
+
+### 3.3 2-Bucket Stratejisi (Hedge)
+
+Ensemble'ın 2. tepesi 1°C bitişikteyse her iki bucket'a küçük pozisyon açar — WU/METAR ±1°C ölçüm belirsizliğine karşı doğal hedge. Her iki bucket aynı filtre zincirine tabidir.
 
 ---
 
-## Model Ağırlıkları (Backtest Sonucu — 60 gün, MAE⁻¹)
+## 4. Strateji — ÇIKIŞ (Exit)
 
+### 4.1 Auto-Sell (Faz "auto-sell" — nakit döngüsü)
+
+`bot/trader.py → place_auto_sell()` BUY fill'inden sonra **hemen** 99.8¢ limit SELL emri koyar:
+
+| Adım | Eylem |
+|---|---|
+| BUY fill | `trader.check_fills()` her 30dk kontrol eder |
+| Tick lookup | `client.get_tick_size()` → market'e göre 0.001 / 0.01 |
+| Snap | 99.8¢ → tick'e yuvarlanır (0.99 veya 0.998) |
+| SELL | GTC post_only (maker fee = 0%) |
+| Margin guard | fill_price ≥ sell_price − `AUTO_SELL_MIN_EDGE` (0.02) → emir atlanır |
+
+**Neden?** Claim/redeem cycle 24-48 saat, nakit döngüsünü bozuyordu. 99.8¢ SELL maker fee 0 ile redeem'le ekonomik olarak eşdeğer ama **likiditeyi** serbest bırakır.
+
+### 4.2 Settlement (Cron 11:00)
+
+`scanner.py settle` dünkü pozisyonları iki kaynakla kapatır:
+1. **Birincil:** Open-Meteo archive API (Wunderground uyumlu daily max)
+2. **Yedek:** METAR saatlik ölçüm → günlük max
+
+Her iki kaynak da `record_settlement_source()` ile audit'e yazılır (Faz 6b). Uyumsuzluk ≥1°C bucket farkı varsa uyarı log'lanır.
+
+---
+
+## 5. Risk Yönetimi & Sabitler
+
+`bot/scanner.py`:
 ```python
-MODEL_WEIGHTS = {
-    "icon":        1.8,   # D+1 MAE 1.08 — en iyi
-    "ecmwf":       1.5,   # D+1 MAE 1.20
-    "meteofrance": 0.9,
-    "gfs":         1.0,
-    "ukmo":        0.5,   # D+1 MAE 1.80 (LTFM'de 3.22°C — çok kötü)
-}
+SHARES       = 10          # paper per-trade
+MIN_PRICE    = 0.05
+MAX_PRICE    = 0.40
+MIN_MODE_PCT = 30
+MIN_EDGE     = 0.05
+MIN_BIAS_TRADES     = 8
+MAX_BIAS_CORRECTION = 2    # bias tavan ±°C
+MID_RANGE_SKIP_LOW  = 50   # Faz 5
+MID_RANGE_SKIP_HIGH = 80
+MIN_SIGNAL_SCORE    = 55   # Faz 5
+STATION_SKILL_PAUSE = {"lfpg", "ltac", "limc"}
+STATION_MAX_PRICE   = {"lfpg": 0.18}
 ```
 
----
-
-## Karar Mantığı (Top Pick Stratejisi)
-
-```
-1. blend = ağırlıklı model ortalaması (ICON+ECMWF öncelikli)
-2. bias_correction uygula (son 7 günlük sistematik hata)
-3. top_pick = round(blend)           → en olası settlement °C
-4. PM bucket'ını bul (threshold eşleştirme)
-5. price = bucket.yes_price
-
-Karar:
-  price < 0.20  → 💰 ÇOK UCUZ — güçlü al sinyali
-  price < 0.50  → ←  AL sinyali
-  price ≥ 0.50  → market aynı fikirde, pas geç
-```
-
----
-
-## Bot Çalışma Döngüsü
-
-```
-Her gün 3 kez tarama:
-  06:00 → Sabah (D+1 market açıldı mı?)
-  12:00 → Öğlen (fiyat değişimi var mı?)
-  18:00 → Akşam (son güncelleme)
-
-Ertesi gün:
-  10:00 → Settle (dünkü pozisyonlar kapandı mı?)
-```
-
----
-
-## Polymarket CLOB API — Canlı Trading Kurulumu
-
-### Gereksinimler
-```
-1. Polymarket hesabı (polymarket.com)
-2. MetaMask cüzdanı (Polygon ağı)
-3. USDC on Polygon (Coinbase/Binance'den transfer)
-4. pip install py-clob-client
-```
-
-### Kimlik Doğrulama
+`bot/trader.py`:
 ```python
-from py_clob_client.client import ClobClient
-from py_clob_client.constants import POLYGON
-
-client = ClobClient(
-    "https://clob.polymarket.com",
-    key=PRIVATE_KEY,       # MetaMask private key
-    chain_id=POLYGON
-)
-# API credentials (L2) — ilk kurulumda bir kez çalıştır
-creds = client.create_or_derive_api_creds()
-client.set_api_creds(creds)
-```
-
-### Emir Verme
-```python
-# YES pozisyon aç (top pick bucket satın al)
-order = client.create_and_post_order({
-    "token_id":   condition_id,   # bucket condition ID (Gamma API'dan gelir)
-    "price":      price,          # limit fiyat (örn: 0.35)
-    "size":       amount,         # share sayısı (size_usd / price)
-    "side":       "BUY",
-    "order_type": "GTC",          # Good Till Cancelled
-})
+LIVE_SHARES        = 5      # live per-trade (paper'ın yarısı)
+AUTO_SELL_PRICE    = 0.998  # tick'e snap olur
+AUTO_SELL_FALLBACK = 0.99
+AUTO_SELL_MIN_EDGE = 0.02   # fill çok yüksekse SELL atlanır
 ```
 
 ---
 
-## Risk Parametreleri
+## 6. Model Stack (6 Model, 139 Üye)
 
-```python
-BET_SIZE_USD   = 50    # tek işlem max $
-DAILY_MAX_USD  = 300   # günlük toplam max $
-MIN_PRICE      = 0.05  # çok ucuk = şüpheli likidite
-MAX_PRICE      = 0.50  # bu altı "ucuz" sayılır
-MAX_OPEN_POS   = 5     # aynı anda max açık pozisyon
-STOP_DAILY_PNL = -200  # günlük -$200 → bot durur
-```
+| Model | Tip | Üye | Statik Weight | Not |
+|---|---|---|---|---|
+| ICON | det + ens | 40 | 1.8 | En iyi D+1 MAE (1.08) |
+| ECMWF | det + ens | 51 | 1.5 | İkinci en iyi (1.20) |
+| **AIFS** | **AI** | det | 1.6 | **Faz 6d — ECMWF AI-forecast (2025)** |
+| MeteoFrance | det + ens | 35 | 0.9 | — |
+| GFS | det + ens | 21 | 1.0 | — |
+| UKMO | det | — | 0.5 | LTFM'de MAE 3.22°C → düşük weight |
+
+**Dinamik weights (Faz 4):** `bot/dynamic_weights.py`, son 30g istasyon×model RMSE → `1/(rmse+ε)` normalize. `model_forecasts` tablosunda ≥10 örnek varsa statik yerine dinamik kullanılır.
 
 ---
 
-## Paper Trading vs Canlı Trading
+## 7. Faz Tarihçesi
 
-| | Paper | Canlı |
+| Faz | Ne eklendi | Beklenen etki |
 |---|---|---|
-| Gerçek para | ❌ | ✅ |
-| Cüzdan gerekir | ❌ | ✅ |
-| Sonuçlar gerçek | ✅ | ✅ |
-| Slippage | ❌ simüle edilmez | ✅ gerçek |
-| Amaç | Strateji doğrulama | Kâr |
-
-**Önce paper trading ile en az 30 gün test, sonra canlıya geç.**
+| **1** | SQLite altyapısı (WAL, model_forecasts, audit tabloları) | JSON → DB hibrit; geçmiş analiz |
+| **2** | Bimodal detection + bootstrap CI + dinamik CALIB | Kırılgan consensus'u reddet |
+| **3** | Kalman bias filtresi + signal_score kompozit (0-100) | Mevsim kaymasına adapte bias |
+| **4** | İstasyon×model dinamik ağırlık (rolling RMSE) | LTFM UKMO gibi outlier'ı otomatik sustur |
+| **6a** | Portföy VaR (Gaussian copula + Cholesky Monte-Carlo) | Korelasyonlu risk ölçümü |
+| **6b** | Çok kaynaklı settlement audit (OM + METAR) | Uyumsuzluk tespiti (LFPG +1.9°C sorunu) |
+| **6c** | Kalibrasyon dashboard (Brier skill + reliability) | `/api/calibration` ve panel |
+| **6d** | ECMWF AIFS 6. model olarak | AI ensemble entegrasyonu |
+| **auto-sell** | 99.8¢ fill-sonrası SELL | Nakit döngüsü 48sa → anında |
+| **crash-tests** | 11 grup × 41 crash test | Bot resilience |
+| **Faz 5** | Kalibrasyon-odaklı filtre üçlüsü | Skill −0.36 → +0.05..+0.15 hedefi |
 
 ---
 
-## Dosya Yapısı
+## 8. Faz 5 Tanısı & Rationale (2026-04-23)
+
+**Bulgu:** `/api/calibration` 90g veride:
+- n=131, Brier=0.2709, Brier_ref=0.1993 → **skill = −0.36**
+- Mid-range bandı (mode_pct ∈ [50, 70)): 51/131 trade (%39), gap ≈ **−0.39**
+- Bu trade'lerin gerçek win oranı %20 (beklenen ~%58) — sistematik over-confidence
+- Düşük güven bandı [30, 50): n=69, gap ≤ 0.07 → kalibre
+- Per-station: yalnızca **efhk** (Helsinki) karlı (skill +0.28); lfpg (−1.96), ltac (−1.71), limc (−0.70) en kötüler
+
+**Fix üçlüsü:**
+1. `[50, 80)` mid-range → hard-skip
+2. `{lfpg, ltac, limc}` → istasyon pause
+3. `MIN_SIGNAL_SCORE=55` → kompozit gate'i aktive et
+
+**Beklenen:** ~%42 hacim düşüşü, skill pozitife dönüş.
+
+**Ertelenen (ayrı PR):** Platt scaling / isotonic regression ile mode_pct → kalibre olasılık dönüşümü. Bu yapılınca mid-range skip kaldırılabilir.
+
+---
+
+## 9. Kritik Endpoint'ler & Dashboard
+
+Dashboard (`static/index.html`) 4 collapsible analitik paneli içerir:
+
+| Panel | Endpoint | Ne gösterir |
+|---|---|---|
+| 📊 Kalibrasyon | `/api/calibration?days=90` | Brier, skill, reliability bin, per-station |
+| 📈 Portföy VaR | `/api/portfolio/var?sims=10000` | E[P&L], VaR 95/99, corr |
+| 🔍 Settlement Audit | `/api/settlement-audit` | Open-Meteo vs METAR uyumsuzluk |
+| 💼 Canlı İşlemler | `/api/live-trades` | Auto-sell durumu, açık pozisyon |
+
+Her panel **lazy-load** (ilk açılışta fetch).
+
+---
+
+## 10. Operasyon — Cron
+
+```cron
+# /etc/cron.d/weather  (VPS)
+0 4,10,16,22 * * *  cd /root/weather && python3 bot/scanner.py scan --live
+0 11 * * *          cd /root/weather && python3 bot/scanner.py settle
+5 11 * * *          cd /root/weather && python3 bot/trader.py settle
+15 11 * * *         cd /root/weather && python3 bot/trader.py redeem
+*/30 * * * *        cd /root/weather && python3 bot/trader.py check-fills
+0 4,8,12,16,20 * *  cd /root/weather && python3 bot/trader.py cancel-stale
+```
+
+`check-fills` içinde BUY fill tespit edilirse `place_auto_sell()` hook'u tetiklenir.
+
+---
+
+## 11. Deploy — Git + SSH
+
+**KRİTİK KURAL:** VPS'te doğrudan dosya değiştirme. Akış:
+
+```bash
+# Mac'te
+git add -p
+git commit -m "..."
+git push origin main
+
+# VPS'e deploy
+ssh root@135.181.206.109 "cd /root/weather && ./deploy.sh"
+```
+
+`deploy.sh` iki koruyucu kontrole sahip:
+- Uncommitted değişiklik varsa → abort
+- Push edilmemiş commit varsa → abort
+- `git pull` → test suite → `systemctl restart weather`
+
+---
+
+## 12. Test Süiti (280/280)
+
+```bash
+python3 tests/test_weather_bot.py   # 239 birim + entegrasyon testi
+python3 tests/test_crash.py         # 41 crash/defensive test
+```
+
+**TEST numaraları:**
+- 1–24: Temel bucket, settle, blend, bias
+- 25: SQLite altyapısı (Faz 1)
+- 26: Bimodal + CI + CALIB (Faz 2)
+- 27: Kalman bias + signal score (Faz 3)
+- 28: Dinamik weights (Faz 4)
+- 29: Portföy VaR (Faz 6a)
+- 30: Çok-kaynaklı settlement audit (Faz 6b)
+- 31: Kalibrasyon dashboard (Faz 6c)
+- 32: ECMWF AIFS entegrasyonu (Faz 6d)
+- 33: Otomatik satış (99.8¢ post-fill)
+- **34: Kalibrasyon-odaklı filtreler (Faz 5) ← yeni**
+
+**Crash test grupları (test_crash.py):**
+JSON corruption · ekstrem sıcaklıklar · DB hataları · kalibrasyon edge · VaR (non-PSD, zero-var) · settlement (None, UPSERT, corrupt DB) · auto-sell (empty, timeout) · concurrency (parallel JSON write, WAL read) · API integrity · env/deploy · bucket defensive.
+
+---
+
+## 13. Dosya Yapısı (Güncel)
 
 ```
 /root/weather/
-├── main.py              # FastAPI backend
-├── static/index.html    # Frontend dashboard
-├── predictions.json     # Bias tracking (gitignored)
-├── BOT.md               # Bu dosya
+├── main.py                      FastAPI backend
+├── deploy.sh                    VPS deploy (git pull + test + restart)
+├── BOT.md                       Bu kılavuz
+├── CLAUDE.md                    Kısa proje notları (Claude için)
+├── static/
+│   └── index.html              Dashboard (4 analitik panel)
 ├── bot/
-│   ├── scanner.py       # Paper/canlı trading botu
-│   └── paper_trades.json  # Paper trade geçmişi (gitignored)
-└── backtest/
-    ├── fetch_actuals.py # Gerçek veriler (Iowa IEM ASOS)
-    ├── engine.py        # Backtest motoru
-    └── data/
-        ├── actuals.json
-        ├── forecasts.json
-        └── results.json
+│   ├── scanner.py              Scan + settle
+│   ├── trader.py               Live CLOB + auto-sell
+│   ├── kalman.py               Adaptif bias (Faz 3)
+│   ├── signal_score.py         Kompozit kalite
+│   ├── dynamic_weights.py      Rolling RMSE (Faz 4)
+│   ├── portfolio_var.py        Cholesky Monte-Carlo
+│   ├── calibration.py          Brier/reliability
+│   ├── db.py                   SQLite WAL + tablolar
+│   ├── paper_trades.json       Paper geçmişi
+│   ├── live_trades.json        Live geçmişi (auto-sell dahil)
+│   └── weather.db              SQLite (model_forecasts, audit, weights)
+├── backtest/
+│   └── engine.py               Geçmiş ∪ filtre analizi
+└── tests/
+    ├── test_weather_bot.py     239 birim/entegrasyon test
+    └── test_crash.py           41 resilience test
 ```
 
 ---
 
-## Kalibrasyon Sonuçları (60 gün backtest)
+## 14. Günlük Operasyonel Checklist
 
-| Güven Aralığı | Model % | Gerçek % | Durum |
-|---|---|---|---|
-| 0–20% | %4.9 | %5.5 | ✓ İyi |
-| 20–40% | %28.7 | %29.1 | ✓ İyi |
-| 40–60% | %48.5 | %24.4 | ⚠ 2x overconfident |
-| 60–80% | %65.1 | %17.9 | ⚠ 3.6x overconfident |
-
-**Uygulanan düzeltme:** `CALIB_STD_FACTOR = 1.8` (Gaussian std inflate)
+- [ ] Dashboard aç → Kalibrasyon paneli → skill > 0 mı?
+- [ ] Canlı İşlemler paneli → auto-sell emirlerinin durumu?
+- [ ] Settlement Audit → OM/METAR uyumsuzluk var mı?
+- [ ] `journalctl -u weather -f` → cron hataları
+- [ ] `tail -f /root/deploy.log` → son deploy sağlıklı mı?
 
 ---
 
-## Sonraki Adımlar
+## 15. Sonraki Adımlar
 
-- [ ] Per-station model ağırlıkları (4 yeni istasyon 60 gün dolunca)
-- [ ] CLOB API cüzdan bağlantısı
-- [ ] Canlı emir verme (py-clob-client)
-- [ ] Bias spike alert (hata >3°C → uyarı)
-- [ ] Günlük P&L email/Telegram bildirimi
+- [ ] **Platt/isotonic kalibrasyon** → mid-range skip'i kaldır, gerçek kalibre olasılık kullan
+- [ ] Bimodal trade performansını ayrıştır (is_bimodal=1 vs 0), yeterli veriyle hard-skip düşün
+- [ ] Dinamik STATION_SKILL_PAUSE (30g rolling skill < −0.5 → otomatik ekle/kaldır)
+- [ ] Sinyal skoru kalibrasyonu: gerçek P&L ile korelasyon + bin bazlı win-rate
+- [ ] Per-bucket liquidity check (thin bucket'tan kaçın)
+- [ ] Discord/Telegram günlük bildirim (yeni trade + settled + P&L)
+
+---
+
+## 16. Referans: Commit Tarihçesi (Son 6)
+
+```
+3f1f685 faz5: kalibrasyon-odaklı scanner filtreleri (skill -0.36 → +)
+092576b dashboard: analitik panel (Kalibrasyon/VaR/Audit/Live) + crash test süiti
+c6d7cc3 auto-sell: fill sonrası 99.8¢ SELL limit — nakit döngüsü hızlandırma
+6a2a15e ecmwf-aifs: 6. model olarak AIFS entegrasyonu (deterministik + ensemble)
+f44575d faz6c: kalibrasyon dashboard — Brier + reliability + sharpness
+209613f faz6b: çok-kaynaklı settlement audit + uyumsuzluk tespiti
+```
+
+---
+
+## 17. Hızlı Referans — Komutlar
+
+```bash
+# Lokal test
+python3 tests/test_weather_bot.py        # 239 test
+python3 tests/test_crash.py              # 41 crash test
+
+# Manuel scan (paper)
+python3 bot/scanner.py scan
+
+# Manuel scan (paper + live)
+python3 bot/scanner.py scan --live
+
+# Manuel settle
+python3 bot/scanner.py settle && python3 bot/trader.py settle
+
+# Retroaktif auto-sell (mevcut filled pozisyonlar için)
+python3 bot/trader.py auto-sell            # 0.998 default
+python3 bot/trader.py auto-sell 0.995      # özel fiyat
+
+# Canlı kalibrasyon
+curl -s http://localhost:8001/api/calibration | jq '.overall'
+
+# VPS deploy
+ssh root@135.181.206.109 "cd /root/weather && ./deploy.sh"
+```
+
+---
+
+*Bu dosya Claude Code tarafından güncellenir. Değişiklikler git'ten izlenir, VPS'e deploy.sh ile iletilir.*
