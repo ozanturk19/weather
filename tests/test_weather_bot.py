@@ -4133,6 +4133,78 @@ test("station_status: auto_resume_at kolonu + param mevcut",
      test_station_status_auto_resume_schema)
 
 
+# ═════════════════════════════════════════════════════════════════
+# TEST 37: settle_live() bug fixes —
+#   (a) orphan `yesterday` NameError (commit 7ed29f1 aftermath)
+#   (b) filter sadece 'filled' alıyordu → 'sell_pending' kaçıyordu
+# ═════════════════════════════════════════════════════════════════
+print(f"\n{'═'*62}")
+print(" TEST 37: settle_live() kritik fix'ler (yesterday + sell_pending)")
+print(f"{'═'*62}")
+
+
+def test_settle_live_no_yesterday_nameerror_on_empty():
+    """Settle edilecek trade yoksa NameError: yesterday atmamalı."""
+    tm = _import_trader_module()
+    with patch.object(tm, "load_live_trades", return_value=[]):
+        try:
+            tm.settle_live()
+        except NameError as e:
+            raise AssertionError(
+                f"settle_live() NameError attı: {e} — orphan 'yesterday' ref hâlâ duruyor"
+            ) from e
+
+test("settle_live: boş to_settle listesinde NameError atmaz",
+     test_settle_live_no_yesterday_nameerror_on_empty)
+
+
+def test_settle_live_processes_sell_pending():
+    """sell_pending pozisyonlar da settle_live tarafından işlenmeli."""
+    tm = _import_trader_module()
+    yday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    trades = [
+        {
+            "id": "sp1", "station": "eglc", "date": yday,
+            "top_pick": 14, "bucket_title": "14°C",
+            "condition_id": "0xsp", "order_id": "ord_sp",
+            "limit_price": 0.40, "shares": 5, "cost_usdc": 2.0,
+            "placed_at": yday + "T10:00:00", "horizon": "D+1",
+            "status": "sell_pending",  # ← AUTOSELL fill olmadı, market kapandı
+        },
+    ]
+    saved: list = []
+
+    # Actual temp mock → 14°C WIN → settled_win olması beklenir
+    with patch.object(tm, "load_live_trades", return_value=trades), \
+         patch.object(tm, "save_live_trades",
+                      side_effect=lambda t: saved.extend(t)), \
+         patch.object(tm, "get_actual_temp_open_meteo", return_value=14.0):
+        tm.settle_live()
+
+    ok(len(saved) == 1, f"1 trade kaydedilmeli, oldu: {len(saved)}")
+    status = saved[0].get("status") if saved else None
+    ok(status and status.startswith("settled_"),
+       f"sell_pending → settled_* beklenir, oldu: {status}")
+
+test("settle_live: sell_pending status da settle edilir",
+     test_settle_live_processes_sell_pending)
+
+
+def test_settle_live_filter_includes_both_statuses():
+    """Filter hem 'filled' hem 'sell_pending' dahil etmeli."""
+    tm = _import_trader_module()
+    import inspect
+    src = inspect.getsource(tm.settle_live)
+    ok('"filled"' in src and '"sell_pending"' in src,
+       "settle_live filter'ı iki durumu da kapsamalı "
+       f"(src içinde filled+sell_pending): {src[:200]!r}")
+    ok("else yesterday" not in src,
+       "Orphan `else yesterday` referansı temizlenmemiş")
+
+test("settle_live: filter kaynak kodu filled+sell_pending içeriyor",
+     test_settle_live_filter_includes_both_statuses)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 print(f"\n{'═'*62}")
 print(f"  SONUÇ: {PASS} geçti / {FAIL} başarısız / {PASS+FAIL} toplam")

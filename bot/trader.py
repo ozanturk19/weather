@@ -817,12 +817,17 @@ def settle_live():
     """
     trades    = load_live_trades()
     today     = datetime.now().strftime("%Y-%m-%d")
+    # Faz 8 fix: sell_pending de settle edilmeli (AUTOSELL fill edilmeden market
+    # kapandığında position sell_pending'de kalır, klasik 'filled' filtresi
+    # bunları atlardı → market resolution sonrası on-chain redeem kaçardı).
     to_settle = [
         t for t in trades
-        if t["date"] <= today and t["status"] == "filled"
+        if t["date"] <= today and t["status"] in ("filled", "sell_pending")
     ]
 
-    dates_str = ", ".join(sorted({t["date"] for t in to_settle})) if to_settle else yesterday
+    # Faz 8 fix: `yesterday` değişkeni 7ed29f1 commit'inde kaldırıldı fakat bu
+    # satır ref'i orphan kaldı → her gün NameError → settle cron'u çöküyordu.
+    dates_str = ", ".join(sorted({t["date"] for t in to_settle})) if to_settle else today
     print(f"\n{'='*62}")
     print(f"  🏁 LIVE SETTLEMENT — {dates_str}")
     print(f"{'='*62}")
