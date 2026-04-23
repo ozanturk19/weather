@@ -3,6 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#0891b2">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="WeatherBot">
+<link rel="manifest" href="/static/manifest.json">
+<link rel="apple-touch-icon" href="/static/icon-192.svg">
+<link rel="icon" type="image/svg+xml" href="/static/icon-192.svg">
 <title>Polymarket Hava Analizi</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1352,64 +1359,8 @@ body.dark .lb-badge-cancel  { background:#1f2937; color:#9ca3af; }
   </div>
 </div>
 
-<!-- PORTFÖY -->
-<div class="portfolio-box" id="portfolio-box" style="display:none">
-  <h2>💼 Açık Hava Pozisyonları</h2>
-  <div id="portfolio-content"></div>
-</div>
-
-<!-- ═══════════════════════════════════════════════════════════
-     ANALİTİK: Kalibrasyon + VaR + Settlement Audit + Live Trades
-     Default kapalı — tüm detaylar erişilebilir ama ana akışı kirletmez.
-     ═══════════════════════════════════════════════════════════ -->
-<div class="analytics-wrap">
-  <div class="analytics-title">Analitik &amp; Risk Paneli
-    <span style="font-size:11px;color:var(--text-3);font-weight:400;margin-left:6px">
-      — detay için paneli aç
-    </span>
-  </div>
-  <div class="analytics-grid">
-    <!-- Kalibrasyon -->
-    <details class="ap-card" id="ap-calibration">
-      <summary>
-        📊 Kalibrasyon (Brier · Reliability · Sharpness)
-      </summary>
-      <div class="ap-body" id="ap-calibration-body">
-        <div class="ap-empty">Paneli açınca yüklenir…</div>
-      </div>
-    </details>
-
-    <!-- VaR -->
-    <details class="ap-card" id="ap-var">
-      <summary>
-        📉 Portföy VaR (Monte Carlo · Gaussian Copula)
-      </summary>
-      <div class="ap-body" id="ap-var-body">
-        <div class="ap-empty">Paneli açınca yüklenir…</div>
-      </div>
-    </details>
-
-    <!-- Settlement Audit -->
-    <details class="ap-card" id="ap-audit">
-      <summary>
-        🔍 Settlement Audit (Open-Meteo vs METAR)
-      </summary>
-      <div class="ap-body" id="ap-audit-body">
-        <div class="ap-empty">Paneli açınca yüklenir…</div>
-      </div>
-    </details>
-
-    <!-- Live Trades -->
-    <details class="ap-card" id="ap-live">
-      <summary>
-        💰 Canlı İşlemler &amp; Otomatik Satış
-      </summary>
-      <div class="ap-body" id="ap-live-body">
-        <div class="ap-empty">Paneli açınca yüklenir…</div>
-      </div>
-    </details>
-  </div>
-</div>
+<!-- Portföy (wallet) ve Analitik Paneli kaldırıldı — Live Bot sekmesi bu bilgiyi
+     zaten daha güncel ve odaklı bir şekilde gösteriyor. -->
 
 <script>
 // ===== TEMA =====
@@ -1572,6 +1523,7 @@ const LB_CITY = {
 };
 let _liveBotData = null;      // önbellek (diğer panelleri de besler)
 let _liveBalance = null;
+let _liveOpenPosData = null;  // /api/live-open-positions cache (unrealized P&L)
 
 async function selectLiveBot() {
   document.querySelectorAll('.day-tab').forEach(t => t.classList.remove('active'));
@@ -1588,12 +1540,14 @@ async function renderLiveBot(force) {
   if (btn) btn.disabled = true;
   try {
     if (force || !_liveBotData) {
-      const [trades, bal] = await Promise.allSettled([
+      const [trades, bal, openPos] = await Promise.allSettled([
         fetchJSON('/api/live-trades'),
         fetchJSON('/api/live-balance'),
+        fetchJSON('/api/live-open-positions'),
       ]);
-      _liveBotData = (trades.status === 'fulfilled') ? trades.value : { trades: [], stats: {} };
-      _liveBalance = (bal.status === 'fulfilled')    ? bal.value    : null;
+      _liveBotData     = (trades.status  === 'fulfilled') ? trades.value  : { trades: [], stats: {} };
+      _liveBalance     = (bal.status     === 'fulfilled') ? bal.value     : null;
+      _liveOpenPosData = (openPos.status === 'fulfilled') ? openPos.value : null;
     }
     _renderLbMetrics();
     _renderLbOpen();
@@ -1676,17 +1630,37 @@ function _renderLbMetrics() {
     .reduce((a,t) => a + (Number(t.pnl_usdc)||0), 0);
 
   const balance = _liveBalance?.balance;
+  // ── Unrealized P&L (live gamma-api) ────────────────────────────────
+  const op = _liveOpenPosData?.totals || {};
+  const uPnl    = op.unrealized_pnl;
+  const uPct    = op.unrealized_pct;
+  const mtm     = op.mark_to_market_usdc;
+  const openCnt = op.open_count != null ? op.open_count : openTrades.length;
+  const uCls    = uPnl == null ? '' : (uPnl >= 0 ? 'good' : 'bad');
+  const uPnlStr = uPnl == null ? '—' : (uPnl >= 0 ? '+' : '') + _usd(uPnl);
+  const uPctStr = uPct == null ? '' : (uPct >= 0 ? '+' : '') + _fmt(uPct,1) + '%';
+
   const m = document.getElementById('lb-metrics');
   m.innerHTML = `
+    <div class="lb-metric">
+      <div class="lb-metric-lbl">Açık Pozisyon</div>
+      <div class="lb-metric-val">${openCnt}</div>
+      <div class="lb-metric-sub">Risk ${_usd(op.at_risk_usdc != null ? op.at_risk_usdc : openCost)}</div>
+    </div>
+    <div class="lb-metric">
+      <div class="lb-metric-lbl">Unrealized P&L</div>
+      <div class="lb-metric-val ${uCls}" style="font-size:22px">${uPnlStr}</div>
+      <div class="lb-metric-sub ${uCls}">${uPctStr || 'canlı gamma-api'}</div>
+    </div>
+    <div class="lb-metric">
+      <div class="lb-metric-lbl">Mark-to-Market</div>
+      <div class="lb-metric-val">${mtm != null ? _usd(mtm) : '—'}</div>
+      <div class="lb-metric-sub">pozisyonların o anki değeri</div>
+    </div>
     <div class="lb-metric">
       <div class="lb-metric-lbl">USDC Bakiye</div>
       <div class="lb-metric-val ${balance == null ? '' : 'good'}">${balance != null ? _usd(balance) : '—'}</div>
       <div class="lb-metric-sub">Polymarket cüzdanı</div>
-    </div>
-    <div class="lb-metric">
-      <div class="lb-metric-lbl">Açık Pozisyon</div>
-      <div class="lb-metric-val">${openTrades.length}</div>
-      <div class="lb-metric-sub">Risk ${_usd(openCost)} → pot ${_usd(openPotential)}</div>
     </div>
     <div class="lb-metric">
       <div class="lb-metric-lbl">Net P&L (Toplam)</div>
@@ -1718,6 +1692,9 @@ function _renderLbOpen() {
   const trades = (_liveBotData?.trades || [])
     .filter(t => ['pending_fill','filled','sell_pending'].includes(t.status))
     .sort((a,b) => (b.placed_at||'').localeCompare(a.placed_at||''));
+  // id → live position (current_price + unrealized)
+  const liveById = {};
+  (_liveOpenPosData?.positions || []).forEach(p => { if (p.id) liveById[p.id] = p; });
   document.getElementById('lb-open-count').textContent =
     trades.length ? `${trades.length} aktif` : 'yok';
   const body = document.getElementById('lb-open-body');
@@ -1735,6 +1712,24 @@ function _renderLbOpen() {
         const sellInfo = t.sell_order_id
           ? `<span class="ap-badge-ok">→ ${_lbCents(t.sell_price)}</span>`
           : (t.status==='filled' ? '<span class="ap-badge-warn">sell bekleniyor</span>' : '—');
+        // ── live current price + unrealized ─────────────────────────
+        const live = liveById[t.id] || {};
+        const curP = live.current_price;
+        const uPnl = live.unrealized_pnl;
+        const uPct = live.unrealized_pct;
+        let livePnlHtml;
+        if (t.status === 'pending_fill') {
+          livePnlHtml = `<span style="color:var(--text-3)">Fill bekleniyor @ ${_lbCents(t.limit_price)}</span>`;
+        } else if (curP == null || uPnl == null) {
+          livePnlHtml = `<span style="color:var(--text-3)">Canlı fiyat alınamadı</span>`;
+        } else {
+          const cls = uPnl >= 0 ? 'good' : 'bad';
+          const sign = uPnl >= 0 ? '+' : '';
+          const pctStr = uPct != null ? ` (${sign}${_fmt(uPct,2)}%)` : '';
+          livePnlHtml =
+            `<span>${_lbCents(fillP)} → <b class="${cls}">${_lbCents(curP)}</b></span>` +
+            ` <span class="${cls}" style="font-weight:700">${sign}${_usd(uPnl)}${pctStr}</span>`;
+        }
         return `
           <div class="lb-pos ${_lbPosKlass(t)}">
             <div class="lb-pos-head">
@@ -1742,6 +1737,7 @@ function _renderLbOpen() {
               ${_lbStatusBadge(t)}
             </div>
             <div class="lb-pos-bucket">🎯 ${t.top_pick != null ? t.top_pick+'°C' : '—'} <span style="color:var(--text-3);font-weight:400;font-size:11px">— ${_escape(t.bucket_title||'')}</span></div>
+            <div style="margin:6px 0 8px;font-size:12px;line-height:1.5">${livePnlHtml}</div>
             <dl class="lb-pos-rows">
               <dt>Tarih</dt>          <dd>${_lbShortDate(t.date)}</dd>
               <dt>Giriş Fiyatı</dt>   <dd>${_lbCents(fillP)}</dd>
@@ -3604,8 +3600,10 @@ function connectWallet() {
 function disconnectWallet() {
   localStorage.removeItem('pm_wallet');
   portfolioCache = [];
-  document.getElementById('wallet-status').innerHTML = '';
-  document.getElementById('portfolio-box').style.display = 'none';
+  const ws = document.getElementById('wallet-status');
+  if (ws) ws.innerHTML = '';
+  const pb = document.getElementById('portfolio-box');
+  if (pb) pb.style.display = 'none';
 }
 
 function renderWalletStatus(addr) {
@@ -3616,6 +3614,8 @@ function renderWalletStatus(addr) {
 
 async function loadPortfolio(addr) {
   if (!addr) return;
+  // Portfolio kutusu UI'dan kaldırıldı; fetch sadece bucket rozetlerini beslemek
+  // için kalıyor (findPosition → portfolioCache).
   try {
     const d = await fetchJSON(`/api/portfolio?address=${encodeURIComponent(addr)}`, 15000);
     portfolioCache = d.positions || [];
@@ -3623,7 +3623,8 @@ async function loadPortfolio(addr) {
     // Bucket tablolarında pozisyon rozetlerini güncelle
     STATIONS.forEach(id => renderMarkets(id));
   } catch (e) {
-    document.getElementById('portfolio-box').style.display = 'none';
+    const pb = document.getElementById('portfolio-box');
+    if (pb) pb.style.display = 'none';
   }
 }
 
@@ -3647,6 +3648,8 @@ function findPosition(stationId, dateStr, bucketTitle) {
 function renderPortfolio() {
   const box  = document.getElementById('portfolio-box');
   const cont = document.getElementById('portfolio-content');
+  // Panel kaldırıldı → render edilecek yer yoksa erken çık (cache yine dolu tutulur).
+  if (!box || !cont) return;
   if (!portfolioCache.length) { box.style.display = 'none'; return; }
   box.style.display = 'block';
 
@@ -3738,286 +3741,15 @@ function _escape(s) {
   }[c]));
 }
 
-// ── Kalibrasyon ────────────────────────────────────────────────────
-async function loadCalibration() {
-  const body = document.getElementById("ap-calibration-body");
-  body.innerHTML = '<div class="ap-empty">Yükleniyor…</div>';
-  try {
-    const r = await fetchJSON("/api/calibration?days=60");
-    const o = r.overall || {};
-    const n = o.n || 0;
-    if (n === 0) {
-      body.innerHTML = '<div class="ap-empty">Henüz kapalı trade yok. Settle sonrası görünür.</div>';
-      return;
-    }
-    const skill = o.skill;
-    const skillCls = skill > 0.1 ? "good" : skill > 0 ? "" : "bad";
-    const brierCls = (o.brier != null && o.brier < 0.20) ? "good" : "";
-
-    let binsHtml = "";
-    if (o.bins && o.bins.length) {
-      binsHtml = `
-        <div style="font-size:11px;color:var(--text-3);margin:8px 0 4px">Reliability Bins</div>
-        <table class="ap-table">
-          <thead><tr>
-            <th>Aralık</th><th class="num">N</th><th class="num">Tahmin</th>
-            <th class="num">Gerçek</th><th class="num">Gap</th>
-          </tr></thead>
-          <tbody>
-            ${o.bins.map(b => `
-              <tr>
-                <td>${_pct(b.bin_low,0)}–${_pct(b.bin_high,0)}</td>
-                <td class="num">${b.n}</td>
-                <td class="num">${_pct(b.mean_p,1)}</td>
-                <td class="num">${_pct(b.actual_freq,1)}</td>
-                <td class="num" style="color:${b.gap < -0.05 ? 'var(--red)' : b.gap > 0.05 ? 'var(--green)' : 'var(--text-3)'}">${(b.gap>=0?"+":"")}${_pct(b.gap,1)}</td>
-              </tr>
-            `).join("")}
-          </tbody>
-        </table>`;
-    }
-
-    let perStn = "";
-    if (r.per_station && Object.keys(r.per_station).length) {
-      const rows = Object.entries(r.per_station)
-        .sort((a,b) => (b[1].skill||0) - (a[1].skill||0))
-        .map(([s, v]) => `
-          <tr>
-            <td>${s.toUpperCase()}</td>
-            <td class="num">${v.n}</td>
-            <td class="num">${_fmt(v.brier,3)}</td>
-            <td class="num" style="color:${v.skill>0.1?'var(--green)':v.skill>0?'var(--text)':'var(--red)'}">${_fmt(v.skill,3)}</td>
-          </tr>`).join("");
-      perStn = `
-        <div style="font-size:11px;color:var(--text-3);margin:12px 0 4px">İstasyon Bazlı</div>
-        <table class="ap-table">
-          <thead><tr><th>İstasyon</th><th class="num">N</th><th class="num">Brier</th><th class="num">Skill</th></tr></thead>
-          <tbody>${rows}</tbody>
-        </table>`;
-    }
-
-    body.innerHTML = `
-      <div class="ap-metric-row">
-        <div class="ap-metric"><div class="ap-metric-lbl">N (kapalı)</div>
-          <div class="ap-metric-val">${n}</div></div>
-        <div class="ap-metric"><div class="ap-metric-lbl">Brier</div>
-          <div class="ap-metric-val ${brierCls}">${_fmt(o.brier,3)}</div></div>
-        <div class="ap-metric"><div class="ap-metric-lbl">Skill</div>
-          <div class="ap-metric-val ${skillCls}">${_fmt(skill,3)}</div></div>
-        <div class="ap-metric"><div class="ap-metric-lbl">Base Rate</div>
-          <div class="ap-metric-val">${_pct(o.base_rate,0)}</div></div>
-        <div class="ap-metric"><div class="ap-metric-lbl">Sharpness</div>
-          <div class="ap-metric-val">${_fmt(o.sharpness,3)}</div></div>
-      </div>
-      ${binsHtml}
-      ${perStn}
-      <div class="ap-note">
-        <b>Brier</b>: düşük iyi (mükemmel=0). <b>Skill</b>: 1 - Brier/Brier_ref. Pozitif → climatology'den daha iyi tahmin.
-        <b>Gap</b>: gerçek − tahmin (−%5 over-confident, +%5 under-confident).
-      </div>`;
-  } catch (e) {
-    body.innerHTML = `<div class="ap-empty">Hata: ${_escape(e.message)}</div>`;
-  }
+// Analitik panel yükleyicileri (loadCalibration / loadVar / loadAudit /
+// loadLiveTrades) ve toggle hook'ları kaldırıldı — panel HTML bloğu ile
+// birlikte silindi. Live Bot sekmesi bu bilgiyi yerine getiriyor.
+</script>
+<script>
+// PWA — Service Worker kaydı
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('/static/sw.js').catch(()=>{}));
 }
-
-// ── Portföy VaR ────────────────────────────────────────────────────
-async function loadVar() {
-  const body = document.getElementById("ap-var-body");
-  body.innerHTML = '<div class="ap-empty">Monte Carlo simülasyonu çalışıyor…</div>';
-  try {
-    const r = await fetchJSON("/api/portfolio/var");
-    const n = r.n_positions || 0;
-    if (n === 0) {
-      body.innerHTML = '<div class="ap-empty">Açık pozisyon yok.</div>';
-      return;
-    }
-    const var95Cls = r.var_95 < -20 ? "bad" : r.var_95 < -10 ? "warn" : "";
-    const var99Cls = r.var_99 < -30 ? "bad" : r.var_99 < -15 ? "warn" : "";
-    const corrCls  = r.avg_abs_correlation > 0.5 ? "warn" : "";
-
-    body.innerHTML = `
-      <div class="ap-metric-row">
-        <div class="ap-metric"><div class="ap-metric-lbl">Pozisyon</div>
-          <div class="ap-metric-val">${n}</div></div>
-        <div class="ap-metric"><div class="ap-metric-lbl">Gross Cost</div>
-          <div class="ap-metric-val">${_usd(r.gross_exposure)}</div></div>
-        <div class="ap-metric"><div class="ap-metric-lbl">Potansiyel Kâr</div>
-          <div class="ap-metric-val good">${_usd(r.gross_potential_win)}</div></div>
-        <div class="ap-metric"><div class="ap-metric-lbl">E[P&amp;L]</div>
-          <div class="ap-metric-val ${r.expected_pnl >= 0 ? 'good' : 'bad'}">${_usd(r.expected_pnl)}</div></div>
-      </div>
-      <div class="ap-metric-row">
-        <div class="ap-metric"><div class="ap-metric-lbl">VaR 95%</div>
-          <div class="ap-metric-val ${var95Cls}">${_usd(r.var_95)}</div></div>
-        <div class="ap-metric"><div class="ap-metric-lbl">VaR 99%</div>
-          <div class="ap-metric-val ${var99Cls}">${_usd(r.var_99)}</div></div>
-        <div class="ap-metric"><div class="ap-metric-lbl">Worst Case</div>
-          <div class="ap-metric-val bad">${_usd(r.worst)}</div></div>
-        <div class="ap-metric"><div class="ap-metric-lbl">Best Case</div>
-          <div class="ap-metric-val good">${_usd(r.best)}</div></div>
-      </div>
-      <div class="ap-metric-row">
-        <div class="ap-metric"><div class="ap-metric-lbl">Ort. |ρ|</div>
-          <div class="ap-metric-val ${corrCls}">${_fmt(r.avg_abs_correlation,2)}</div></div>
-        <div class="ap-metric"><div class="ap-metric-lbl">Simülasyon</div>
-          <div class="ap-metric-val">${r.n_sims || 0}</div></div>
-        <div class="ap-metric"><div class="ap-metric-lbl">Kaynak</div>
-          <div class="ap-metric-val" style="font-size:11px">${_escape(r.source || "paper")}</div></div>
-      </div>
-      <div class="ap-note">
-        <b>VaR 95%</b>: en kötü %5 senaryoda beklenen toplam P&amp;L. ${r.n_sims || 5000} Monte Carlo simülasyonu, Gaussian copula + Cholesky (shrinkage λ=0.15). Ort. |ρ| &gt; 0.5 → pozisyonlar güçlü korele, çeşitlendirme zayıf.
-      </div>`;
-  } catch (e) {
-    body.innerHTML = `<div class="ap-empty">Hata: ${_escape(e.message)}</div>`;
-  }
-}
-
-// ── Settlement Audit ───────────────────────────────────────────────
-async function loadAudit() {
-  const body = document.getElementById("ap-audit-body");
-  body.innerHTML = '<div class="ap-empty">Yükleniyor…</div>';
-  try {
-    const r = await fetchJSON("/api/settlement-audit?days=30");
-    const entries = r.entries || [];
-    const stats   = r.stats   || {};
-    if (entries.length === 0) {
-      body.innerHTML = '<div class="ap-empty">Henüz audit kaydı yok.</div>';
-      return;
-    }
-
-    const disagreements = entries.filter(e => e.disagreement).length;
-    const disRate = entries.length ? disagreements / entries.length : 0;
-    const rateCls = disRate > 0.15 ? "bad" : disRate > 0.05 ? "warn" : "good";
-
-    // En çok uyumsuzluk gösteren 15 kayıt
-    const recent = entries.slice(0, 15);
-    const rows = recent.map(e => `
-      <tr>
-        <td>${e.date}</td>
-        <td>${e.station.toUpperCase()}</td>
-        <td class="num">${e.sources.open_meteo != null ? _fmt(e.sources.open_meteo,1) : "—"}</td>
-        <td class="num">${e.sources.metar != null ? _fmt(e.sources.metar,1) : "—"}</td>
-        <td class="num">${_fmt(e.max_diff_c,2)}</td>
-        <td class="${e.disagreement ? 'ap-badge-warn' : 'ap-badge-ok'}" style="text-align:center">
-          ${e.disagreement ? "⚠︎ "+e.max_diff_bucket+"°C" : "✓"}
-        </td>
-      </tr>
-    `).join("");
-
-    body.innerHTML = `
-      <div class="ap-metric-row">
-        <div class="ap-metric"><div class="ap-metric-lbl">Audit Kayıt</div>
-          <div class="ap-metric-val">${entries.length}</div></div>
-        <div class="ap-metric"><div class="ap-metric-lbl">Uyumsuz</div>
-          <div class="ap-metric-val ${rateCls}">${disagreements}</div></div>
-        <div class="ap-metric"><div class="ap-metric-lbl">Oran</div>
-          <div class="ap-metric-val ${rateCls}">${_pct(disRate,1)}</div></div>
-      </div>
-      <table class="ap-table">
-        <thead><tr>
-          <th>Tarih</th><th>İst.</th><th class="num">OpenMeteo</th>
-          <th class="num">METAR</th><th class="num">Fark °C</th><th style="text-align:center">Bucket</th>
-        </tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-      <div class="ap-note">
-        Her settlement iki kaynaktan çekilir (Open-Meteo arşivi + METAR). Bucket farkı ≥1°C → uyumsuzluk. Yüksek oran → istasyon problemi (bot settlement'ını manuel gözden geçir).
-      </div>`;
-  } catch (e) {
-    body.innerHTML = `<div class="ap-empty">Hata: ${_escape(e.message)}</div>`;
-  }
-}
-
-// ── Canlı İşlemler ─────────────────────────────────────────────────
-async function loadLiveTrades() {
-  const body = document.getElementById("ap-live-body");
-  body.innerHTML = '<div class="ap-empty">Yükleniyor…</div>';
-  try {
-    const r = await fetchJSON("/api/live-trades");
-    const trades = r.trades || [];
-    const stats  = r.stats  || {};
-
-    const byStatus = {};
-    trades.forEach(t => { byStatus[t.status] = (byStatus[t.status]||0) + 1; });
-
-    // Auto-sell metrikleri
-    const filled     = trades.filter(t => t.status === "filled").length;
-    const sellPending = trades.filter(t => t.status === "sell_pending").length;
-    const withSellOrder = trades.filter(t => t.sell_order_id).length;
-
-    // Son 15 aktif pozisyon (pending_fill, filled, sell_pending)
-    const active = trades
-      .filter(t => ["pending_fill","filled","sell_pending"].includes(t.status))
-      .slice(-15).reverse();
-
-    const rows = active.map(t => {
-      const label = (t.station || "").toUpperCase();
-      const price = t.fill_price || t.limit_price;
-      const sellInfo = t.sell_order_id
-        ? `<span class="ap-badge-ok">→ ${_pct(t.sell_price/1.0,1)}</span>`
-        : (t.status === "filled" ? '<span class="ap-badge-warn">hazır</span>' : "—");
-      return `
-        <tr>
-          <td>${t.date || "—"}</td>
-          <td>${label}</td>
-          <td class="num">${t.top_pick != null ? t.top_pick+"°C" : "—"}</td>
-          <td class="num">${price ? _pct(price,0) : "—"}</td>
-          <td>${_escape(t.status)}</td>
-          <td style="text-align:center">${sellInfo}</td>
-        </tr>`;
-    }).join("");
-
-    body.innerHTML = `
-      <div class="ap-metric-row">
-        <div class="ap-metric"><div class="ap-metric-lbl">Toplam</div>
-          <div class="ap-metric-val">${trades.length}</div></div>
-        <div class="ap-metric"><div class="ap-metric-lbl">Filled</div>
-          <div class="ap-metric-val">${filled}</div></div>
-        <div class="ap-metric"><div class="ap-metric-lbl">Sell Pending</div>
-          <div class="ap-metric-val good">${sellPending}</div></div>
-        <div class="ap-metric"><div class="ap-metric-lbl">Auto-Sell Aktif</div>
-          <div class="ap-metric-val good">${withSellOrder}</div></div>
-      </div>
-      ${stats.win_rate != null ? `
-      <div class="ap-metric-row">
-        <div class="ap-metric"><div class="ap-metric-lbl">Kapanan</div>
-          <div class="ap-metric-val">${stats.closed || 0}</div></div>
-        <div class="ap-metric"><div class="ap-metric-lbl">Win Rate</div>
-          <div class="ap-metric-val ${stats.win_rate >= 50 ? 'good' : 'bad'}">${_fmt(stats.win_rate,1)}%</div></div>
-        <div class="ap-metric"><div class="ap-metric-lbl">Net P&amp;L</div>
-          <div class="ap-metric-val ${stats.total_pnl >= 0 ? 'good' : 'bad'}">${_usd(stats.total_pnl)}</div></div>
-      </div>` : ""}
-      ${rows ? `
-        <div style="font-size:11px;color:var(--text-3);margin:10px 0 4px">Son Aktif Pozisyonlar</div>
-        <table class="ap-table">
-          <thead><tr>
-            <th>Tarih</th><th>İst.</th><th class="num">Pick</th>
-            <th class="num">Fiyat</th><th>Durum</th><th style="text-align:center">Auto-Sell</th>
-          </tr></thead>
-          <tbody>${rows}</tbody>
-        </table>` : '<div class="ap-empty">Aktif pozisyon yok.</div>'}
-      <div class="ap-note">
-        Fill olan pozisyonlara otomatik <b>99.8¢ SELL limit</b> atılır (<code>post_only=True</code>, maker fee %0).
-        Piyasa alırsa anında USDC; yoksa Polymarket resolve'da ~$1.00 redeem.
-      </div>`;
-  } catch (e) {
-    body.innerHTML = `<div class="ap-empty">Hata: ${_escape(e.message)}</div>`;
-  }
-}
-
-// ── Lazy-load hook: panel açıldıkça bir kere yükle ─────────────────
-document.getElementById("ap-calibration").addEventListener("toggle", function(e) {
-  if (this.open && !this._loaded) { this._loaded = true; loadCalibration(); }
-});
-document.getElementById("ap-var").addEventListener("toggle", function(e) {
-  if (this.open && !this._loaded) { this._loaded = true; loadVar(); }
-});
-document.getElementById("ap-audit").addEventListener("toggle", function(e) {
-  if (this.open && !this._loaded) { this._loaded = true; loadAudit(); }
-});
-document.getElementById("ap-live").addEventListener("toggle", function(e) {
-  if (this.open && !this._loaded) { this._loaded = true; loadLiveTrades(); }
-});
 </script>
 </body>
 </html>

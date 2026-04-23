@@ -1189,6 +1189,174 @@ async def get_live_trades():
         }
     }
 
+OPEN_LIVE_STATUSES = ("pending_fill", "filled", "sell_pending")
+
+async def _fetch_event_markets(city: str, date: str) -> list:
+    """Tek bir (city, date) için gamma-api events çağrısı.
+    Başarısızlıkta [] döner (exception swallow edilir)."""
+    slug = pm_slug(city, date)
+    url  = f"https://gamma-api.polymarket.com/events?slug={slug}"
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(url, headers={"User-Agent": "Mozilla/5.0"})
+        if not r.is_success:
+            return []
+        events = r.json()
+        if not isinstance(events, list) or not events:
+            return []
+        return events[0].get("markets", []) or []
+    except Exception:
+        return []
+
+@app.get("/api/live-open-positions")
+async def get_live_open_positions():
+    """Açık pozisyonların (pending_fill / filled / sell_pending) gamma-api'den
+    YES fiyatını çekerek unrealized P&L'ini hesaplar.
+
+    Unrealized P&L = (yes_price - fill_price) * shares  (sadece fill_price doluysa)
+    Pending için unrealized=0 (fill olmamış)."""
+    trades = _load_live_trades()
+    open_trades = [t for t in trades if t.get("status") in OPEN_LIVE_STATUSES]
+
+    # Unique (station, date) çiftleri — her biri için TEK fetch
+    unique_pairs: dict = {}    # key: (station, date) → city
+    for t in open_trades:
+        station = (t.get("station") or "").lower()
+        date    = t.get("date")
+        if not station or not date or station not in STATIONS:
+            continue
+        key = (station, date)
+        if key not in unique_pairs:
+            unique_pairs[key] = STATIONS[station]["pm_query"].lower()
+
+    # Paralel fetch — her station-date çifti için bağımsız try/except (fn içinde)
+    pair_items = list(unique_pairs.items())
+    fetched    = await asyncio.gather(
+        *[_fetch_event_markets(city, date) for ((_st, date), city) in pair_items],
+        return_exceptions=False
+    )
+    markets_by_pair: dict = {}   # (station, date) → markets[]
+    for (key, _city), markets in zip(pair_items, fetched):
+        markets_by_pair[key] = markets
+
+    # condition_id → yes_price lookup (her market'te YES token id = clobTokenIds[0] veya conditionId)
+    def _yes_price_for(markets: list, cid: str) -> Optional[float]:
+        if not cid:
+            return None
+        cid = str(cid)
+        for m in markets:
+            # YES token id (clobTokenIds[0]) trader.py'nin kaydettiği condition_id'sidir
+            clob_raw = m.get("clobTokenIds", "[]")
+            if isinstance(clob_raw, str):
+                try: clob_tokens = json.loads(clob_raw)
+                except Exception: clob_tokens = []
+            else:
+                clob_tokens = clob_raw if isinstance(clob_raw, list) else []
+            yes_tok = clob_tokens[0] if clob_tokens else None
+            # Match: YES token ya da ham conditionId
+            if yes_tok and str(yes_tok) == cid:
+                pass
+            elif str(m.get("conditionId") or "") == cid:
+                pass
+            else:
+                continue
+            prices = m.get("outcomePrices", "[]")
+            if isinstance(prices, str):
+                try: prices = json.loads(prices)
+                except Exception: prices = []
+            if prices and len(prices) >= 1:
+                try:
+                    return round(float(prices[0]), 4)
+                except Exception:
+                    return None
+            return None
+        return None
+
+    positions = []
+    total_at_risk     = 0.0
+    total_mtm         = 0.0
+    total_unrealized  = 0.0
+    has_any_unrealized = False
+
+    for t in open_trades:
+        station = (t.get("station") or "").lower()
+        date    = t.get("date")
+        cid     = t.get("condition_id")
+        fill_p  = t.get("fill_price")
+        shares  = float(t.get("shares") or 0)
+        cost    = float(t.get("cost_usdc") or 0)
+        status  = t.get("status")
+
+        markets = markets_by_pair.get((station, date), [])
+        yes_price = _yes_price_for(markets, cid)
+
+        at_risk = cost
+        if fill_p is not None and yes_price is not None:
+            mtm = round(yes_price * shares, 4)
+            unrealized = round((yes_price - float(fill_p)) * shares, 4)
+            unrealized_pct = round((unrealized / cost) * 100, 2) if cost else None
+            has_any_unrealized = True
+            total_mtm        += mtm
+            total_unrealized += unrealized
+        elif fill_p is None:
+            # Pending — henüz fill olmadı, cost = risk, mtm = cost (flat)
+            mtm = cost
+            unrealized = 0.0
+            unrealized_pct = 0.0
+            total_mtm += mtm
+        else:
+            # Fill var ama fiyat alınamadı
+            mtm = None
+            unrealized = None
+            unrealized_pct = None
+
+        total_at_risk += at_risk
+
+        # market_url: event slug üzerinden (station bilinmiyorsa skip)
+        market_url = None
+        if station in STATIONS:
+            city = STATIONS[station]["pm_query"].lower()
+            market_url = f"https://polymarket.com/event/{pm_slug(city, date)}"
+
+        positions.append({
+            "id":             t.get("id"),
+            "station":        station,
+            "date":           date,
+            "top_pick":       t.get("top_pick"),
+            "bucket_title":   t.get("bucket_title"),
+            "fill_price":     fill_p,
+            "limit_price":    t.get("limit_price"),
+            "shares":         shares,
+            "cost_usdc":      cost,
+            "status":         status,
+            "current_price":  yes_price,
+            "unrealized_pnl": unrealized,
+            "unrealized_pct": unrealized_pct,
+            "mark_to_market": mtm,
+            "market_url":     market_url,
+            "sell_price":     t.get("sell_price"),
+            "sell_order_id":  t.get("sell_order_id"),
+            "placed_at":      t.get("placed_at"),
+            "fill_time":      t.get("fill_time"),
+        })
+
+    unrealized_pct_total = (
+        round((total_unrealized / total_at_risk) * 100, 2)
+        if (has_any_unrealized and total_at_risk > 0) else None
+    )
+
+    return {
+        "positions": positions,
+        "totals": {
+            "open_count":          len(positions),
+            "at_risk_usdc":        round(total_at_risk, 2),
+            "mark_to_market_usdc": round(total_mtm, 2),
+            "unrealized_pnl":      round(total_unrealized, 2) if has_any_unrealized else None,
+            "unrealized_pct":      unrealized_pct_total,
+        },
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+    }
+
 @app.get("/api/live-balance")
 async def get_live_balance():
     """USDC bakiyesini döndür (trader.py balance)."""
