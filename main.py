@@ -37,9 +37,9 @@ def require_token(x_api_token: str = Header(default="")):
 _weather_cache: dict = {}   # {station: {"ts": float, "data": dict}}
 CACHE_TTL = 600             # saniye (10 dakika)
 
-# Open-Meteo eşzamanlı istek sınırı: 6 istasyon × 5 model = 30 req → HTTP 429.
-# Semaphore ile aynı anda max 6 istek → rate limit aşılmaz.
-_openmeteo_sem = asyncio.Semaphore(6)
+# Open-Meteo eşzamanlı istek sınırı: 12 istasyon × 6 model = 72 req → HTTP 429.
+# Semaphore ile aynı anda max 5 istek → rate limit aşılmaz (AIFS eklendi).
+_openmeteo_sem = asyncio.Semaphore(5)
 
 STATIONS = {
     "eglc": {"lat": 51.505, "lon": 0.055,  "tz": "Europe/London",      "label": "EGLC (Londra City)",        "pm_query": "London"},
@@ -57,24 +57,34 @@ STATIONS = {
 }
 
 # Her model için Open-Meteo model adı
+# NOT: AIFS ID'leri dokümanda yanlış bildirilmiş.
+#   Forecast API  : "ecmwf_aifs025_single"  (tek-üye deterministik koşum)
+#   Ensemble API  : "ecmwf_aifs025"          (51 üyeli dağılım)
+# Yalın "ecmwf_aifs025" forecast API'de 200 döner ama tüm değerler None —
+# doğru ID 'ecmwf_aifs025_single' (2026-04 itibarıyla live).
 MODELS = {
     "gfs":         "gfs_seamless",
     "ecmwf":       "ecmwf_ifs025",
     "icon":        "icon_seamless",
     "ukmo":        "ukmo_seamless",
     "meteofrance": "meteofrance_seamless",
+    "aifs":        "ecmwf_aifs025_single",    # ECMWF AIFS (AI tabanlı) — 6. model
 }
 
 # Model ağırlıkları — 60 günlük backtest MAE⁻¹ normalize (D+1, 6 istasyon)
 # Önceki: ECMWF=2.0, ICON=1.0, UKMO=0.9 (varsayım bazlı)
 # Backtest sonucu: ICON D+1 MAE=1.08 (en iyi), UKMO=1.80 (en kötü), ECMWF=1.20
 # UKMO LTFM'de özellikle kötü: 3.22°C MAE — ağırlığı yarıya indirildi
+# AIFS (2025+): 2025 benchmark'larında IFS'yi geçti; başlangıçta ecmwf'e yakın
+# ağırlık (1.6). Faz 4 dinamik ağırlık yeterli veri biriktirince otomatik
+# güncellenecek (istasyon × horizon × rolling 30-gün RMSE).
 MODEL_WEIGHTS = {
     "ecmwf":       1.5,
     "icon":        1.8,
     "gfs":         1.0,
     "ukmo":        0.5,
     "meteofrance": 0.9,
+    "aifs":        1.6,
 }
 
 # Horizon bazlı belirsizlik eşikleri (ağırlıklı std için)
@@ -520,9 +530,12 @@ async def get_ensemble(station: str):
     # Desteklenen ensemble modelleri (model_adı: open-meteo-id)
     # ICON ENS:  40 üye — bölgesel yüksek çözünürlük
     # ECMWF IFS: 50 üye — endüstri standardı, küresel
+    # ECMWF AIFS: 50 üye — AI tabanlı ECMWF (2025 benchmark IFS'yi geçti)
+    # Not: ensemble API'de AIFS ID'si "ecmwf_aifs025" (alt çizgi YOK — dokümanda yanlış yazılmış).
     ENSEMBLE_MODELS = {
         "icon":  "icon_seamless",
         "ecmwf": "ecmwf_ifs025",
+        "aifs":  "ecmwf_aifs025",
     }
 
     base_url = (

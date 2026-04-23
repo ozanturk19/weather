@@ -2974,6 +2974,99 @@ test("main.py: /api/calibration endpoint",
 
 # ══════════════════════════════════════════════════════════════════════════════
 print(f"\n{'═'*62}")
+print(" TEST 32: ECMWF AIFS entegrasyonu (6. model)")
+print(f"{'═'*62}")
+
+
+def test_aifs_in_models_dict():
+    """main.MODELS'te aifs kaydı doğru ID ile var."""
+    m = _import_main_module()
+    ok("aifs" in m.MODELS, f"aifs yok: {list(m.MODELS.keys())}")
+    ok(m.MODELS["aifs"] == "ecmwf_aifs025_single",
+       f"yanlış forecast ID: {m.MODELS['aifs']}")
+
+test("main.MODELS: 'aifs' → 'ecmwf_aifs025_single'",
+     test_aifs_in_models_dict)
+
+
+def test_aifs_in_weights():
+    """MODEL_WEIGHTS'te aifs ağırlığı makul aralıkta."""
+    m = _import_main_module()
+    ok("aifs" in m.MODEL_WEIGHTS, f"aifs ağırlığı yok")
+    w = m.MODEL_WEIGHTS["aifs"]
+    ok(1.0 <= w <= 2.0, f"aifs ağırlığı 1.0-2.0 beklenir: {w}")
+
+test("MODEL_WEIGHTS: aifs ağırlık makul",
+     test_aifs_in_weights)
+
+
+def test_aifs_blend_uses_it():
+    """blend_day() aifs anahtarı geldiğinde blend'e dahil oluyor."""
+    m = _import_main_module()
+    # Gerçekçi dağılım — outlier filtresi tetiklenmesin
+    base = {
+        "gfs":         {"max_temp": 14.0, "hours": []},
+        "ecmwf":       {"max_temp": 14.5, "hours": []},
+        "icon":        {"max_temp": 13.8, "hours": []},
+        "ukmo":        {"max_temp": 14.2, "hours": []},
+        "meteofrance": {"max_temp": 14.4, "hours": []},
+    }
+    with_aifs = dict(base)
+    with_aifs["aifs"] = {"max_temp": 15.5, "hours": []}
+
+    r_wo   = m.blend_day(base,      horizon=1)
+    r_with = m.blend_day(with_aifs, horizon=1)
+
+    ok("aifs" in r_with["models_used"],
+       f"aifs models_used içinde beklenir: {r_with['models_used']}")
+    # AIFS daha sıcak → blend yükselmeli
+    ok(r_with["max_temp"] > r_wo["max_temp"],
+       f"aifs ile blend yükselmeli: {r_wo['max_temp']} → {r_with['max_temp']}")
+
+test("blend_day: aifs modeli blend'e dahil oluyor",
+     test_aifs_blend_uses_it)
+
+
+def test_aifs_ensemble_id_correct():
+    """get_ensemble() içindeki AIFS ensemble ID doğru."""
+    main_path = Path(__file__).resolve().parent.parent / "main.py"
+    src = main_path.read_text(encoding="utf-8")
+    # Ensemble bloğunda "ecmwf_aifs025" olmalı (alt çizgisiz) — doküman yanlış bildiriyor
+    start = src.find("ENSEMBLE_MODELS = {")
+    end   = src.find("}", start)
+    block = src[start:end]
+    ok('"aifs"' in block and '"ecmwf_aifs025"' in block,
+       f"Ensemble AIFS ID eksik/yanlış: {block}")
+    ok('"ecmwf_aifs_025"' not in block,
+       "Yanlış AIFS ID (alt çizgi var) kullanılmış")
+
+test("get_ensemble: AIFS doğru ID ile kayıtlı",
+     test_aifs_ensemble_id_correct)
+
+
+def test_aifs_semaphore_adjusted():
+    """Semaphore 6→5'e düşürüldü (6 model × 12 istasyon artışı)."""
+    m = _import_main_module()
+    # _openmeteo_sem._value 5 olmalı
+    ok(m._openmeteo_sem._value == 5,
+       f"semaphore 5 beklenir: {m._openmeteo_sem._value}")
+
+test("Semaphore: 6 model için 5'e ayarlı",
+     test_aifs_semaphore_adjusted)
+
+
+def test_aifs_static_weights_mirror():
+    """bot/dynamic_weights.py STATIC_WEIGHTS da aifs ağırlığını yansıtıyor."""
+    dw = _import_dynamic_weights()
+    ok("aifs" in dw.STATIC_WEIGHTS,
+       f"STATIC_WEIGHTS'te aifs yok: {dw.STATIC_WEIGHTS}")
+
+test("dynamic_weights.STATIC_WEIGHTS: aifs senkron",
+     test_aifs_static_weights_mirror)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+print(f"\n{'═'*62}")
 print(f"  SONUÇ: {PASS} geçti / {FAIL} başarısız / {PASS+FAIL} toplam")
 if FAIL == 0:
     print("  🎉 Tüm testler geçti!")

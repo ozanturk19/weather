@@ -32,6 +32,7 @@ STATIC_WEIGHTS = {
     "gfs":         1.0,
     "ukmo":        0.5,
     "meteofrance": 0.9,
+    "aifs":        1.6,     # ECMWF AIFS (AI tabanlı) — 2025 itibarıyla aktif
 }
 
 
