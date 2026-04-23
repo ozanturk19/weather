@@ -3323,6 +3323,200 @@ test("cmd_auto_sell_filled: filtreleme + güncelleme",
 
 # ══════════════════════════════════════════════════════════════════════════════
 print(f"\n{'═'*62}")
+print(" TEST 34: Faz 5 — Kalibrasyon-odaklı scanner filtreleri")
+print(f"{'═'*62}")
+
+
+def _import_scanner_module():
+    """scanner.py'yi direkt import et (stub gerekmez — httpx modül düzeyinde kullanılmaz)."""
+    import importlib
+    mod = importlib.import_module("bot.scanner")
+    return mod
+
+
+def test_phase5_constants_present():
+    """Yeni filtre sabitleri doğru değerlerle yerinde."""
+    s = _import_scanner_module()
+    eq(s.MID_RANGE_SKIP_LOW, 50,
+       f"MID_RANGE_SKIP_LOW=50 beklenir: {s.MID_RANGE_SKIP_LOW}")
+    eq(s.MID_RANGE_SKIP_HIGH, 80,
+       f"MID_RANGE_SKIP_HIGH=80 beklenir: {s.MID_RANGE_SKIP_HIGH}")
+    eq(s.MIN_SIGNAL_SCORE, 55,
+       f"MIN_SIGNAL_SCORE=55 beklenir: {s.MIN_SIGNAL_SCORE}")
+    ok(isinstance(s.STATION_SKILL_PAUSE, set),
+       "STATION_SKILL_PAUSE set olmalı")
+    ok({"lfpg", "ltac", "limc"}.issubset(s.STATION_SKILL_PAUSE),
+       f"Skill pause en az bu 3 istasyonu içermeli: {s.STATION_SKILL_PAUSE}")
+    # Tek karlı istasyon (efhk) pause'de OLMAMALI
+    ok("efhk" not in s.STATION_SKILL_PAUSE,
+       "efhk (tek karlı, skill=+0.28) pause'de olmamalı")
+
+test("Faz 5 sabitleri yerinde (MID_RANGE, SKILL_PAUSE, MIN_SIGNAL_SCORE)",
+     test_phase5_constants_present)
+
+
+def test_should_pause_station():
+    """Skill pause'deki istasyon True, dışarıdaki False."""
+    s = _import_scanner_module()
+    eq(s.should_pause_station("lfpg"), True,  "lfpg pause olmalı")
+    eq(s.should_pause_station("ltac"), True,  "ltac pause olmalı")
+    eq(s.should_pause_station("limc"), True,  "limc pause olmalı")
+    eq(s.should_pause_station("efhk"), False, "efhk (karlı) pause olmamalı")
+    eq(s.should_pause_station("ltfm"), False, "ltfm (nötr) pause olmamalı")
+    eq(s.should_pause_station("unknown"), False, "bilinmeyen istasyon False")
+
+test("should_pause_station: set üyeliği",
+     test_should_pause_station)
+
+
+def test_is_mid_range_mode_band():
+    """mode_pct ∈ [50,80) → True; dışı → False."""
+    s = _import_scanner_module()
+    # Mid-range (broken zone)
+    eq(s.is_mid_range_mode(50), True,  "50 sınırı dahil")
+    eq(s.is_mid_range_mode(55), True,  "55 mid-range")
+    eq(s.is_mid_range_mode(65), True,  "65 mid-range")
+    eq(s.is_mid_range_mode(79), True,  "79 hâlâ mid-range")
+    # Alt sınırın hemen altı (kalibre zone)
+    eq(s.is_mid_range_mode(49), False, "49 mid-range dışı (kalibre band)")
+    eq(s.is_mid_range_mode(45), False, "45 mid-range dışı")
+    eq(s.is_mid_range_mode(30), False, "30 mid-range dışı")
+    # Üst sınır exclusive
+    eq(s.is_mid_range_mode(80), False, "80 mid-range dışı (üst sınır exclusive)")
+    eq(s.is_mid_range_mode(85), False, "85 mid-range dışı")
+    # None → False (neutral)
+    eq(s.is_mid_range_mode(None), False, "None nötr (False)")
+
+test("is_mid_range_mode: [50,80) bandı",
+     test_is_mid_range_mode_band)
+
+
+def test_is_weak_signal_threshold():
+    """signal_score < 55 → True, ≥ 55 → False, None → False."""
+    s = _import_scanner_module()
+    eq(s.is_weak_signal(0),    True,  "0 zayıf")
+    eq(s.is_weak_signal(40),   True,  "40 zayıf")
+    eq(s.is_weak_signal(54),   True,  "54 zayıf (sınırın altı)")
+    eq(s.is_weak_signal(55),   False, "55 sınır — orta (geçer)")
+    eq(s.is_weak_signal(70),   False, "70 güçlü")
+    eq(s.is_weak_signal(100),  False, "100 mükemmel")
+    eq(s.is_weak_signal(None), False, "None nötr (geçir)")
+
+test("is_weak_signal: 55 eşiği",
+     test_is_weak_signal_threshold)
+
+
+def test_scan_date_station_pause_early_return():
+    """Pause'deki istasyon için scan_date early-return — ağ çağrısı yapılmaz."""
+    s = _import_scanner_module()
+    # httpx.get patch'le — hiç çağrılmamalı çünkü early return
+    with patch("bot.scanner.httpx.get") as mock_get:
+        result = s.scan_date("lfpg", "2026-05-01", trades=[])
+    eq(result, None, "pause'de istasyon → None")
+    eq(mock_get.called, False,
+       "pause'de istasyon için httpx hiç çağrılmamalı (erken çık)")
+
+test("scan_date: pause istasyon için ağ çağrısı yapmaz",
+     test_scan_date_station_pause_early_return)
+
+
+def test_scan_date_non_pause_station_proceeds():
+    """Pause olmayan istasyon için akış devam eder (ilk httpx çağrısı yapılır)."""
+    s = _import_scanner_module()
+    # İlk httpx.get'e (weather API) hata fırlat — downstream'de patlamasın
+    with patch("bot.scanner.httpx.get",
+               side_effect=Exception("weather api down")) as mock_get:
+        result = s.scan_date("efhk", "2026-05-01", trades=[])
+    eq(result, None, "API hatası → None")
+    ok(mock_get.called, "pause olmayan istasyon için httpx çağrılmalı")
+
+test("scan_date: pause olmayan istasyon akışa girer",
+     test_scan_date_non_pause_station_proceeds)
+
+
+def test_scanner_source_has_mid_range_gate():
+    """Kaynak kodda mid-range gate scan_date içinde, MIN_MODE_PCT check'inden sonra."""
+    scanner_path = Path(__file__).resolve().parent.parent / "bot" / "scanner.py"
+    src = scanner_path.read_text(encoding="utf-8")
+    # Gerçek check ifadeleri (tanımlar değil, çağrılar)
+    idx_min_mode   = src.find("< MIN_MODE_PCT")
+    idx_mid_range  = src.find("if is_mid_range_mode(mode_pct):")
+    ok(idx_min_mode > 0, "mode_pct < MIN_MODE_PCT gate bulunamadı")
+    ok(idx_mid_range > 0, "if is_mid_range_mode gate bulunamadı")
+    ok(idx_mid_range > idx_min_mode,
+       f"mid-range gate MIN_MODE_PCT check'inden sonra olmalı "
+       f"(min_mode@{idx_min_mode}, mid@{idx_mid_range})")
+
+test("scanner.py: mid-range gate doğru sırada",
+     test_scanner_source_has_mid_range_gate)
+
+
+def test_scanner_source_has_signal_score_gate():
+    """Signal score gate signal hesaplandıktan sonra, trade dict'ten önce."""
+    scanner_path = Path(__file__).resolve().parent.parent / "bot" / "scanner.py"
+    src = scanner_path.read_text(encoding="utf-8")
+    idx_compute = src.find('signal_score = sig["score"]')
+    idx_gate    = src.find("if is_weak_signal(signal_score):")
+    idx_trade   = src.find("trade = {")
+    ok(idx_compute > 0, "signal_score hesabı bulunamadı")
+    ok(idx_gate > 0,    "if is_weak_signal gate bulunamadı")
+    ok(idx_trade > 0,   "trade dict bulunamadı")
+    ok(idx_compute < idx_gate < idx_trade,
+       f"sıra: compute@{idx_compute} → gate@{idx_gate} → trade@{idx_trade}")
+
+test("scanner.py: signal_score gate doğru sırada",
+     test_scanner_source_has_signal_score_gate)
+
+
+def test_scanner_second_bucket_has_mid_range_skip():
+    """2-bucket logic: second_pct mid-range ise eklenmemeli."""
+    scanner_path = Path(__file__).resolve().parent.parent / "bot" / "scanner.py"
+    src = scanner_path.read_text(encoding="utf-8")
+    # second_pct >= MIN_MODE_PCT if'inden hemen sonra is_mid_range_mode(second_pct)
+    ok("is_mid_range_mode(second_pct)" in src,
+       "2-bucket için mid-range skip yok")
+    # 2.BUCKET zayıf sinyal log'u da var mı?
+    ok("2.BUCKET" in src and "sinyal skoru" in src,
+       "2-bucket için signal_score gate log'u eksik")
+
+test("scanner.py: 2-bucket mid-range + signal gate var",
+     test_scanner_second_bucket_has_mid_range_skip)
+
+
+def test_phase5_retrospective_impact():
+    """131 canlı trade üzerinde yeni filtrelerin etkisini hesapla (sanity).
+
+    Canlı /api/calibration verisine göre mode_pct dağılımı:
+      0.3-0.5: 69 trade (kalibre)
+      0.5-0.8: 54 trade (mid-range skip)
+      Station pause (lfpg/ltac/limc): ~39 trade
+    Yeni filtrelerin geçirmesi beklenen: ~40-60 trade (kalan set).
+    """
+    s = _import_scanner_module()
+    # Canlı bin dağılımı (sayı yaklaşık)
+    fake_trades = []
+    # 30-50 kalibre band (kalır) — 69 trade, çeşitli istasyonlarda
+    for i in range(69):
+        fake_trades.append({"mode_pct": 40 + (i % 10), "station": "ltfm"})
+    # 50-80 mid-range (skip olur)
+    for i in range(54):
+        fake_trades.append({"mode_pct": 50 + (i % 30), "station": "eham"})
+
+    kept = [
+        t for t in fake_trades
+        if not s.is_mid_range_mode(t["mode_pct"])
+        and not s.should_pause_station(t["station"])
+    ]
+    skipped = [t for t in fake_trades if s.is_mid_range_mode(t["mode_pct"])]
+    ok(len(kept) == 69, f"kalibre bandının tamamı kalmalı: {len(kept)}")
+    ok(len(skipped) == 54, f"mid-range tamamı skip olmalı: {len(skipped)}")
+
+test("Faz 5 retrospektif: mid-range skip sayılır",
+     test_phase5_retrospective_impact)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+print(f"\n{'═'*62}")
 print(f"  SONUÇ: {PASS} geçti / {FAIL} başarısız / {PASS+FAIL} toplam")
 if FAIL == 0:
     print("  🎉 Tüm testler geçti!")

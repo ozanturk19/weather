@@ -9,6 +9,7 @@ Kullanım:
   python scanner.py report    # Tüm geçmişi göster
   python scanner.py status    # Açık pozisyonlar
 """
+from __future__ import annotations
 
 import httpx
 import json
@@ -82,6 +83,44 @@ STATION_MAX_PRICE: dict[str, float] = {
     "lfpg": 0.18,   # Paris: %10 win rate, settlement kaynak uyumsuzluğu (+1.9°C artık hata)
                     # 18¢ altında EV hâlâ pozitif olabilir, üstü riskli
 }
+
+# ── Faz 5: Kalibrasyon-odaklı filtreler (2026-04 tanısı) ──────────────────
+# 90 günlük veride (n=131) genel skill = -0.36 (climatology'den kötü).
+# Tanı: mode_pct ∈ [50,70) bandı 51/131 trade'i oluşturuyor ama gerçek win
+# oranı %20 (beklenen ~%58). Düşük-güven bandı [30,50) kalibre.
+# Kaynaklar: /api/calibration (per_station + bins); signal_score ("zayıf").
+
+# Mid-range over-confidence: bu bantta ensemble olasılıkları sistematik
+# olarak şişiyor. Kalibrasyon (Platt/isotonic) eklenene kadar skip.
+MID_RANGE_SKIP_LOW  = 50   # mode_pct bu %'den itibaren skip
+MID_RANGE_SKIP_HIGH = 80   # bu %'ye kadar skip (80+ çok az örnek, belirsiz)
+
+# İstasyon-bazlı skill pause (90g skill < -0.7, n ≥ 10)
+# lfpg (-1.96), ltac (-1.71), limc (-0.70). efhk (+0.28) tek karlı istasyon.
+STATION_SKILL_PAUSE = {"lfpg", "ltac", "limc"}
+
+# Sinyal skoru alt sınırı — "orta" derecenin alt kenarı (signal_score.py)
+# "Zayıf" sinyalleri (<50) gate'te düşür.
+MIN_SIGNAL_SCORE = 55
+
+
+def should_pause_station(station: str) -> bool:
+    """İstasyon-bazlı skill pause aktif mi? (negatif skill korunağı)"""
+    return station in STATION_SKILL_PAUSE
+
+
+def is_mid_range_mode(mode_pct) -> bool:
+    """mode_pct kalibrasyonu kırık mid-range bandında mı?"""
+    if mode_pct is None:
+        return False
+    return MID_RANGE_SKIP_LOW <= mode_pct < MID_RANGE_SKIP_HIGH
+
+
+def is_weak_signal(signal_score) -> bool:
+    """Signal skoru "zayıf" derecesine mi düşüyor? None ise False (neutral)."""
+    if signal_score is None:
+        return False
+    return signal_score < MIN_SIGNAL_SCORE
 
 # ── Trade Depolama ──────────────────────────────────────────────────────────
 def load_trades() -> list:
@@ -240,6 +279,14 @@ def scan_date(station: str, target_date: str, trades: list,
     """
     label = STATION_LABELS.get(station, station.upper())
 
+    # ── Faz 5: istasyon-bazlı skill pause (ağ çağrısından önce erken çık) ──
+    if should_pause_station(station):
+        print(
+            f"  ⛔ {station.upper()} {label}  — istasyon skill pause aktif "
+            f"(90g skill < -0.7), pas"
+        )
+        return None
+
     try:
         # 1. Hava tahmini çek
         r = httpx.get(f"{WEATHER_API}/api/weather?station={station}", timeout=30)
@@ -301,6 +348,17 @@ def scan_date(station: str, target_date: str, trades: list,
             print(
                 f"  ⛔ {station.upper()} {label}  🎯{top_pick}°C"
                 f" — konsensüs zayıf (%{mode_pct} < %{MIN_MODE_PCT}), pas"
+            )
+            return None
+
+        # ── Faz 5: mid-range over-confidence skip ───────────────────────────
+        # [50,70) bandı canlı veride gap ≈ -0.39 (beklenen %58, gerçek %20).
+        # Kalibrasyon eklenene dek bu bandı komple atla.
+        if is_mid_range_mode(mode_pct):
+            print(
+                f"  ⛔ {station.upper()} {label}  🎯{top_pick}°C"
+                f" — mid-range (%{mode_pct} ∈ [{MID_RANGE_SKIP_LOW},"
+                f"{MID_RANGE_SKIP_HIGH})) kalibrasyon kırık, pas"
             )
             return None
 
@@ -466,6 +524,15 @@ def scan_date(station: str, target_date: str, trades: list,
         signal_score = None
         signal_grade = None
 
+    # ── Faz 5: sinyal skoru gate'i (zayıf sinyalleri blokla) ────────────────
+    # signal_score None ise (hesap başarısız) geçir — eksik veri cezalandırma.
+    if is_weak_signal(signal_score):
+        print(
+            f"  ⛔ {station.upper()} {label}  🎯{top_pick}°C @ {pct}¢"
+            f" — sinyal skoru {signal_score} < {MIN_SIGNAL_SCORE} (zayıf), pas"
+        )
+        return None
+
     # 2. pick bilgisi: ensemble'ın 2. adayı neydi?
     second_tag = ""
     if second_pick is not None and second_pct is not None:
@@ -526,6 +593,7 @@ def scan_date(station: str, target_date: str, trades: list,
         and second_pct is not None
         and abs(second_pick - top_pick) == 1
         and second_pct >= MIN_MODE_PCT
+        and not is_mid_range_mode(second_pct)   # Faz 5: mid-range skip
     ):
         second_bucket = find_top_pick_bucket(buckets, second_pick)
         if second_bucket:
@@ -543,6 +611,19 @@ def scan_date(station: str, target_date: str, trades: list,
                 and MIN_PRICE <= s_price < station_max
                 and s_edge >= MIN_EDGE
             ):
+                # ── Faz 5: 2.bucket için signal_score gate (ana ile sim.) ──
+                s_sig_info = _score_for_second_bucket(
+                    second_pct, mode_ci_low, mode_ci_high,
+                    s_edge, unc, is_bimodal,
+                    len(members) if members else 0,
+                )
+                if is_weak_signal(s_sig_info.get("signal_score")):
+                    print(
+                        f"  ⛔ 2.BUCKET  {station.upper()} {label}  "
+                        f"🎯{second_pick}°C — sinyal skoru "
+                        f"{s_sig_info.get('signal_score')} < {MIN_SIGNAL_SCORE}, atlandı"
+                    )
+                    return result_trades
                 s_cond_raw = second_bucket.get("condition_id", "")
                 if isinstance(s_cond_raw, str) and s_cond_raw.startswith("0x"):
                     s_cond = str(int(s_cond_raw, 16))
@@ -568,12 +649,8 @@ def scan_date(station: str, target_date: str, trades: list,
                     "ens_peak_sep":     peak_sep,
                     "ens_mode_ci_low":  mode_ci_low,
                     "ens_mode_ci_high": mode_ci_high,
-                    # Faz 3: ikinci bucket için ayrı sinyal skoru
-                    **_score_for_second_bucket(
-                        second_pct, mode_ci_low, mode_ci_high,
-                        s_edge, unc, is_bimodal,
-                        len(members) if members else 0,
-                    ),
+                    # Faz 3: ikinci bucket için ayrı sinyal skoru (önceden hesap)
+                    **s_sig_info,
                     "bucket_title":  second_bucket["title"],
                     "condition_id":  s_cond,
                     "entry_price":   s_price,
