@@ -555,6 +555,170 @@ body { transition:background .25s, color .2s; }
 .modal-box, .positions-box, .portfolio-box {
   transition:background .25s, border-color .25s, box-shadow .2s, transform .15s;
 }
+
+/* ═══════════════════════════════════════════════════════════
+   ANALİTİK PANEL — kalibrasyon, VaR, settlement, live trades
+   Tüm detaylar var, default collapsed (sadeleştirme).
+   ═══════════════════════════════════════════════════════════ */
+.analytics-wrap {
+  max-width: 1320px;
+  margin: 28px auto 40px;
+  padding: 0 16px;
+}
+.analytics-title {
+  font-family: 'Syne', sans-serif;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: .02em;
+  color: var(--text);
+  margin: 0 0 12px 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.analytics-title::before {
+  content: "";
+  width: 4px; height: 16px;
+  background: var(--accent);
+  border-radius: 2px;
+  display: inline-block;
+}
+.analytics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+  gap: 12px;
+}
+.ap-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0;
+  overflow: hidden;
+}
+.ap-card > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 14px 18px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  user-select: none;
+  background: var(--bg-subtle);
+  transition: background .15s;
+}
+.ap-card > summary:hover { background: var(--accent-dim); }
+.ap-card > summary::-webkit-details-marker { display: none; }
+.ap-card > summary::after {
+  content: "▸";
+  font-size: 10px;
+  color: var(--text-3);
+  transition: transform .2s;
+}
+.ap-card[open] > summary::after { transform: rotate(90deg); }
+.ap-body { padding: 14px 18px 18px; }
+.ap-metric-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(88px, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.ap-metric {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+.ap-metric-lbl {
+  font-size: 10px;
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  margin-bottom: 4px;
+}
+.ap-metric-val {
+  font-family: var(--mono);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+.ap-metric-val.good { color: var(--green); }
+.ap-metric-val.bad  { color: var(--red); }
+.ap-metric-val.warn { color: var(--amber); }
+.ap-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  font-family: var(--mono);
+}
+.ap-table th, .ap-table td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.ap-table th {
+  color: var(--text-3);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  font-size: 10px;
+  background: var(--bg-subtle);
+}
+.ap-table td.num { text-align: right; }
+.ap-table tr:last-child td { border-bottom: none; }
+.ap-note {
+  font-size: 11px;
+  color: var(--text-3);
+  margin-top: 10px;
+  padding: 8px 10px;
+  background: var(--bg-subtle);
+  border-radius: 4px;
+  border-left: 2px solid var(--accent);
+}
+.ap-empty {
+  font-size: 12px;
+  color: var(--text-3);
+  font-style: italic;
+  text-align: center;
+  padding: 20px;
+}
+.ap-refresh {
+  font-size: 10px;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-card);
+  transition: background .15s;
+}
+.ap-refresh:hover { background: var(--accent-dim); }
+.ap-badge-ok   { color: var(--green); font-weight: 600; }
+.ap-badge-warn { color: var(--amber); font-weight: 600; }
+.ap-badge-bad  { color: var(--red);   font-weight: 600; }
+
+/* Modal'da ensemble/METAR'ı collapsible yapmak için */
+.modal-collapsible > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 6px 0;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  user-select: none;
+}
+.modal-collapsible > summary::-webkit-details-marker { display: none; }
+.modal-collapsible > summary::before {
+  content: "▸ ";
+  display: inline-block;
+  transition: transform .2s;
+}
+.modal-collapsible[open] > summary::before { transform: rotate(90deg); }
 </style>
 </head>
 <body>
@@ -562,7 +726,7 @@ body { transition:background .25s, color .2s; }
 <div id="progress-bar-wrap"><div id="progress-bar"></div></div>
 
 <h1>Polymarket Hava Analizi</h1>
-<div class="subtitle">5 model blend · ECMWF Ensemble · METAR gözlem · Polymarket edge analizi</div>
+<div class="subtitle">6 model blend (AIFS dahil) · 139-üye ensemble · METAR gözlem · Polymarket edge</div>
 
 <div class="wallet-bar" id="wallet-bar">
   <span style="font-size:12px;color:var(--text-3)">💼</span>
@@ -937,6 +1101,59 @@ body { transition:background .25s, color .2s; }
 <div class="portfolio-box" id="portfolio-box" style="display:none">
   <h2>💼 Açık Hava Pozisyonları</h2>
   <div id="portfolio-content"></div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     ANALİTİK: Kalibrasyon + VaR + Settlement Audit + Live Trades
+     Default kapalı — tüm detaylar erişilebilir ama ana akışı kirletmez.
+     ═══════════════════════════════════════════════════════════ -->
+<div class="analytics-wrap">
+  <div class="analytics-title">Analitik &amp; Risk Paneli
+    <span style="font-size:11px;color:var(--text-3);font-weight:400;margin-left:6px">
+      — detay için paneli aç
+    </span>
+  </div>
+  <div class="analytics-grid">
+    <!-- Kalibrasyon -->
+    <details class="ap-card" id="ap-calibration">
+      <summary>
+        📊 Kalibrasyon (Brier · Reliability · Sharpness)
+      </summary>
+      <div class="ap-body" id="ap-calibration-body">
+        <div class="ap-empty">Paneli açınca yüklenir…</div>
+      </div>
+    </details>
+
+    <!-- VaR -->
+    <details class="ap-card" id="ap-var">
+      <summary>
+        📉 Portföy VaR (Monte Carlo · Gaussian Copula)
+      </summary>
+      <div class="ap-body" id="ap-var-body">
+        <div class="ap-empty">Paneli açınca yüklenir…</div>
+      </div>
+    </details>
+
+    <!-- Settlement Audit -->
+    <details class="ap-card" id="ap-audit">
+      <summary>
+        🔍 Settlement Audit (Open-Meteo vs METAR)
+      </summary>
+      <div class="ap-body" id="ap-audit-body">
+        <div class="ap-empty">Paneli açınca yüklenir…</div>
+      </div>
+    </details>
+
+    <!-- Live Trades -->
+    <details class="ap-card" id="ap-live">
+      <summary>
+        💰 Canlı İşlemler &amp; Otomatik Satış
+      </summary>
+      <div class="ap-body" id="ap-live-body">
+        <div class="ap-empty">Paneli açınca yüklenir…</div>
+      </div>
+    </details>
+  </div>
 </div>
 
 <script>
@@ -2740,6 +2957,302 @@ if (_savedWallet) {
   renderWalletStatus(_savedWallet);
   loadPortfolio(_savedWallet);
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// ANALİTİK PANEL YÜKLEYİCİLERİ — lazy (paneli açınca fetch eder)
+// ═══════════════════════════════════════════════════════════════════
+
+function _fmt(n, d=3)  { return (n == null || isNaN(n)) ? "—" : Number(n).toFixed(d); }
+function _pct(n, d=1)  { return (n == null || isNaN(n)) ? "—" : (Number(n) * 100).toFixed(d) + "%"; }
+function _usd(n, d=2)  { return (n == null || isNaN(n)) ? "—" : "$" + Number(n).toFixed(d); }
+
+function _escape(s) {
+  if (s == null) return "";
+  return String(s).replace(/[&<>"']/g, c => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+  }[c]));
+}
+
+// ── Kalibrasyon ────────────────────────────────────────────────────
+async function loadCalibration() {
+  const body = document.getElementById("ap-calibration-body");
+  body.innerHTML = '<div class="ap-empty">Yükleniyor…</div>';
+  try {
+    const r = await fetchJSON("/api/calibration?days=60");
+    const o = r.overall || {};
+    const n = o.n || 0;
+    if (n === 0) {
+      body.innerHTML = '<div class="ap-empty">Henüz kapalı trade yok. Settle sonrası görünür.</div>';
+      return;
+    }
+    const skill = o.skill;
+    const skillCls = skill > 0.1 ? "good" : skill > 0 ? "" : "bad";
+    const brierCls = (o.brier != null && o.brier < 0.20) ? "good" : "";
+
+    let binsHtml = "";
+    if (o.bins && o.bins.length) {
+      binsHtml = `
+        <div style="font-size:11px;color:var(--text-3);margin:8px 0 4px">Reliability Bins</div>
+        <table class="ap-table">
+          <thead><tr>
+            <th>Aralık</th><th class="num">N</th><th class="num">Tahmin</th>
+            <th class="num">Gerçek</th><th class="num">Gap</th>
+          </tr></thead>
+          <tbody>
+            ${o.bins.map(b => `
+              <tr>
+                <td>${_pct(b.bin_low,0)}–${_pct(b.bin_high,0)}</td>
+                <td class="num">${b.n}</td>
+                <td class="num">${_pct(b.mean_p,1)}</td>
+                <td class="num">${_pct(b.actual_freq,1)}</td>
+                <td class="num" style="color:${b.gap < -0.05 ? 'var(--red)' : b.gap > 0.05 ? 'var(--green)' : 'var(--text-3)'}">${(b.gap>=0?"+":"")}${_pct(b.gap,1)}</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>`;
+    }
+
+    let perStn = "";
+    if (r.per_station && Object.keys(r.per_station).length) {
+      const rows = Object.entries(r.per_station)
+        .sort((a,b) => (b[1].skill||0) - (a[1].skill||0))
+        .map(([s, v]) => `
+          <tr>
+            <td>${s.toUpperCase()}</td>
+            <td class="num">${v.n}</td>
+            <td class="num">${_fmt(v.brier,3)}</td>
+            <td class="num" style="color:${v.skill>0.1?'var(--green)':v.skill>0?'var(--text)':'var(--red)'}">${_fmt(v.skill,3)}</td>
+          </tr>`).join("");
+      perStn = `
+        <div style="font-size:11px;color:var(--text-3);margin:12px 0 4px">İstasyon Bazlı</div>
+        <table class="ap-table">
+          <thead><tr><th>İstasyon</th><th class="num">N</th><th class="num">Brier</th><th class="num">Skill</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>`;
+    }
+
+    body.innerHTML = `
+      <div class="ap-metric-row">
+        <div class="ap-metric"><div class="ap-metric-lbl">N (kapalı)</div>
+          <div class="ap-metric-val">${n}</div></div>
+        <div class="ap-metric"><div class="ap-metric-lbl">Brier</div>
+          <div class="ap-metric-val ${brierCls}">${_fmt(o.brier,3)}</div></div>
+        <div class="ap-metric"><div class="ap-metric-lbl">Skill</div>
+          <div class="ap-metric-val ${skillCls}">${_fmt(skill,3)}</div></div>
+        <div class="ap-metric"><div class="ap-metric-lbl">Base Rate</div>
+          <div class="ap-metric-val">${_pct(o.base_rate,0)}</div></div>
+        <div class="ap-metric"><div class="ap-metric-lbl">Sharpness</div>
+          <div class="ap-metric-val">${_fmt(o.sharpness,3)}</div></div>
+      </div>
+      ${binsHtml}
+      ${perStn}
+      <div class="ap-note">
+        <b>Brier</b>: düşük iyi (mükemmel=0). <b>Skill</b>: 1 - Brier/Brier_ref. Pozitif → climatology'den daha iyi tahmin.
+        <b>Gap</b>: gerçek − tahmin (−%5 over-confident, +%5 under-confident).
+      </div>`;
+  } catch (e) {
+    body.innerHTML = `<div class="ap-empty">Hata: ${_escape(e.message)}</div>`;
+  }
+}
+
+// ── Portföy VaR ────────────────────────────────────────────────────
+async function loadVar() {
+  const body = document.getElementById("ap-var-body");
+  body.innerHTML = '<div class="ap-empty">Monte Carlo simülasyonu çalışıyor…</div>';
+  try {
+    const r = await fetchJSON("/api/portfolio/var");
+    const n = r.n_positions || 0;
+    if (n === 0) {
+      body.innerHTML = '<div class="ap-empty">Açık pozisyon yok.</div>';
+      return;
+    }
+    const var95Cls = r.var_95 < -20 ? "bad" : r.var_95 < -10 ? "warn" : "";
+    const var99Cls = r.var_99 < -30 ? "bad" : r.var_99 < -15 ? "warn" : "";
+    const corrCls  = r.avg_abs_correlation > 0.5 ? "warn" : "";
+
+    body.innerHTML = `
+      <div class="ap-metric-row">
+        <div class="ap-metric"><div class="ap-metric-lbl">Pozisyon</div>
+          <div class="ap-metric-val">${n}</div></div>
+        <div class="ap-metric"><div class="ap-metric-lbl">Gross Cost</div>
+          <div class="ap-metric-val">${_usd(r.gross_exposure)}</div></div>
+        <div class="ap-metric"><div class="ap-metric-lbl">Potansiyel Kâr</div>
+          <div class="ap-metric-val good">${_usd(r.gross_potential_win)}</div></div>
+        <div class="ap-metric"><div class="ap-metric-lbl">E[P&amp;L]</div>
+          <div class="ap-metric-val ${r.expected_pnl >= 0 ? 'good' : 'bad'}">${_usd(r.expected_pnl)}</div></div>
+      </div>
+      <div class="ap-metric-row">
+        <div class="ap-metric"><div class="ap-metric-lbl">VaR 95%</div>
+          <div class="ap-metric-val ${var95Cls}">${_usd(r.var_95)}</div></div>
+        <div class="ap-metric"><div class="ap-metric-lbl">VaR 99%</div>
+          <div class="ap-metric-val ${var99Cls}">${_usd(r.var_99)}</div></div>
+        <div class="ap-metric"><div class="ap-metric-lbl">Worst Case</div>
+          <div class="ap-metric-val bad">${_usd(r.worst)}</div></div>
+        <div class="ap-metric"><div class="ap-metric-lbl">Best Case</div>
+          <div class="ap-metric-val good">${_usd(r.best)}</div></div>
+      </div>
+      <div class="ap-metric-row">
+        <div class="ap-metric"><div class="ap-metric-lbl">Ort. |ρ|</div>
+          <div class="ap-metric-val ${corrCls}">${_fmt(r.avg_abs_correlation,2)}</div></div>
+        <div class="ap-metric"><div class="ap-metric-lbl">Simülasyon</div>
+          <div class="ap-metric-val">${r.n_sims || 0}</div></div>
+        <div class="ap-metric"><div class="ap-metric-lbl">Kaynak</div>
+          <div class="ap-metric-val" style="font-size:11px">${_escape(r.source || "paper")}</div></div>
+      </div>
+      <div class="ap-note">
+        <b>VaR 95%</b>: en kötü %5 senaryoda beklenen toplam P&amp;L. ${r.n_sims || 5000} Monte Carlo simülasyonu, Gaussian copula + Cholesky (shrinkage λ=0.15). Ort. |ρ| &gt; 0.5 → pozisyonlar güçlü korele, çeşitlendirme zayıf.
+      </div>`;
+  } catch (e) {
+    body.innerHTML = `<div class="ap-empty">Hata: ${_escape(e.message)}</div>`;
+  }
+}
+
+// ── Settlement Audit ───────────────────────────────────────────────
+async function loadAudit() {
+  const body = document.getElementById("ap-audit-body");
+  body.innerHTML = '<div class="ap-empty">Yükleniyor…</div>';
+  try {
+    const r = await fetchJSON("/api/settlement-audit?days=30");
+    const entries = r.entries || [];
+    const stats   = r.stats   || {};
+    if (entries.length === 0) {
+      body.innerHTML = '<div class="ap-empty">Henüz audit kaydı yok.</div>';
+      return;
+    }
+
+    const disagreements = entries.filter(e => e.disagreement).length;
+    const disRate = entries.length ? disagreements / entries.length : 0;
+    const rateCls = disRate > 0.15 ? "bad" : disRate > 0.05 ? "warn" : "good";
+
+    // En çok uyumsuzluk gösteren 15 kayıt
+    const recent = entries.slice(0, 15);
+    const rows = recent.map(e => `
+      <tr>
+        <td>${e.date}</td>
+        <td>${e.station.toUpperCase()}</td>
+        <td class="num">${e.sources.open_meteo != null ? _fmt(e.sources.open_meteo,1) : "—"}</td>
+        <td class="num">${e.sources.metar != null ? _fmt(e.sources.metar,1) : "—"}</td>
+        <td class="num">${_fmt(e.max_diff_c,2)}</td>
+        <td class="${e.disagreement ? 'ap-badge-warn' : 'ap-badge-ok'}" style="text-align:center">
+          ${e.disagreement ? "⚠︎ "+e.max_diff_bucket+"°C" : "✓"}
+        </td>
+      </tr>
+    `).join("");
+
+    body.innerHTML = `
+      <div class="ap-metric-row">
+        <div class="ap-metric"><div class="ap-metric-lbl">Audit Kayıt</div>
+          <div class="ap-metric-val">${entries.length}</div></div>
+        <div class="ap-metric"><div class="ap-metric-lbl">Uyumsuz</div>
+          <div class="ap-metric-val ${rateCls}">${disagreements}</div></div>
+        <div class="ap-metric"><div class="ap-metric-lbl">Oran</div>
+          <div class="ap-metric-val ${rateCls}">${_pct(disRate,1)}</div></div>
+      </div>
+      <table class="ap-table">
+        <thead><tr>
+          <th>Tarih</th><th>İst.</th><th class="num">OpenMeteo</th>
+          <th class="num">METAR</th><th class="num">Fark °C</th><th style="text-align:center">Bucket</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div class="ap-note">
+        Her settlement iki kaynaktan çekilir (Open-Meteo arşivi + METAR). Bucket farkı ≥1°C → uyumsuzluk. Yüksek oran → istasyon problemi (bot settlement'ını manuel gözden geçir).
+      </div>`;
+  } catch (e) {
+    body.innerHTML = `<div class="ap-empty">Hata: ${_escape(e.message)}</div>`;
+  }
+}
+
+// ── Canlı İşlemler ─────────────────────────────────────────────────
+async function loadLiveTrades() {
+  const body = document.getElementById("ap-live-body");
+  body.innerHTML = '<div class="ap-empty">Yükleniyor…</div>';
+  try {
+    const r = await fetchJSON("/api/live-trades");
+    const trades = r.trades || [];
+    const stats  = r.stats  || {};
+
+    const byStatus = {};
+    trades.forEach(t => { byStatus[t.status] = (byStatus[t.status]||0) + 1; });
+
+    // Auto-sell metrikleri
+    const filled     = trades.filter(t => t.status === "filled").length;
+    const sellPending = trades.filter(t => t.status === "sell_pending").length;
+    const withSellOrder = trades.filter(t => t.sell_order_id).length;
+
+    // Son 15 aktif pozisyon (pending_fill, filled, sell_pending)
+    const active = trades
+      .filter(t => ["pending_fill","filled","sell_pending"].includes(t.status))
+      .slice(-15).reverse();
+
+    const rows = active.map(t => {
+      const label = (t.station || "").toUpperCase();
+      const price = t.fill_price || t.limit_price;
+      const sellInfo = t.sell_order_id
+        ? `<span class="ap-badge-ok">→ ${_pct(t.sell_price/1.0,1)}</span>`
+        : (t.status === "filled" ? '<span class="ap-badge-warn">hazır</span>' : "—");
+      return `
+        <tr>
+          <td>${t.date || "—"}</td>
+          <td>${label}</td>
+          <td class="num">${t.top_pick != null ? t.top_pick+"°C" : "—"}</td>
+          <td class="num">${price ? _pct(price,0) : "—"}</td>
+          <td>${_escape(t.status)}</td>
+          <td style="text-align:center">${sellInfo}</td>
+        </tr>`;
+    }).join("");
+
+    body.innerHTML = `
+      <div class="ap-metric-row">
+        <div class="ap-metric"><div class="ap-metric-lbl">Toplam</div>
+          <div class="ap-metric-val">${trades.length}</div></div>
+        <div class="ap-metric"><div class="ap-metric-lbl">Filled</div>
+          <div class="ap-metric-val">${filled}</div></div>
+        <div class="ap-metric"><div class="ap-metric-lbl">Sell Pending</div>
+          <div class="ap-metric-val good">${sellPending}</div></div>
+        <div class="ap-metric"><div class="ap-metric-lbl">Auto-Sell Aktif</div>
+          <div class="ap-metric-val good">${withSellOrder}</div></div>
+      </div>
+      ${stats.win_rate != null ? `
+      <div class="ap-metric-row">
+        <div class="ap-metric"><div class="ap-metric-lbl">Kapanan</div>
+          <div class="ap-metric-val">${stats.closed || 0}</div></div>
+        <div class="ap-metric"><div class="ap-metric-lbl">Win Rate</div>
+          <div class="ap-metric-val ${stats.win_rate >= 50 ? 'good' : 'bad'}">${_fmt(stats.win_rate,1)}%</div></div>
+        <div class="ap-metric"><div class="ap-metric-lbl">Net P&amp;L</div>
+          <div class="ap-metric-val ${stats.total_pnl >= 0 ? 'good' : 'bad'}">${_usd(stats.total_pnl)}</div></div>
+      </div>` : ""}
+      ${rows ? `
+        <div style="font-size:11px;color:var(--text-3);margin:10px 0 4px">Son Aktif Pozisyonlar</div>
+        <table class="ap-table">
+          <thead><tr>
+            <th>Tarih</th><th>İst.</th><th class="num">Pick</th>
+            <th class="num">Fiyat</th><th>Durum</th><th style="text-align:center">Auto-Sell</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>` : '<div class="ap-empty">Aktif pozisyon yok.</div>'}
+      <div class="ap-note">
+        Fill olan pozisyonlara otomatik <b>99.8¢ SELL limit</b> atılır (<code>post_only=True</code>, maker fee %0).
+        Piyasa alırsa anında USDC; yoksa Polymarket resolve'da ~$1.00 redeem.
+      </div>`;
+  } catch (e) {
+    body.innerHTML = `<div class="ap-empty">Hata: ${_escape(e.message)}</div>`;
+  }
+}
+
+// ── Lazy-load hook: panel açıldıkça bir kere yükle ─────────────────
+document.getElementById("ap-calibration").addEventListener("toggle", function(e) {
+  if (this.open && !this._loaded) { this._loaded = true; loadCalibration(); }
+});
+document.getElementById("ap-var").addEventListener("toggle", function(e) {
+  if (this.open && !this._loaded) { this._loaded = true; loadVar(); }
+});
+document.getElementById("ap-audit").addEventListener("toggle", function(e) {
+  if (this.open && !this._loaded) { this._loaded = true; loadAudit(); }
+});
+document.getElementById("ap-live").addEventListener("toggle", function(e) {
+  if (this.open && !this._loaded) { this._loaded = true; loadLiveTrades(); }
+});
 </script>
 </body>
 </html>
