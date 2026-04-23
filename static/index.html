@@ -700,6 +700,156 @@ body { transition:background .25s, color .2s; }
 .ap-badge-warn { color: var(--amber); font-weight: 600; }
 .ap-badge-bad  { color: var(--red);   font-weight: 600; }
 
+/* ── Live Bot Tab ─────────────────────────────────────────────────── */
+.lb-wrap { max-width: 1320px; margin: 14px auto 40px; padding: 0 16px; display:flex; flex-direction:column; gap:14px; }
+.lb-hero {
+  background: linear-gradient(135deg, var(--bg-card) 0%, var(--bg-subtle) 100%);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 22px 26px;
+  box-shadow: var(--shadow);
+}
+.lb-hero-top {
+  display:flex; align-items:center; justify-content:space-between; gap:12px;
+  margin-bottom: 14px; flex-wrap:wrap;
+}
+.lb-hero-title {
+  font-family: var(--display);
+  font-size: 22px; font-weight: 800;
+  letter-spacing:-.3px; color: var(--text);
+  display:flex; align-items:center; gap:10px;
+}
+.lb-hero-title .lb-dot {
+  width:10px; height:10px; border-radius:50%;
+  background: var(--green);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--green) 20%, transparent);
+  animation: lb-pulse 2.2s ease-in-out infinite;
+}
+@keyframes lb-pulse {
+  0%,100% { opacity:1 }
+  50%     { opacity:.45 }
+}
+.lb-hero-actions { display:flex; gap:8px; align-items:center; }
+.lb-hero-actions .btn { font-size:12px; padding:6px 12px; }
+.lb-last { font-size:11px; color: var(--text-3); font-family: var(--mono); }
+.lb-metrics {
+  display:grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+}
+.lb-metric {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  transition: transform .15s, box-shadow .15s;
+}
+.lb-metric:hover { transform: translateY(-1px); box-shadow: var(--shadow); }
+.lb-metric-lbl { font-size:10px; color: var(--text-3); text-transform:uppercase; letter-spacing:.05em; margin-bottom:4px; }
+.lb-metric-val { font-family: var(--mono); font-size:20px; font-weight:700; color: var(--text); line-height:1.1; }
+.lb-metric-sub { font-size:10px; color: var(--text-3); margin-top:4px; font-family: var(--mono); }
+.lb-metric-val.good { color: var(--green); }
+.lb-metric-val.bad  { color: var(--red); }
+.lb-metric-val.warn { color: var(--amber); }
+
+/* Position cards — rich layout */
+.lb-pos-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 10px; }
+.lb-pos {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  padding: 12px 14px;
+  font-size: 12px;
+  transition: border-color .15s, box-shadow .15s;
+}
+.lb-pos:hover { box-shadow: var(--shadow); }
+.lb-pos.won    { border-left-color: var(--green); }
+.lb-pos.lost   { border-left-color: var(--red); }
+.lb-pos.filled { border-left-color: #3b82f6; }
+.lb-pos.pending{ border-left-color: var(--amber); }
+.lb-pos.cancel { border-left-color: var(--text-3); opacity:.75; }
+.lb-pos-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
+.lb-pos-station { font-family: var(--display); font-size:15px; font-weight:700; color: var(--text); }
+.lb-pos-date { font-family: var(--mono); font-size:11px; color: var(--text-3); }
+.lb-pos-badge { font-size:10px; font-weight:700; padding:2px 8px; border-radius:4px; text-transform:uppercase; letter-spacing:.04em; }
+.lb-badge-pending { background:#fef3c7; color:#92400e; }
+.lb-badge-filled  { background:#dbeafe; color:#1e40af; }
+.lb-badge-sold    { background:#e0e7ff; color:#3730a3; }
+.lb-badge-won     { background:#d1fae5; color:#065f46; }
+.lb-badge-lost    { background:#fee2e2; color:#991b1b; }
+.lb-badge-cancel  { background:#e5e7eb; color:#4b5563; }
+body.dark .lb-badge-pending { background:#3b2e0f; color:#fcd34d; }
+body.dark .lb-badge-filled  { background:#1e2a4a; color:#93c5fd; }
+body.dark .lb-badge-sold    { background:#1e1b4b; color:#c4b5fd; }
+body.dark .lb-badge-won     { background:#0f2d20; color:#6ee7b7; }
+body.dark .lb-badge-lost    { background:#3a1515; color:#fca5a5; }
+body.dark .lb-badge-cancel  { background:#1f2937; color:#9ca3af; }
+
+.lb-pos-bucket { font-size:13px; font-weight:600; color: var(--text); margin-bottom:8px; }
+.lb-pos-rows { display:grid; grid-template-columns: auto 1fr; gap: 3px 12px; font-family: var(--mono); font-size:11px; }
+.lb-pos-rows dt { color: var(--text-3); }
+.lb-pos-rows dd { margin:0; color: var(--text); text-align:right; }
+.lb-pos-rows dd.good { color: var(--green); font-weight:600; }
+.lb-pos-rows dd.bad  { color: var(--red); font-weight:600; }
+
+.lb-pos-footer {
+  margin-top: 10px; padding-top: 8px;
+  border-top: 1px dashed var(--border);
+  font-size: 10px; color: var(--text-3);
+  display:flex; justify-content:space-between; gap:6px; flex-wrap:wrap;
+}
+.lb-pos-footer a { color: var(--accent); text-decoration:none; }
+.lb-pos-footer a:hover { text-decoration:underline; }
+
+/* Live bot table (wide) */
+.lb-table { width:100%; border-collapse: collapse; font-size:12px; }
+.lb-table th {
+  font-size:10px; text-transform:uppercase; letter-spacing:.04em;
+  color: var(--text-3); font-weight:500;
+  background: var(--bg-subtle);
+  padding:7px 8px; text-align:left; border-bottom: 2px solid var(--border);
+}
+.lb-table th.num { text-align:right; }
+.lb-table td { padding:7px 8px; border-bottom:1px solid var(--bg-subtle); vertical-align:middle; }
+.lb-table td.num { text-align:right; font-family: var(--mono); }
+.lb-table tr:hover { background: var(--bg-subtle); }
+.lb-table tr:last-child td { border-bottom:none; }
+.lb-count { font-size: 11px; color: var(--text-3); font-weight:500; }
+
+.lb-filter {
+  display:flex; gap:6px; margin-bottom:10px; flex-wrap:wrap;
+}
+.lb-filter button {
+  font-size:11px; padding: 5px 10px; border-radius:6px;
+  background: var(--bg-subtle); border:1px solid var(--border);
+  color: var(--text-2); cursor:pointer;
+  transition: background .15s;
+}
+.lb-filter button.active {
+  background: var(--accent); color: white; border-color: var(--accent);
+}
+.lb-filter button:hover:not(.active) { background: var(--accent-dim); }
+
+.lb-empty {
+  padding: 24px 16px; text-align:center; color: var(--text-3);
+  font-size:12px; font-style:italic;
+}
+
+.lb-pnl-big {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight:600;
+}
+.lb-pnl-big.good { color: var(--green); }
+.lb-pnl-big.bad  { color: var(--red); }
+
+.lb-tx {
+  font-family: var(--mono); font-size:10px; color: var(--text-3);
+  display:inline-block; max-width:120px; overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap; vertical-align:middle;
+}
+
 /* Modal'da ensemble/METAR'ı collapsible yapmak için */
 .modal-collapsible > summary {
   cursor: pointer;
@@ -751,6 +901,9 @@ body { transition:background .25s, color .2s; }
     </button>
     <button class="day-tab" id="tab-report" onclick="selectReport()">
       <span class="tab-label">📋 Günlük Rapor</span>
+    </button>
+    <button class="day-tab" id="tab-livebot" onclick="selectLiveBot()">
+      <span class="tab-label">🤖 Live Bot</span>
     </button>
   </div>
   <button class="btn btn-primary" id="refreshBtn" onclick="loadAll(true)">↻ Yenile</button>
@@ -1097,6 +1250,108 @@ body { transition:background .25s, color .2s; }
   </div>
 </div>
 
+<!-- ═══════════════════════════════════════════════════════════
+     LIVE BOT — Canlı işlem geçmişi, P&L, açık pozisyonlar
+     Modern dashboard sayfası; her bölüm collapsible.
+     ═══════════════════════════════════════════════════════════ -->
+<div id="live-bot-panel" style="display:none">
+  <div class="lb-wrap">
+    <!-- Hero + metrikler -->
+    <div class="lb-hero">
+      <div class="lb-hero-top">
+        <div class="lb-hero-title">
+          <span class="lb-dot"></span>
+          Canlı Bot Durumu
+        </div>
+        <div class="lb-hero-actions">
+          <span class="lb-last" id="lb-last-update">—</span>
+          <button class="btn" id="lb-refresh-btn" onclick="renderLiveBot(true)">↻ Yenile</button>
+        </div>
+      </div>
+      <div class="lb-metrics" id="lb-metrics">
+        <div class="lb-empty">Yükleniyor…</div>
+      </div>
+    </div>
+
+    <!-- Açık pozisyonlar (default: açık) -->
+    <details class="ap-card" id="lb-open" open>
+      <summary>
+        🟢 Açık Pozisyonlar
+        <span class="lb-count" id="lb-open-count">—</span>
+      </summary>
+      <div class="ap-body" id="lb-open-body">
+        <div class="lb-empty">Yükleniyor…</div>
+      </div>
+    </details>
+
+    <!-- Son kapanan (default: açık) -->
+    <details class="ap-card" id="lb-closed" open>
+      <summary>
+        ✅ Son Kapanan İşlemler
+        <span class="lb-count" id="lb-closed-count">—</span>
+      </summary>
+      <div class="ap-body" id="lb-closed-body">
+        <div class="lb-empty">Yükleniyor…</div>
+      </div>
+    </details>
+
+    <!-- Otomatik satış (default: kapalı) -->
+    <details class="ap-card" id="lb-autosell">
+      <summary>
+        🤖 Auto-Sell (99.8¢ limit emirleri)
+        <span class="lb-count" id="lb-autosell-count">—</span>
+      </summary>
+      <div class="ap-body" id="lb-autosell-body">
+        <div class="lb-empty">Paneli açınca yüklenir…</div>
+      </div>
+    </details>
+
+    <!-- İstasyon bazlı özet (default: kapalı) -->
+    <details class="ap-card" id="lb-stations">
+      <summary>
+        📍 İstasyon Bazlı Performans
+        <span class="lb-count" id="lb-stations-count">—</span>
+      </summary>
+      <div class="ap-body" id="lb-stations-body">
+        <div class="lb-empty">Paneli açınca yüklenir…</div>
+      </div>
+    </details>
+
+    <!-- İptal / Stale (default: kapalı) -->
+    <details class="ap-card" id="lb-cancelled">
+      <summary>
+        ❌ İptal &amp; Stale
+        <span class="lb-count" id="lb-cancelled-count">—</span>
+      </summary>
+      <div class="ap-body" id="lb-cancelled-body">
+        <div class="lb-empty">Paneli açınca yüklenir…</div>
+      </div>
+    </details>
+
+    <!-- Redeem geçmişi (default: kapalı) -->
+    <details class="ap-card" id="lb-redeem">
+      <summary>
+        💰 On-chain Redeem Geçmişi
+        <span class="lb-count" id="lb-redeem-count">—</span>
+      </summary>
+      <div class="ap-body" id="lb-redeem-body">
+        <div class="lb-empty">Paneli açınca yüklenir…</div>
+      </div>
+    </details>
+
+    <!-- Tüm işlemler (default: kapalı) -->
+    <details class="ap-card" id="lb-all">
+      <summary>
+        📜 Tüm İşlemler (Kronolojik)
+        <span class="lb-count" id="lb-all-count">—</span>
+      </summary>
+      <div class="ap-body" id="lb-all-body">
+        <div class="lb-empty">Paneli açınca yüklenir…</div>
+      </div>
+    </details>
+  </div>
+</div>
+
 <!-- PORTFÖY -->
 <div class="portfolio-box" id="portfolio-box" style="display:none">
   <h2>💼 Açık Hava Pozisyonları</h2>
@@ -1249,10 +1504,18 @@ function initDates() {
 function selectDay(idx) {
   activeDay = idx;
   document.getElementById('daily-report-panel').style.display = 'none';
+  document.getElementById('live-bot-panel').style.display = 'none';
   document.getElementById('tab-report').classList.remove('active');
+  document.getElementById('tab-livebot').classList.remove('active');
   document.querySelector('.grid').style.display = '';
   document.getElementById('top-trades-box').style.display = '';
-  document.querySelectorAll('.day-tab:not(#tab-report)').forEach((t, i) => t.classList.toggle('active', i === idx));
+  // Gün sekmeleri — rapor ve live-bot sekmeleri hariç sadece gün sekmelerine active ver
+  document.querySelectorAll('.day-tab').forEach(t => {
+    if (t.id === 'tab-report' || t.id === 'tab-livebot') return;
+    t.classList.remove('active');
+  });
+  const dayTabs = document.querySelectorAll('.day-tab:not(#tab-report):not(#tab-livebot)');
+  dayTabs.forEach((t, i) => t.classList.toggle('active', i === idx));
   renderAll();
   if (currentModalStation) { selectModalDay(idx); }
   const date = dates[idx];
@@ -1271,6 +1534,7 @@ async function selectReport() {
   document.getElementById('tab-report').classList.add('active');
   document.querySelector('.grid').style.display = 'none';
   document.getElementById('top-trades-box').style.display = 'none';
+  document.getElementById('live-bot-panel').style.display = 'none';
   document.getElementById('daily-report-panel').style.display = '';
   document.getElementById('report-content').innerHTML = '<span class="loading">Rapor hazırlanıyor...</span>';
 
@@ -1291,6 +1555,507 @@ async function selectReport() {
   }
   if (pmLoads.length) await Promise.all(pmLoads);
   renderDailyReport();
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// LIVE BOT TAB — canlı işlemler, P&L, auto-sell, açık pozisyonlar
+// ══════════════════════════════════════════════════════════════════════════
+const LB_FLAGS = {
+  eglc:'🇬🇧', ltac:'🇹🇷', limc:'🇮🇹', ltfm:'🇹🇷', lemd:'🇪🇸',
+  lfpg:'🇫🇷', eham:'🇳🇱', eddm:'🇩🇪', epwa:'🇵🇱', efhk:'🇫🇮',
+  omdb:'🇦🇪', rjtt:'🇯🇵',
+};
+const LB_CITY = {
+  eglc:'Londra City', ltac:'Ankara', limc:'Milano', ltfm:'İstanbul',
+  lemd:'Madrid', lfpg:'Paris CDG', eham:'Amsterdam', eddm:'Münih',
+  epwa:'Varşova', efhk:'Helsinki', omdb:'Dubai', rjtt:'Tokyo',
+};
+let _liveBotData = null;      // önbellek (diğer panelleri de besler)
+let _liveBalance = null;
+
+async function selectLiveBot() {
+  document.querySelectorAll('.day-tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('tab-livebot').classList.add('active');
+  document.querySelector('.grid').style.display = 'none';
+  document.getElementById('top-trades-box').style.display = 'none';
+  document.getElementById('daily-report-panel').style.display = 'none';
+  document.getElementById('live-bot-panel').style.display = '';
+  await renderLiveBot(false);
+}
+
+async function renderLiveBot(force) {
+  const btn = document.getElementById('lb-refresh-btn');
+  if (btn) btn.disabled = true;
+  try {
+    if (force || !_liveBotData) {
+      const [trades, bal] = await Promise.allSettled([
+        fetchJSON('/api/live-trades'),
+        fetchJSON('/api/live-balance'),
+      ]);
+      _liveBotData = (trades.status === 'fulfilled') ? trades.value : { trades: [], stats: {} };
+      _liveBalance = (bal.status === 'fulfilled')    ? bal.value    : null;
+    }
+    _renderLbMetrics();
+    _renderLbOpen();
+    _renderLbClosed();
+    _renderLbAutoSell();
+    _renderLbStations();
+    _renderLbCancelled();
+    _renderLbRedeem();
+    _renderLbAll();
+    const el = document.getElementById('lb-last-update');
+    if (el) el.textContent = 'Güncel: ' + new Date().toLocaleTimeString('tr-TR');
+  } catch (e) {
+    const m = document.getElementById('lb-metrics');
+    if (m) m.innerHTML = `<div class="lb-empty">Veri alınamadı: ${_escape(e.message)}</div>`;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────
+function _lbStatusBadge(t) {
+  const s = t.status;
+  if (s === 'pending_fill') return '<span class="lb-pos-badge lb-badge-pending">Beklemede</span>';
+  if (s === 'filled')       return '<span class="lb-pos-badge lb-badge-filled">Dolduruldu</span>';
+  if (s === 'sell_pending') return '<span class="lb-pos-badge lb-badge-sold">Sell Aktif</span>';
+  if (s === 'sell_filled')  return '<span class="lb-pos-badge lb-badge-sold">Auto-Sold</span>';
+  if (s === 'settled_win' || (t.result||'').toUpperCase()==='WIN')
+                            return '<span class="lb-pos-badge lb-badge-won">Kazandı</span>';
+  if (s === 'settled_loss' || (t.result||'').toUpperCase()==='LOSS')
+                            return '<span class="lb-pos-badge lb-badge-lost">Kaybetti</span>';
+  if (s === 'cancelled')    return '<span class="lb-pos-badge lb-badge-cancel">İptal</span>';
+  if (s === 'expired')      return '<span class="lb-pos-badge lb-badge-cancel">Süresi Bitti</span>';
+  return `<span class="lb-pos-badge lb-badge-cancel">${_escape(s||'?')}</span>`;
+}
+function _lbPosKlass(t) {
+  const s = t.status, r = (t.result||'').toUpperCase();
+  if (s==='settled_win'  || r==='WIN')  return 'won';
+  if (s==='settled_loss' || r==='LOSS') return 'lost';
+  if (s==='filled' || s==='sell_pending' || s==='sell_filled') return 'filled';
+  if (s==='pending_fill') return 'pending';
+  return 'cancel';
+}
+function _lbDate(iso) {
+  if (!iso) return '—';
+  try {
+    const d = new Date(iso);
+    return d.toLocaleDateString('tr-TR', { day:'2-digit', month:'short' }) +
+           ' ' + d.toLocaleTimeString('tr-TR', { hour:'2-digit', minute:'2-digit' });
+  } catch { return iso; }
+}
+function _lbShortDate(iso) {
+  if (!iso) return '—';
+  try { return new Date(iso).toLocaleDateString('tr-TR', {day:'2-digit', month:'short'}); }
+  catch { return iso; }
+}
+function _lbCents(p) {
+  if (p == null || isNaN(p)) return '—';
+  return (Number(p)*100).toFixed(1) + '¢';
+}
+function _lbCostNum(t) {
+  return Number(t.cost_usdc || t.cost_usd || 0);
+}
+function _lbPnlClass(p) {
+  if (p == null) return '';
+  return p >= 0 ? 'good' : 'bad';
+}
+
+// ── Üst metrikler ────────────────────────────────────────────────────────
+function _renderLbMetrics() {
+  const d = _liveBotData || {};
+  const trades = d.trades || [];
+  const stats  = d.stats  || {};
+  const openTrades    = trades.filter(t => ['pending_fill','filled','sell_pending'].includes(t.status));
+  const openCost      = openTrades.reduce((a,t) => a + _lbCostNum(t), 0);
+  const openPotential = openTrades.reduce((a,t) => a + (Number(t.shares||0)), 0);
+  // 7-gün P&L
+  const now7 = Date.now() - 7*86400_000;
+  const recentPnl = trades
+    .filter(t => t.settled_at && new Date(t.settled_at).getTime() >= now7)
+    .reduce((a,t) => a + (Number(t.pnl_usdc)||0), 0);
+
+  const balance = _liveBalance?.balance;
+  const m = document.getElementById('lb-metrics');
+  m.innerHTML = `
+    <div class="lb-metric">
+      <div class="lb-metric-lbl">USDC Bakiye</div>
+      <div class="lb-metric-val ${balance == null ? '' : 'good'}">${balance != null ? _usd(balance) : '—'}</div>
+      <div class="lb-metric-sub">Polymarket cüzdanı</div>
+    </div>
+    <div class="lb-metric">
+      <div class="lb-metric-lbl">Açık Pozisyon</div>
+      <div class="lb-metric-val">${openTrades.length}</div>
+      <div class="lb-metric-sub">Risk ${_usd(openCost)} → pot ${_usd(openPotential)}</div>
+    </div>
+    <div class="lb-metric">
+      <div class="lb-metric-lbl">Net P&L (Toplam)</div>
+      <div class="lb-metric-val ${_lbPnlClass(stats.total_pnl)}">${stats.total_pnl != null ? (stats.total_pnl>=0?'+':'')+_usd(stats.total_pnl) : '—'}</div>
+      <div class="lb-metric-sub">${stats.closed||0} kapalı işlem</div>
+    </div>
+    <div class="lb-metric">
+      <div class="lb-metric-lbl">Son 7 Gün</div>
+      <div class="lb-metric-val ${_lbPnlClass(recentPnl)}">${(recentPnl>=0?'+':'')+_usd(recentPnl)}</div>
+      <div class="lb-metric-sub">settle tarihine göre</div>
+    </div>
+    <div class="lb-metric">
+      <div class="lb-metric-lbl">Win Rate</div>
+      <div class="lb-metric-val ${stats.win_rate != null && stats.win_rate >= 50 ? 'good' : (stats.win_rate != null && stats.win_rate < 50 ? 'bad' : '')}">
+        ${stats.win_rate != null ? _fmt(stats.win_rate,1)+'%' : '—'}
+      </div>
+      <div class="lb-metric-sub">${stats.wins||0}W / ${stats.losses||0}L</div>
+    </div>
+    <div class="lb-metric">
+      <div class="lb-metric-lbl">Toplam İşlem</div>
+      <div class="lb-metric-val">${trades.length}</div>
+      <div class="lb-metric-sub">${stats.pending||0} pending · ${stats.filled||0} filled</div>
+    </div>
+  `;
+}
+
+// ── Açık pozisyonlar ────────────────────────────────────────────────────
+function _renderLbOpen() {
+  const trades = (_liveBotData?.trades || [])
+    .filter(t => ['pending_fill','filled','sell_pending'].includes(t.status))
+    .sort((a,b) => (b.placed_at||'').localeCompare(a.placed_at||''));
+  document.getElementById('lb-open-count').textContent =
+    trades.length ? `${trades.length} aktif` : 'yok';
+  const body = document.getElementById('lb-open-body');
+  if (!trades.length) {
+    body.innerHTML = '<div class="lb-empty">Açık pozisyon yok. Bot yeni fırsat bekliyor.</div>';
+    return;
+  }
+  body.innerHTML = `
+    <div class="lb-pos-grid">
+      ${trades.map(t => {
+        const cost = _lbCostNum(t);
+        const shares = Number(t.shares||0);
+        const fillP = t.fill_price || t.limit_price;
+        const potentialWin = shares - cost;
+        const sellInfo = t.sell_order_id
+          ? `<span class="ap-badge-ok">→ ${_lbCents(t.sell_price)}</span>`
+          : (t.status==='filled' ? '<span class="ap-badge-warn">sell bekleniyor</span>' : '—');
+        return `
+          <div class="lb-pos ${_lbPosKlass(t)}">
+            <div class="lb-pos-head">
+              <div class="lb-pos-station">${LB_FLAGS[t.station]||''} ${(t.station||'').toUpperCase()}</div>
+              ${_lbStatusBadge(t)}
+            </div>
+            <div class="lb-pos-bucket">🎯 ${t.top_pick != null ? t.top_pick+'°C' : '—'} <span style="color:var(--text-3);font-weight:400;font-size:11px">— ${_escape(t.bucket_title||'')}</span></div>
+            <dl class="lb-pos-rows">
+              <dt>Tarih</dt>          <dd>${_lbShortDate(t.date)}</dd>
+              <dt>Giriş Fiyatı</dt>   <dd>${_lbCents(fillP)}</dd>
+              <dt>Shares</dt>         <dd>${shares}</dd>
+              <dt>Maliyet</dt>        <dd>${_usd(cost)}</dd>
+              <dt>Potansiyel Kâr</dt> <dd class="good">+${_usd(potentialWin)}</dd>
+              <dt>Auto-Sell</dt>      <dd>${sellInfo}</dd>
+            </dl>
+            <div class="lb-pos-footer">
+              <span>Açılış: ${_lbDate(t.placed_at)}</span>
+              ${t.fill_time ? `<span>Dolum: ${_lbDate(t.fill_time)}</span>` : ''}
+            </div>
+          </div>`;
+      }).join('')}
+    </div>
+  `;
+}
+
+// ── Son kapanan ────────────────────────────────────────────────────────
+function _renderLbClosed() {
+  const trades = (_liveBotData?.trades || [])
+    .filter(t => ['settled_win','settled_loss','won','lost'].includes(t.status))
+    .sort((a,b) => (b.settled_at||'').localeCompare(a.settled_at||''))
+    .slice(0, 20);
+  document.getElementById('lb-closed-count').textContent =
+    trades.length ? `son ${trades.length} işlem` : 'yok';
+  const body = document.getElementById('lb-closed-body');
+  if (!trades.length) {
+    body.innerHTML = '<div class="lb-empty">Henüz kapanmış işlem yok.</div>';
+    return;
+  }
+  body.innerHTML = `
+    <table class="lb-table">
+      <thead><tr>
+        <th>Tarih</th><th>İstasyon</th><th>Pick</th><th class="num">Gerçek</th>
+        <th class="num">Giriş</th><th class="num">Shares</th>
+        <th class="num">Maliyet</th><th class="num">P&amp;L</th><th>Sonuç</th>
+      </tr></thead>
+      <tbody>
+        ${trades.map(t => {
+          const actual = (t.notes||'').match(/actual=([+-]?\d+)/);
+          const actualVal = actual ? actual[1]+'°C' : '—';
+          const fillP = t.fill_price || t.limit_price;
+          const pnl = t.pnl_usdc;
+          return `<tr>
+            <td>${_lbShortDate(t.date)}</td>
+            <td>${LB_FLAGS[t.station]||''} ${(t.station||'').toUpperCase()}</td>
+            <td>${t.top_pick != null ? t.top_pick+'°C' : '—'}</td>
+            <td class="num">${actualVal}</td>
+            <td class="num">${_lbCents(fillP)}</td>
+            <td class="num">${t.shares||'—'}</td>
+            <td class="num">${_usd(_lbCostNum(t))}</td>
+            <td class="num"><span class="lb-pnl-big ${_lbPnlClass(pnl)}">${pnl!=null?(pnl>=0?'+':'')+_usd(pnl):'—'}</span></td>
+            <td>${_lbStatusBadge(t)}</td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+// ── Auto-Sell ──────────────────────────────────────────────────────────
+function _renderLbAutoSell() {
+  const trades = (_liveBotData?.trades || [])
+    .filter(t => t.sell_order_id || t.status === 'sell_pending' || t.status === 'sell_filled')
+    .sort((a,b) => (b.fill_time||'').localeCompare(a.fill_time||''));
+  document.getElementById('lb-autosell-count').textContent =
+    trades.length ? `${trades.length} sell emri` : 'yok';
+  const body = document.getElementById('lb-autosell-body');
+  if (!trades.length) {
+    body.innerHTML = '<div class="lb-empty">Henüz auto-sell emri yok. Fill olduğunda 99.8¢ SELL limit atılır.</div>';
+    return;
+  }
+  const sellFilled  = trades.filter(t => t.status==='sell_filled').length;
+  const sellPending = trades.filter(t => t.status==='sell_pending').length;
+  const realizedFromSell = trades
+    .filter(t => t.status==='sell_filled')
+    .reduce((a,t) => a + ((Number(t.sell_price||0) - Number(t.fill_price||0)) * Number(t.shares||0)), 0);
+
+  body.innerHTML = `
+    <div class="ap-metric-row" style="margin-bottom:14px">
+      <div class="ap-metric"><div class="ap-metric-lbl">Aktif Sell</div>
+        <div class="ap-metric-val warn">${sellPending}</div></div>
+      <div class="ap-metric"><div class="ap-metric-lbl">Auto-Sold</div>
+        <div class="ap-metric-val good">${sellFilled}</div></div>
+      <div class="ap-metric"><div class="ap-metric-lbl">Sell Realized</div>
+        <div class="ap-metric-val ${realizedFromSell>=0?'good':'bad'}">${(realizedFromSell>=0?'+':'')+_usd(realizedFromSell)}</div></div>
+    </div>
+    <table class="lb-table">
+      <thead><tr>
+        <th>Tarih</th><th>İst.</th><th>Pick</th>
+        <th class="num">Fill</th><th class="num">Sell @</th><th class="num">Shares</th>
+        <th>Durum</th>
+      </tr></thead>
+      <tbody>
+        ${trades.map(t => `
+          <tr>
+            <td>${_lbShortDate(t.date)}</td>
+            <td>${LB_FLAGS[t.station]||''} ${(t.station||'').toUpperCase()}</td>
+            <td>${t.top_pick != null ? t.top_pick+'°C' : '—'}</td>
+            <td class="num">${_lbCents(t.fill_price)}</td>
+            <td class="num">${_lbCents(t.sell_price)}</td>
+            <td class="num">${t.shares||'—'}</td>
+            <td>${_lbStatusBadge(t)}</td>
+          </tr>`).join('')}
+      </tbody>
+    </table>
+    <div class="ap-note">
+      Fill sonrası <b>post_only=True</b> ile 99.8¢ SELL limit atılır (maker fee %0).
+      Piyasa alırsa anında USDC; almazsa Polymarket resolve'da ~$1.00 redeem.
+    </div>
+  `;
+}
+
+// ── İstasyon bazlı özet ────────────────────────────────────────────────
+function _renderLbStations() {
+  const trades = (_liveBotData?.trades || [])
+    .filter(t => ['settled_win','settled_loss','won','lost'].includes(t.status));
+  const byStation = {};
+  trades.forEach(t => {
+    const st = t.station;
+    const agg = byStation[st] = byStation[st] || { n:0, wins:0, pnl:0, cost:0 };
+    agg.n++;
+    agg.pnl  += Number(t.pnl_usdc||0);
+    agg.cost += _lbCostNum(t);
+    if ((t.result||'').toUpperCase() === 'WIN') agg.wins++;
+  });
+  const rows = Object.entries(byStation)
+    .map(([st, a]) => ({
+      st, n: a.n, wins: a.wins,
+      win_rate: a.n ? (a.wins/a.n*100) : null,
+      pnl: a.pnl,
+      roi: a.cost ? (a.pnl/a.cost*100) : null,
+    }))
+    .sort((a,b) => b.pnl - a.pnl);
+
+  document.getElementById('lb-stations-count').textContent =
+    rows.length ? `${rows.length} istasyon` : 'yok';
+  const body = document.getElementById('lb-stations-body');
+  if (!rows.length) {
+    body.innerHTML = '<div class="lb-empty">Henüz kapanmış işlem yok.</div>';
+    return;
+  }
+  body.innerHTML = `
+    <table class="lb-table">
+      <thead><tr>
+        <th>İstasyon</th><th class="num">İşlem</th><th class="num">W</th>
+        <th class="num">Win %</th><th class="num">Net P&amp;L</th><th class="num">ROI</th>
+      </tr></thead>
+      <tbody>
+        ${rows.map(r => `
+          <tr>
+            <td>${LB_FLAGS[r.st]||''} ${r.st.toUpperCase()}
+              <span style="color:var(--text-3);font-size:10px">· ${LB_CITY[r.st]||''}</span></td>
+            <td class="num">${r.n}</td>
+            <td class="num">${r.wins}</td>
+            <td class="num ${r.win_rate!=null && r.win_rate>=50?'lb-pnl-big good':(r.win_rate!=null && r.win_rate<40?'lb-pnl-big bad':'')}">${r.win_rate!=null?_fmt(r.win_rate,0)+'%':'—'}</td>
+            <td class="num"><span class="lb-pnl-big ${_lbPnlClass(r.pnl)}">${(r.pnl>=0?'+':'')+_usd(r.pnl)}</span></td>
+            <td class="num ${_lbPnlClass(r.roi)}">${r.roi!=null?(r.roi>=0?'+':'')+_fmt(r.roi,1)+'%':'—'}</td>
+          </tr>`).join('')}
+      </tbody>
+    </table>
+    <div class="ap-note">
+      ROI = Net P&amp;L / Toplam Maliyet. İstasyon bazlı pause kararları bu tabloya bakılarak alınır.
+    </div>
+  `;
+}
+
+// ── İptal / Stale ──────────────────────────────────────────────────────
+function _renderLbCancelled() {
+  const trades = (_liveBotData?.trades || [])
+    .filter(t => ['cancelled','expired'].includes(t.status))
+    .sort((a,b) => (b.placed_at||'').localeCompare(a.placed_at||''))
+    .slice(0, 30);
+  document.getElementById('lb-cancelled-count').textContent =
+    trades.length ? `son ${trades.length}` : 'yok';
+  const body = document.getElementById('lb-cancelled-body');
+  if (!trades.length) {
+    body.innerHTML = '<div class="lb-empty">İptal edilmiş emir yok.</div>';
+    return;
+  }
+  body.innerHTML = `
+    <table class="lb-table">
+      <thead><tr>
+        <th>Tarih</th><th>İst.</th><th>Pick</th>
+        <th class="num">Limit</th><th class="num">Shares</th>
+        <th>Sebep</th><th>Durum</th>
+      </tr></thead>
+      <tbody>
+        ${trades.map(t => `
+          <tr>
+            <td>${_lbShortDate(t.date)}</td>
+            <td>${LB_FLAGS[t.station]||''} ${(t.station||'').toUpperCase()}</td>
+            <td>${t.top_pick != null ? t.top_pick+'°C' : '—'}</td>
+            <td class="num">${_lbCents(t.limit_price)}</td>
+            <td class="num">${t.shares||'—'}</td>
+            <td style="font-size:11px;color:var(--text-3)">${_escape(t.notes||'—')}</td>
+            <td>${_lbStatusBadge(t)}</td>
+          </tr>`).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+// ── Redeem ─────────────────────────────────────────────────────────────
+function _renderLbRedeem() {
+  const trades = (_liveBotData?.trades || [])
+    .filter(t => t.redeemed || t.redeem_tx)
+    .sort((a,b) => (b.redeemed_at||'').localeCompare(a.redeemed_at||''))
+    .slice(0, 50);
+  document.getElementById('lb-redeem-count').textContent =
+    trades.length ? `${trades.length} redeem` : 'yok';
+  const body = document.getElementById('lb-redeem-body');
+  if (!trades.length) {
+    body.innerHTML = '<div class="lb-empty">Henüz on-chain redeem yok.</div>';
+    return;
+  }
+  const totalReceived = trades.reduce((a,t) => a + Number(t.shares||0), 0);
+  body.innerHTML = `
+    <div class="ap-metric-row" style="margin-bottom:14px">
+      <div class="ap-metric"><div class="ap-metric-lbl">Toplam Redeem</div>
+        <div class="ap-metric-val">${trades.length}</div></div>
+      <div class="ap-metric"><div class="ap-metric-lbl">Alınan (teorik)</div>
+        <div class="ap-metric-val good">${_usd(totalReceived)}</div></div>
+    </div>
+    <table class="lb-table">
+      <thead><tr>
+        <th>Tarih</th><th>İst.</th><th>Pick</th>
+        <th class="num">Shares</th><th>Redeem</th><th>TX</th>
+      </tr></thead>
+      <tbody>
+        ${trades.map(t => {
+          const tx = t.redeem_tx;
+          const txShort = tx ? tx.slice(0, 10) + '…' + tx.slice(-6) : '—';
+          const txLink = tx
+            ? `<a href="https://polygonscan.com/tx/0x${tx.replace(/^0x/,'')}" target="_blank" rel="noopener"><span class="lb-tx">${txShort}</span></a>`
+            : '—';
+          return `<tr>
+            <td>${_lbShortDate(t.date)}</td>
+            <td>${LB_FLAGS[t.station]||''} ${(t.station||'').toUpperCase()}</td>
+            <td>${t.top_pick != null ? t.top_pick+'°C' : '—'}</td>
+            <td class="num">${t.shares||'—'}</td>
+            <td>${_lbDate(t.redeemed_at)}</td>
+            <td>${txLink}</td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+// ── Tüm işlemler ───────────────────────────────────────────────────────
+function _renderLbAll() {
+  const trades = (_liveBotData?.trades || [])
+    .slice()
+    .sort((a,b) => (b.placed_at||'').localeCompare(a.placed_at||''));
+  document.getElementById('lb-all-count').textContent =
+    trades.length ? `${trades.length} toplam` : 'yok';
+  const body = document.getElementById('lb-all-body');
+  if (!trades.length) {
+    body.innerHTML = '<div class="lb-empty">Henüz işlem yok.</div>';
+    return;
+  }
+  body.innerHTML = `
+    <div class="lb-filter">
+      <button class="active" data-f="all">Tümü (${trades.length})</button>
+      <button data-f="open">Açık</button>
+      <button data-f="won">Kazanılan</button>
+      <button data-f="lost">Kayıplar</button>
+      <button data-f="cancel">İptal</button>
+    </div>
+    <table class="lb-table" id="lb-all-table">
+      <thead><tr>
+        <th>Tarih</th><th>İst.</th><th>Pick</th>
+        <th class="num">Giriş</th><th class="num">Shares</th>
+        <th class="num">Maliyet</th><th class="num">P&amp;L</th>
+        <th>Durum</th><th>Açılış</th>
+      </tr></thead>
+      <tbody>
+        ${trades.map(t => {
+          const pnl = t.pnl_usdc;
+          const klass = _lbPosKlass(t);
+          return `<tr data-klass="${klass}">
+            <td>${_lbShortDate(t.date)}</td>
+            <td>${LB_FLAGS[t.station]||''} ${(t.station||'').toUpperCase()}</td>
+            <td>${t.top_pick != null ? t.top_pick+'°C' : '—'}</td>
+            <td class="num">${_lbCents(t.fill_price || t.limit_price)}</td>
+            <td class="num">${t.shares||'—'}</td>
+            <td class="num">${_usd(_lbCostNum(t))}</td>
+            <td class="num"><span class="lb-pnl-big ${_lbPnlClass(pnl)}">${pnl!=null?(pnl>=0?'+':'')+_usd(pnl):'—'}</span></td>
+            <td>${_lbStatusBadge(t)}</td>
+            <td style="font-size:10px;color:var(--text-3)">${_lbDate(t.placed_at)}</td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+  `;
+  // Filter buttons
+  body.querySelectorAll('.lb-filter button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      body.querySelectorAll('.lb-filter button').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const f = btn.dataset.f;
+      body.querySelectorAll('#lb-all-table tbody tr').forEach(tr => {
+        const k = tr.dataset.klass;
+        let show = true;
+        if (f === 'open')   show = ['pending','filled'].includes(k);
+        else if (f === 'won')    show = k === 'won';
+        else if (f === 'lost')   show = k === 'lost';
+        else if (f === 'cancel') show = k === 'cancel';
+        tr.style.display = show ? '' : 'none';
+      });
+    });
+  });
 }
 
 // ── MODAL ──────────────────────────────────────────────────────────────────
