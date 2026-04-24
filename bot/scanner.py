@@ -720,22 +720,39 @@ def scan_date(station: str, target_date: str, trades: list,
     #   MULTI_BUCKET_N=3 → THREE_BUCKET_BUDGET=65¢ toplam limit fiyat
     #   MULTI_BUCKET_N=2 → TWO_BUCKET_BUDGET=45¢
     #
-    # Aday seçimi: ensemble'ın en çok oy alan bucket'larını büyükten küçüğe
-    # sırala. Ana pick'e ±2°C mesafede olanları bütçeye sığacak kadar al.
+    # Faz 10: Market-tabanlı adj seçimi — ensemble count yerine MARKET fiyatına
+    # göre sırala. Yüksek market fiyatı = piyasanın en çok güvendiği komşu bucket.
+    # Avantajlar:
+    #   (a) Ensemble oyu 0 olsa bile market'ta olan ±2°C bucket'ları değerlendirilir
+    #   (b) "Top 2 bucket'a her türlü gir" garantisi — bütçe el verdiği sürece
+    #       en pahalı (= en olası) komşu her zaman eklenir
     # Her komşu bucket için MIN_PRICE (5¢) alt sınırı uygulanır (ana için
     # MIN_MAIN_PRICE=25¢ ayrı eşik, zaten üstte kontrol edildi).
-    if members and MULTI_BUCKET_N >= 2:
+    if MULTI_BUCKET_N >= 2:
         budget = THREE_BUCKET_BUDGET if MULTI_BUCKET_N >= 3 else TWO_BUCKET_BUDGET
         remaining_budget = budget - price  # ana pick'ten sonra kalan bütçe
         added = 0
 
-        # Ensemble içindeki komşu bucket'ları oy sayısına göre sırala
-        # (top_pick zaten alındı, onu atla; ±2°C içinde kal)
-        cand_picks_sorted = [
-            (temp, count)
-            for temp, count in counts.most_common(10)
-            if temp != top_pick and abs(temp - top_pick) <= 2
-        ]
+        # Market bucket'larını fiyat sırasına göre al (yüksekten düşüğe).
+        # Sıralama: 1) market fiyatı yüksek (piyasanın en güvendiği komşu önce)
+        #           2) ensemble oyu yüksek (beraberlik bozucu)
+        _adj_cands: list = []
+        for _b in buckets:
+            _thresh = _b.get("threshold")
+            if _thresh is None:
+                continue
+            _t = round(float(_thresh))
+            if _t == top_pick:
+                continue
+            if abs(_t - top_pick) > 2:
+                continue
+            _bp = float(_b.get("yes_price", 0) or 0)
+            if _bp < MIN_PRICE:
+                continue
+            _ens = counts.get(_t, 0) if members else 0
+            _adj_cands.append((_t, _ens, _bp))
+        _adj_cands.sort(key=lambda x: (-x[2], -x[1]))
+        cand_picks_sorted = [(_t, _e) for _t, _e, _ in _adj_cands]
 
         for cand_temp, cand_count in cand_picks_sorted:
             if added >= MULTI_BUCKET_N - 1:
@@ -766,7 +783,7 @@ def scan_date(station: str, target_date: str, trades: list,
                 if isinstance(c_cond_raw, str) and c_cond_raw.startswith("0x")
                 else str(c_cond_raw)
             )
-            c_pct_ens = round(cand_count / len(members) * 100)
+            c_pct_ens = round(cand_count / len(members) * 100) if members else 0
             c_cost    = round(trade_shares * c_price, 2)
             c_potwin  = round(trade_shares - c_cost, 2)
             c_pct_lbl = round(c_price * 100)
