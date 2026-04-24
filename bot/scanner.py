@@ -117,16 +117,20 @@ MICRO_HEDGE_MIN_SIGNAL  = 55
 
 # ── Faz 9: Strateji geliştirmeleri (backtest 37 trade analizi) ────────────
 #
-# İstasyon whitelist: pozitif ROI'li 6 istasyon (backtest bazlı).
+# İstasyon whitelist: pozitif ROI'li istasyonlar (backtest bazlı).
 # LEMD/LIMC/EFHK/RJTT → 0% win rate, blacklist edildi.
 # LTFM → negatif ROI, whitelist dışı.
+# RKSI → yapısal -2.3°C soğuk bias (Incheon adası grid sorunu), skip kalıcı.
+# RJTT → backtest %37.7 wr (ilkbahar), yaz verisi beklenecek (Haziran-Ağustos).
+# VHHH → Faz 11 backtest: 47.5% wr, MAE 0.59°C, EV +19.5% — whitelist'e alındı.
 STATION_WHITELIST: frozenset = frozenset({
-    "eglc",  # London   — 4W/0L  %100 wr   roi+241%
-    "eham",  # Amsterdam — 2W/2L  %50  wr   roi+115%
-    "epwa",  # Warsaw   — 1W/1L  %50  wr   roi+41%
-    "eddm",  # Munich   — 2W/3L  %40  wr   roi+45%
-    "ltac",  # Ankara   — 2W/4L  %33  wr   roi+32%
-    "lfpg",  # Paris    — 1W/2L  %33  wr   roi+64%
+    "eglc",  # London        — live:  4W/0L  %100  roi+241%
+    "eham",  # Amsterdam     — live:  2W/2L  %50   roi+115%
+    "epwa",  # Warsaw        — live:  1W/1L  %50   roi+41%
+    "eddm",  # Munich        — live:  2W/3L  %40   roi+45%
+    "ltac",  # Ankara        — live:  2W/4L  %33   roi+32%  (skill pause aktif)
+    "lfpg",  # Paris         — live:  1W/2L  %33   roi+64%  (skill pause aktif)
+    "vhhh",  # HK Intl       — bt61d: 47.5%  MAE=0.59°C  EV=+19.5%  (Faz 11)
 })
 
 # Ana bucket için minimum fiyat (backtest: <15¢ → %0 win rate, %−100 ROI).

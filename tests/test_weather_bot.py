@@ -4609,19 +4609,18 @@ test("Asya model config: RKSI ve VHHH koordinatları scanner'da doğru",
      test_asian_coords_in_scanner)
 
 
-def test_asian_stations_not_in_whitelist():
-    """RKSI ve VHHH backtest tamamlanana dek whitelist'te olmamalı."""
+def test_asian_stations_whitelist():
+    """Faz 11 backtest sonrası: vhhh eklendi, rksi/rjtt dışarıda."""
     s = _import_scanner_module()
+    ok("vhhh" in s.STATION_WHITELIST,
+       "vhhh backtest sonrası whitelist'e eklendi (47.5% wr, MAE 0.59°C)")
     ok("rksi" not in s.STATION_WHITELIST,
-       "rksi whitelist'te olmamalı (backtest tamamlanmadı)")
-    ok("vhhh" not in s.STATION_WHITELIST,
-       "vhhh whitelist'te olmamalı (backtest tamamlanmadı)")
-    # rjtt zaten whitelist dışındaydı — onu da kontrol et
+       "rksi yapısal -2.27°C bias nedeniyle kalıcı skip")
     ok("rjtt" not in s.STATION_WHITELIST,
-       "rjtt whitelist'te olmamalı (backtest gerekli)")
+       "rjtt yaz verisi bekleniyor (Haziran-Ağustos)")
 
-test("Asya model config: rksi/vhhh/rjtt whitelist dışında (güvenli)",
-     test_asian_stations_not_in_whitelist)
+test("Asya model config: vhhh whitelist'te, rksi/rjtt dışında (Faz 11)",
+     test_asian_stations_whitelist)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
