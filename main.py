@@ -124,10 +124,11 @@ STATION_MODEL_CONFIG: dict = {
     # ÖNEMLİ: Hedef koordinat = Incheon havalimanı (37.4602°N, 126.4407°E),
     # Seoul şehir merkezi değil. Uçuş alanı şehirden ~2°C daha soğuk → piyasa
     # modelleri şehir merkezini fiyatlıyor, bizim avantajımız.
+    # NOT: KMA modelleri /v1/forecast?models=kma_* üzerinden çalışır (/v1/kma yok).
     "rksi": {
         "forecast": {
-            "kma_ldps": ("https://api.open-meteo.com/v1/kma",     "kma_ldps"),
-            "kma_gdps": ("https://api.open-meteo.com/v1/kma",     "kma_gdps"),
+            "kma_ldps": ("https://api.open-meteo.com/v1/forecast", "kma_ldps"),
+            "kma_gdps": ("https://api.open-meteo.com/v1/forecast", "kma_gdps"),
             "ecmwf":    ("https://api.open-meteo.com/v1/forecast", "ecmwf_ifs025"),
             "aifs":     ("https://api.open-meteo.com/v1/forecast", "ecmwf_aifs025_single"),
         },
