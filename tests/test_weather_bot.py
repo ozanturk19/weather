@@ -3345,29 +3345,29 @@ def test_phase5_constants_present():
        f"MID_RANGE_SKIP_HIGH=80 beklenir: {s.MID_RANGE_SKIP_HIGH}")
     eq(s.MIN_SIGNAL_SCORE, 55,
        f"MIN_SIGNAL_SCORE=55 beklenir: {s.MIN_SIGNAL_SCORE}")
-    ok(isinstance(s.STATION_SKILL_PAUSE, set),
-       "STATION_SKILL_PAUSE set olmalı")
-    ok({"lfpg", "ltac", "limc"}.issubset(s.STATION_SKILL_PAUSE),
-       f"Skill pause en az bu 3 istasyonu içermeli: {s.STATION_SKILL_PAUSE}")
-    # Tek karlı istasyon (efhk) pause'de OLMAMALI
-    ok("efhk" not in s.STATION_SKILL_PAUSE,
-       "efhk (tek karlı, skill=+0.28) pause'de olmamalı")
+    ok(isinstance(s.STATION_SKILL_PAUSE, frozenset),
+       "STATION_SKILL_PAUSE frozenset olmalı")
+    ok(len(s.STATION_SKILL_PAUSE) == 0,
+       f"Skill pause boş olmalı (live ROI analizi sonrası unpause): {s.STATION_SKILL_PAUSE}")
+    # circuit breaker altyapısı hâlâ aktif (SQLite override)
+    ok(callable(s.should_pause_station),
+       "should_pause_station fonksiyonu hâlâ var")
 
 test("Faz 5 sabitleri yerinde (MID_RANGE, SKILL_PAUSE, MIN_SIGNAL_SCORE)",
      test_phase5_constants_present)
 
 
 def test_should_pause_station():
-    """Skill pause'deki istasyon True, dışarıdaki False."""
+    """STATION_SKILL_PAUSE boş — tüm istasyonlar False (SQLite override hariç)."""
     s = _import_scanner_module()
-    eq(s.should_pause_station("lfpg"), True,  "lfpg pause olmalı")
-    eq(s.should_pause_station("ltac"), True,  "ltac pause olmalı")
-    eq(s.should_pause_station("limc"), True,  "limc pause olmalı")
-    eq(s.should_pause_station("efhk"), False, "efhk (karlı) pause olmamalı")
-    eq(s.should_pause_station("ltfm"), False, "ltfm (nötr) pause olmamalı")
+    eq(s.should_pause_station("lfpg"), False, "lfpg unpause edildi (live +64% ROI)")
+    eq(s.should_pause_station("ltac"), False, "ltac unpause edildi (live +15% ROI)")
+    eq(s.should_pause_station("limc"), False, "limc static pause kaldırıldı (whitelist dışı zaten)")
+    eq(s.should_pause_station("efhk"), False, "efhk zaten pause değildi")
+    eq(s.should_pause_station("ltfm"), False, "ltfm pause değil")
     eq(s.should_pause_station("unknown"), False, "bilinmeyen istasyon False")
 
-test("should_pause_station: set üyeliği",
+test("should_pause_station: boş pause set — tümü False",
      test_should_pause_station)
 
 
@@ -3408,27 +3408,27 @@ test("is_weak_signal: 55 eşiği",
      test_is_weak_signal_threshold)
 
 
-def test_scan_date_station_pause_early_return():
-    """Pause'deki istasyon için scan_date early-return — ağ çağrısı yapılmaz."""
+def test_scan_date_nonwhitelist_early_return():
+    """Whitelist dışı istasyon için scan_date early-return — ağ çağrısı yapılmaz."""
     s = _import_scanner_module()
-    # httpx.get patch'le — hiç çağrılmamalı çünkü early return
+    # ltfm whitelist dışı (negatif ROI, -44%) — sessizce None döner
     with patch("bot.scanner.httpx.get") as mock_get:
-        result = s.scan_date("lfpg", "2026-05-01", trades=[])
-    eq(result, None, "pause'de istasyon → None")
+        result = s.scan_date("ltfm", "2026-05-01", trades=[])
+    eq(result, None, "whitelist dışı istasyon → None")
     eq(mock_get.called, False,
-       "pause'de istasyon için httpx hiç çağrılmamalı (erken çık)")
+       "whitelist dışı istasyon için httpx hiç çağrılmamalı (erken çık)")
 
-test("scan_date: pause istasyon için ağ çağrısı yapmaz",
-     test_scan_date_station_pause_early_return)
+test("scan_date: whitelist dışı istasyon ağ çağrısı yapmaz",
+     test_scan_date_nonwhitelist_early_return)
 
 
 def test_scan_date_non_pause_station_proceeds():
     """Pause olmayan whitelist istasyon için akış devam eder (ilk httpx çağrısı yapılır)."""
     s = _import_scanner_module()
-    # STATION_WHITELIST ∩ STATION_SKILL_PAUSE dışından al (frozenset hash order deterministik değil)
-    # ltac/lfpg whitelist'te ama paused → erken çıkar → httpx çağrılmaz → test yanlış başarısız
+    # STATION_SKILL_PAUSE boş → tüm whitelist istasyonları aktif
+    # sorted() → deterministik seçim (eddm/eglc/eham/epwa/lfpg/ltac/...)
     non_paused = s.STATION_WHITELIST - s.STATION_SKILL_PAUSE
-    whitelist_station = next(iter(sorted(non_paused)))  # sorted → deterministik (eddm/eglc/eham/epwa)
+    whitelist_station = next(iter(sorted(non_paused)))  # örn. eddm
     # İlk httpx.get'e (weather API) hata fırlat — downstream'de patlamasın
     with patch("bot.scanner.httpx.get",
                side_effect=Exception("weather api down")) as mock_get:

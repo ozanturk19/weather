@@ -99,9 +99,12 @@ STATION_MAX_PRICE: dict[str, float] = {
 MID_RANGE_SKIP_LOW  = 50   # mode_pct bu %'den itibaren skip
 MID_RANGE_SKIP_HIGH = 80   # bu %'ye kadar skip (80+ çok az örnek, belirsiz)
 
-# İstasyon-bazlı skill pause (90g skill < -0.7, n ≥ 10)
-# lfpg (-1.96), ltac (-1.71), limc (-0.70). efhk (+0.28) tek karlı istasyon.
-STATION_SKILL_PAUSE = {"lfpg", "ltac", "limc"}
+# İstasyon-bazlı skill pause — live ROI analizi sonrası güncellendi (2026-04-24):
+# lfpg live: 1W/2L +64% ROI → unpause (eski backtest single-bucket bazlıydı)
+# ltac live: 2W/5L +15% ROI → unpause (pozitif ROI, kullanıcı onayı)
+# limc: 0W/4L -100% ROI → whitelist dışı zaten; altyapı temizlendi
+# Set boş — circuit breaker SQLite override (should_pause_station) hâlâ aktif.
+STATION_SKILL_PAUSE: frozenset = frozenset()
 
 # Sinyal skoru alt sınırı — "orta" derecenin alt kenarı (signal_score.py)
 # "Zayıf" sinyalleri (<50) gate'te düşür.
