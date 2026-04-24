@@ -2410,8 +2410,9 @@ def test_main_records_model_forecasts():
        "main.py per-model forecast kaydetmiyor")
     ok("compute_dynamic_weights" in src,
        "main.py dinamik ağırlık kullanmıyor")
-    ok("weights=dyn_weights" in src,
-       "blend_day'e weights=dyn_weights geçilmiyor")
+    # Faz 11: effective_weights = dyn_weights or _station_weights (Asya desteği)
+    ok("effective_weights" in src,
+       "blend_day'e effective_weights geçilmiyor (dyn_weights veya station-specific)")
 
 test("main.py: /api/weather dinamik ağırlık + per-model kaydı",
      test_main_records_model_forecasts)
@@ -4489,6 +4490,138 @@ def test_trend_bias_constants_exist():
     eq(s.TREND_PRICE_BONUS, 0.03, "TREND_PRICE_BONUS = 0.03")
 
 test("trend bias: sabitler scanner'da mevcut (0.30 / 0.03)", test_trend_bias_constants_exist)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+print("\n" + "═"*62)
+print(" TEST 40: Faz 11 — Asya İstasyon Model Konfigürasyonu")
+print("═"*62)
+
+def _import_main_module():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "main_mod",
+        Path(__file__).resolve().parent.parent / "main.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    # FastAPI app nesnesini başlatmadan sadece modülü yükle
+    import unittest.mock as _um
+    with _um.patch("fastapi.FastAPI"), _um.patch("uvicorn.run", side_effect=SystemExit):
+        try:
+            spec.loader.exec_module(mod)
+        except (SystemExit, Exception):
+            pass
+    return mod
+
+def test_station_model_config_exists():
+    """STATION_MODEL_CONFIG rjtt, rksi, vhhh için tanımlı."""
+    main_path = Path(__file__).resolve().parent.parent / "main.py"
+    src = main_path.read_text(encoding="utf-8")
+    ok("STATION_MODEL_CONFIG" in src, "STATION_MODEL_CONFIG main.py'de mevcut")
+    for st in ("rjtt", "rksi", "vhhh"):
+        ok(f'"{st}"' in src, f"STATION_MODEL_CONFIG'ta {st} tanımı var")
+
+test("Asya model config: STATION_MODEL_CONFIG rjtt/rksi/vhhh tanımlı",
+     test_station_model_config_exists)
+
+
+def test_rjtt_uses_jma_not_icon():
+    """RJTT config: JMA MSM/GSM var, ICON/UKMO/meteofrance YOK."""
+    main_path = Path(__file__).resolve().parent.parent / "main.py"
+    src = main_path.read_text(encoding="utf-8")
+    # STATION_MODEL_CONFIG başlangıcından bul (STATIONS dict'indeki "rjtt" değil)
+    cfg_start = src.find("STATION_MODEL_CONFIG: dict = {")
+    ok(cfg_start > 0, "STATION_MODEL_CONFIG: dict = { bulunamadı")
+    cfg_block = src[cfg_start:]
+    # rjtt bloğunu config içinde bul
+    idx_rjtt = cfg_block.find('"rjtt": {')
+    idx_rksi = cfg_block.find('"rksi": {', idx_rjtt)
+    rjtt_block = cfg_block[idx_rjtt:idx_rksi]
+    ok("jma_msm" in rjtt_block, "rjtt config'te jma_msm modeli var")
+    ok("jma_gsm" in rjtt_block, "rjtt config'te jma_gsm modeli var")
+    ok("ecmwf_ifs025" in rjtt_block, "rjtt config'te ecmwf_ifs025 var")
+    ok("icon_seamless" not in rjtt_block, "rjtt config'te icon_seamless YOK")
+    ok("ukmo_seamless" not in rjtt_block, "rjtt config'te ukmo_seamless YOK")
+    ok("meteofrance" not in rjtt_block, "rjtt config'te meteofrance YOK")
+
+test("Asya model config: rjtt JMA kullanır, ICON/UKMO/MeteoFrance yok",
+     test_rjtt_uses_jma_not_icon)
+
+
+def test_rksi_uses_kma():
+    """RKSI config: KMA LDPS/GDPS var (Seoul Incheon için en ince model)."""
+    main_path = Path(__file__).resolve().parent.parent / "main.py"
+    src = main_path.read_text(encoding="utf-8")
+    cfg_start = src.find("STATION_MODEL_CONFIG: dict = {")
+    cfg_block = src[cfg_start:]
+    idx_rksi = cfg_block.find('"rksi": {')
+    idx_vhhh = cfg_block.find('"vhhh": {', idx_rksi)
+    rksi_block = cfg_block[idx_rksi:idx_vhhh]
+    ok("kma_ldps" in rksi_block, "rksi config'te kma_ldps var (1.5km)")
+    ok("kma_gdps" in rksi_block, "rksi config'te kma_gdps var")
+    ok("icon_seamless" not in rksi_block, "rksi config'te icon_seamless YOK")
+
+test("Asya model config: rksi KMA LDPS kullanır",
+     test_rksi_uses_kma)
+
+
+def test_european_stations_unaffected():
+    """Avrupa istasyonları STATION_MODEL_CONFIG'ta YOK → eski kod path'i değişmez."""
+    main_path = Path(__file__).resolve().parent.parent / "main.py"
+    src = main_path.read_text(encoding="utf-8")
+    # STATION_MODEL_CONFIG dict tanımını bul
+    idx_start = src.find("STATION_MODEL_CONFIG: dict = {")
+    idx_end   = src.find("\n}", idx_start + 1)
+    # Bir sonraki } bulmak için iç içe geçme sayısını takip et
+    depth = 0
+    for i, ch in enumerate(src[idx_start:], start=idx_start):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                idx_end = i + 1
+                break
+    config_block = src[idx_start:idx_end]
+    for eu_st in ("eglc", "eham", "epwa", "eddm", "lfpg"):
+        ok(f'"{eu_st}"' not in config_block,
+           f"Avrupa istasyonu {eu_st} STATION_MODEL_CONFIG'ta olmamalı")
+
+test("Asya model config: Avrupa istasyonları config'te yok (izolasyon)",
+     test_european_stations_unaffected)
+
+
+def test_asian_coords_in_scanner():
+    """scanner.py RKSI ve VHHH koordinatlarına sahip."""
+    s = _import_scanner_module()
+    ok("rksi" in s.STATION_COORDS, "scanner RKSI koordinatı var")
+    ok("vhhh" in s.STATION_COORDS, "scanner VHHH koordinatı var")
+    # RKSI = Incheon havalimanı (~37.46°N, ~126.44°E)
+    rksi_lat, rksi_lon = s.STATION_COORDS["rksi"]
+    ok(37.4 < rksi_lat < 37.5, f"RKSI lat doğru aralıkta: {rksi_lat}")
+    ok(126.3 < rksi_lon < 126.6, f"RKSI lon doğru aralıkta: {rksi_lon}")
+    # VHHH = HK Intl (~22.31°N, ~113.92°E)
+    vhhh_lat, vhhh_lon = s.STATION_COORDS["vhhh"]
+    ok(22.1 < vhhh_lat < 22.5, f"VHHH lat doğru aralıkta: {vhhh_lat}")
+    ok(113.7 < vhhh_lon < 114.1, f"VHHH lon doğru aralıkta: {vhhh_lon}")
+
+test("Asya model config: RKSI ve VHHH koordinatları scanner'da doğru",
+     test_asian_coords_in_scanner)
+
+
+def test_asian_stations_not_in_whitelist():
+    """RKSI ve VHHH backtest tamamlanana dek whitelist'te olmamalı."""
+    s = _import_scanner_module()
+    ok("rksi" not in s.STATION_WHITELIST,
+       "rksi whitelist'te olmamalı (backtest tamamlanmadı)")
+    ok("vhhh" not in s.STATION_WHITELIST,
+       "vhhh whitelist'te olmamalı (backtest tamamlanmadı)")
+    # rjtt zaten whitelist dışındaydı — onu da kontrol et
+    ok("rjtt" not in s.STATION_WHITELIST,
+       "rjtt whitelist'te olmamalı (backtest gerekli)")
+
+test("Asya model config: rksi/vhhh/rjtt whitelist dışında (güvenli)",
+     test_asian_stations_not_in_whitelist)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

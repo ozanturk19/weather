@@ -52,8 +52,11 @@ STATIONS = {
     "eddm": {"lat": 48.354, "lon": 11.786, "tz": "Europe/Berlin",      "label": "EDDM (Münih)",              "pm_query": "Munich",    "settlement": "wu"},
     "epwa": {"lat": 52.166, "lon": 20.967, "tz": "Europe/Warsaw",      "label": "EPWA (Varşova Chopin)",     "pm_query": "Warsaw",    "settlement": "wu"},
     "efhk": {"lat": 60.317, "lon": 24.963, "tz": "Europe/Helsinki",    "label": "EFHK (Helsinki Vantaa)",    "pm_query": "Helsinki",  "settlement": "wu"},
-    "omdb": {"lat": 25.253, "lon": 55.364, "tz": "Asia/Dubai",         "label": "OMDB (Dubai Intl)",          "pm_query": "Dubai",     "settlement": "wu"},
-    "rjtt": {"lat": 35.552, "lon": 139.780,"tz": "Asia/Tokyo",         "label": "RJTT (Tokyo Haneda)",        "pm_query": "Tokyo",     "settlement": "wu"},
+    "omdb": {"lat": 25.253,  "lon":  55.364,  "tz": "Asia/Dubai",         "label": "OMDB (Dubai Intl)",          "pm_query": "Dubai",       "settlement": "wu"},
+    "rjtt": {"lat": 35.5494, "lon": 139.7798,"tz": "Asia/Tokyo",        "label": "RJTT (Tokyo Haneda)",        "pm_query": "Tokyo",       "settlement": "wu"},
+    # Asya Faz 11 — JMA/KMA modelleri ile (STATION_MODEL_CONFIG'a bakınız)
+    "rksi": {"lat": 37.4602, "lon": 126.4407,"tz": "Asia/Seoul",        "label": "RKSI (Seoul Incheon)",       "pm_query": "Seoul",       "settlement": "wu"},
+    "vhhh": {"lat": 22.3080, "lon": 113.9185,"tz": "Asia/Hong_Kong",    "label": "VHHH (HK Intl)",             "pm_query": "Hong Kong",   "settlement": "wu"},
 }
 
 # Her model için Open-Meteo model adı
@@ -85,6 +88,78 @@ MODEL_WEIGHTS = {
     "ukmo":        0.5,
     "meteofrance": 0.9,
     "aifs":        1.6,
+}
+
+# ── İstasyon-bazlı Model Konfigürasyonu (Asya) ─────────────────────────────
+# Avrupa istasyonları (eglc, eham, epwa …) bu dict'te YOK → mevcut kod path'i
+# aynen devam eder. Asya istasyonları kendi endpoint + model + ağırlık kümelerini
+# kullanır; Avrupa stack'i (ICON, UKMO, MeteoFrance) bunlara uygulanmaz.
+#
+# forecast.{model}: (open-meteo-base-url, open-meteo-model-id)
+# ensemble.{model}: open-meteo ensemble model id
+# weights.{model}:  başlangıç blend ağırlığı (dinamik ağırlık DB'ye yazılana kadar)
+STATION_MODEL_CONFIG: dict = {
+    # Tokyo Haneda (RJTT) — JMA MSM 5 km bölgesel model + ECMWF/AIFS global
+    "rjtt": {
+        "forecast": {
+            "jma_msm": ("https://api.open-meteo.com/v1/jma",     "jma_msm"),
+            "jma_gsm": ("https://api.open-meteo.com/v1/jma",     "jma_gsm"),
+            "ecmwf":   ("https://api.open-meteo.com/v1/forecast", "ecmwf_ifs025"),
+            "aifs":    ("https://api.open-meteo.com/v1/forecast", "ecmwf_aifs025_single"),
+            "cma":     ("https://api.open-meteo.com/v1/cma",     "cma_grapes_global"),
+        },
+        "ensemble": {
+            "ecmwf": "ecmwf_ifs025",
+            "aifs":  "ecmwf_aifs025",
+        },
+        "weights": {
+            "jma_msm": 2.5,   # Japonya için en iyi bölgesel model (5 km, 8×/gün)
+            "jma_gsm": 1.0,   # JMA global — orta/uzun vade
+            "ecmwf":   1.5,
+            "aifs":    1.6,
+            "cma":     0.8,
+        },
+    },
+    # Seoul Incheon (RKSI) — KMA LDPS 1.5 km + ECMWF/AIFS
+    # ÖNEMLİ: Hedef koordinat = Incheon havalimanı (37.4602°N, 126.4407°E),
+    # Seoul şehir merkezi değil. Uçuş alanı şehirden ~2°C daha soğuk → piyasa
+    # modelleri şehir merkezini fiyatlıyor, bizim avantajımız.
+    "rksi": {
+        "forecast": {
+            "kma_ldps": ("https://api.open-meteo.com/v1/kma",     "kma_ldps"),
+            "kma_gdps": ("https://api.open-meteo.com/v1/kma",     "kma_gdps"),
+            "ecmwf":    ("https://api.open-meteo.com/v1/forecast", "ecmwf_ifs025"),
+            "aifs":     ("https://api.open-meteo.com/v1/forecast", "ecmwf_aifs025_single"),
+        },
+        "ensemble": {
+            "ecmwf": "ecmwf_ifs025",
+            "aifs":  "ecmwf_aifs025",
+        },
+        "weights": {
+            "kma_ldps": 2.5,  # 1.5 km çözünürlük — open-meteo'daki en ince Asya modeli
+            "kma_gdps": 1.0,
+            "ecmwf":    1.5,
+            "aifs":     1.6,
+        },
+    },
+    # Hong Kong Intl (VHHH) — ECMWF/AIFS + GFS (bölgesel model yok)
+    # Not: Lantau adası konumu → Kowloon'dan 1–3°C daha serin (deniz meltemi)
+    "vhhh": {
+        "forecast": {
+            "ecmwf": ("https://api.open-meteo.com/v1/forecast", "ecmwf_ifs025"),
+            "aifs":  ("https://api.open-meteo.com/v1/forecast", "ecmwf_aifs025_single"),
+            "gfs":   ("https://api.open-meteo.com/v1/forecast", "gfs_seamless"),
+        },
+        "ensemble": {
+            "ecmwf": "ecmwf_ifs025",
+            "aifs":  "ecmwf_aifs025",
+        },
+        "weights": {
+            "ecmwf": 2.0,
+            "aifs":  2.0,
+            "gfs":   1.0,
+        },
+    },
 }
 
 # Horizon bazlı belirsizlik eşikleri (ağırlıklı std için)
@@ -385,47 +460,67 @@ async def get_weather(station: str, refresh: bool = False):
         return cached["data"]
 
     s = STATIONS[station]
-    base = (
-        f"https://api.open-meteo.com/v1/forecast"
+
+    # ── İstasyon-bazlı model seçimi ─────────────────────────────────────────
+    # Asya istasyonları (rjtt, rksi, vhhh) → STATION_MODEL_CONFIG'daki model seti.
+    # Avrupa istasyonları → global MODELS dict'i (değişmez, eski davranış korunur).
+    if station in STATION_MODEL_CONFIG:
+        _cfg = STATION_MODEL_CONFIG[station]
+        # {model_name: (endpoint, model_id)}
+        _station_models: dict = _cfg["forecast"]
+        _station_weights: dict | None = _cfg.get("weights")
+    else:
+        _station_models = {
+            name: ("https://api.open-meteo.com/v1/forecast", mid)
+            for name, mid in MODELS.items()
+        }
+        _station_weights = None
+
+    _query = (
         f"?latitude={s['lat']}&longitude={s['lon']}"
         f"&hourly=temperature_2m,precipitation_probability,wind_speed_10m"
         f"&timezone={s['tz']}&forecast_days=3"
     )
 
-    # Semaphore ile korunan model çekme — eşzamanlı Open-Meteo isteklerini sınırlar
-    async def fetch_model(client: httpx.AsyncClient, model_id: str):
+    # Semaphore ile korunan model çekme — her model kendi endpoint'ini kullanır
+    async def fetch_model(client: httpx.AsyncClient, endpoint: str, model_id: str):
         async with _openmeteo_sem:
             try:
-                return await client.get(base + f"&models={model_id}")
+                return await client.get(f"{endpoint}{_query}&models={model_id}")
             except Exception:
                 return None
 
     model_days: dict = {}
+    _tasks = [
+        (mn, ep, mid) for mn, (ep, mid) in _station_models.items()
+    ]
 
     async with httpx.AsyncClient(timeout=25) as client:
         responses = await asyncio.gather(
-            *[fetch_model(client, model_id) for model_id in MODELS.values()],
+            *[fetch_model(client, ep, mid) for _, ep, mid in _tasks],
             return_exceptions=True,
         )
 
         # Her model için parse et; başarısız olanları kaydet
         failed_models = []
-        for model_name, model_id, resp in zip(MODELS.keys(), MODELS.values(), responses):
+        for (model_name, endpoint, model_id), resp in zip(_tasks, responses):
             if isinstance(resp, Exception) or resp is None or not resp.is_success:
-                failed_models.append((model_name, model_id))
+                failed_models.append((model_name, endpoint, model_id))
                 continue
             try:
                 model_days[model_name] = parse_hourly(resp.json())
             except Exception:
-                failed_models.append((model_name, model_id))
+                failed_models.append((model_name, endpoint, model_id))
 
         # Başarısız modelleri 1s bekleyip tek tek retry (429 sonrası)
         if failed_models:
             await asyncio.sleep(1.0)
-            for model_name, model_id in failed_models:
+            for model_name, endpoint, model_id in failed_models:
                 async with _openmeteo_sem:
                     try:
-                        r = await client.get(base + f"&models={model_id}", timeout=30)
+                        r = await client.get(
+                            f"{endpoint}{_query}&models={model_id}", timeout=30
+                        )
                         if r.is_success:
                             model_days[model_name] = parse_hourly(r.json())
                     except Exception:
@@ -454,9 +549,13 @@ async def get_weather(station: str, refresh: bool = False):
         except Exception:
             pass
 
+        # Asya istasyonları: dinamik ağırlık yoksa (yeni istasyon) station-specific
+        # başlangıç ağırlıklarını kullan; Avrupa için _station_weights zaten None.
+        effective_weights = dyn_weights or _station_weights
+
         days_result[date] = {
             "models": per_model,
-            "blend":  blend_day(per_model, horizon=horizon, weights=dyn_weights),
+            "blend":  blend_day(per_model, horizon=horizon, weights=effective_weights),
         }
 
         # Faz 4: her modelin max_temp'ini DB'ye kaydet (rolling RMSE kaynağı)
@@ -528,15 +627,20 @@ async def get_ensemble(station: str):
     s = STATIONS[station]
 
     # Desteklenen ensemble modelleri (model_adı: open-meteo-id)
-    # ICON ENS:  40 üye — bölgesel yüksek çözünürlük
-    # ECMWF IFS: 50 üye — endüstri standardı, küresel
-    # ECMWF AIFS: 50 üye — AI tabanlı ECMWF (2025 benchmark IFS'yi geçti)
-    # Not: ensemble API'de AIFS ID'si "ecmwf_aifs025" (alt çizgi YOK — dokümanda yanlış yazılmış).
-    ENSEMBLE_MODELS = {
-        "icon":  "icon_seamless",
-        "ecmwf": "ecmwf_ifs025",
-        "aifs":  "ecmwf_aifs025",
-    }
+    # Asya istasyonları → STATION_MODEL_CONFIG'daki ensemble seti (ICON yok).
+    # Avrupa istasyonları → ICON (40 üye) + ECMWF (50) + AIFS (50) = 140 üye.
+    # Not: ensemble API'de AIFS ID'si "ecmwf_aifs025" (alt çizgi YOK).
+    if station in STATION_MODEL_CONFIG:
+        ENSEMBLE_MODELS = dict(STATION_MODEL_CONFIG[station].get("ensemble", {
+            "ecmwf": "ecmwf_ifs025",
+            "aifs":  "ecmwf_aifs025",
+        }))
+    else:
+        ENSEMBLE_MODELS = {
+            "icon":  "icon_seamless",
+            "ecmwf": "ecmwf_ifs025",
+            "aifs":  "ecmwf_aifs025",
+        }
     # Faz 7: Beklenen üye sayıları (ctrl dahil). Çok düşerse sessiz degradation
     # var demektir → log'da uyar, dashboard'da izlenebilir.
     EXPECTED_MEMBERS = {

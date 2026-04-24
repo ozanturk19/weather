@@ -25,13 +25,15 @@ WEATHER_API   = "http://localhost:8001"
 TRADES_FILE   = Path(__file__).parent / "paper_trades.json"
 
 STATIONS = ["eglc", "ltac", "limc", "ltfm", "lemd", "lfpg",
-            "eham", "eddm", "epwa", "efhk", "omdb", "rjtt"]
+            "eham", "eddm", "epwa", "efhk", "omdb", "rjtt",
+            "rksi", "vhhh"]   # Asya Faz 11 (whitelist dışı — backtest tamamlanana dek)
 
 STATION_LABELS = {
     "eglc": "Londra   ", "lfpg": "Paris    ", "limc": "Milano   ",
     "lemd": "Madrid   ", "ltfm": "İstanbul ", "ltac": "Ankara   ",
     "eham": "Amsterdam", "eddm": "Münih    ", "epwa": "Varşova  ",
     "efhk": "Helsinki ", "omdb": "Dubai    ", "rjtt": "Tokyo    ",
+    "rksi": "Seoul    ", "vhhh": "HongKong ",
 }
 
 # İstasyon koordinatları (Open-Meteo settlement için)
@@ -47,8 +49,10 @@ STATION_COORDS: dict = {
     "eddm": (48.364,  11.786),
     "epwa": (52.166,  20.967),
     "efhk": (60.317,  24.963),
-    "omdb": (25.253,  55.364),
-    "rjtt": (35.552, 139.780),
+    "omdb": (25.253,   55.364),
+    "rjtt": (35.5494, 139.7798),  # Haneda — hassas koordinat (sahil kıyısı)
+    "rksi": (37.4602, 126.4407),  # Incheon — şehir merkezinden ~2°C soğuk
+    "vhhh": (22.3080, 113.9185),  # Chek Lap Kok (Lantau) — Kowloon'dan 1–3°C soğuk
 }
 
 # Risk parametreleri
