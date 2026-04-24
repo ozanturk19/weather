@@ -795,7 +795,8 @@ def scanner_dedup_check(station, target_date, top_pick, trades, live_trades, liv
     if live_mode:
         has_live = any(
             t["station"] == station and t["date"] == target_date
-            and t["status"] in ("pending_fill", "filled", "settled_win", "settled_loss")
+            and t["status"] in ("pending_fill", "filled", "sell_pending",
+                                "cancelled", "settled_win", "settled_loss")
             for t in live_trades
         )
         if not has_live:
@@ -855,6 +856,15 @@ test("retry_live: paper VAR, live SETTLED_WIN var → None (skip)", lambda:
         "eglc", "2026-04-22", 15,
         trades=[make_paper("eglc", "2026-04-22", 15)],
         live_trades=[make_live("eglc", "2026-04-22", "settled_win")],
+        live_mode=True,
+    ), None)
+)
+
+test("retry_live: paper VAR, live SELL_PENDING var → None (duplicate bug fix)", lambda:
+    eq(scanner_dedup_check(
+        "eglc", "2026-04-22", 15,
+        trades=[make_paper("eglc", "2026-04-22", 15)],
+        live_trades=[make_live("eglc", "2026-04-22", "sell_pending")],
         live_mode=True,
     ), None)
 )

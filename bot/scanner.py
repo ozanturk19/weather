@@ -530,8 +530,8 @@ def scan_date(station: str, target_date: str, trades: list,
                 live_trades = trader.load_live_trades()
                 has_live = any(
                     t["station"] == station and t["date"] == target_date
-                    and t["status"] in ("pending_fill", "filled",
-                                        "settled_win", "settled_loss")
+                    and t["status"] in ("pending_fill", "filled", "sell_pending",
+                                        "cancelled", "settled_win", "settled_loss")
                     for t in live_trades
                 )
                 if not has_live:
