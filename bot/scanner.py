@@ -111,6 +111,40 @@ MIN_SIGNAL_SCORE = 55
 MICRO_HEDGE_SIZE_RATIO  = 0.40
 MICRO_HEDGE_MIN_SIGNAL  = 55
 
+# ── Faz 9: Strateji geliştirmeleri (backtest 37 trade analizi) ────────────
+#
+# İstasyon whitelist: pozitif ROI'li 6 istasyon (backtest bazlı).
+# LEMD/LIMC/EFHK/RJTT → 0% win rate, blacklist edildi.
+# LTFM → negatif ROI, whitelist dışı.
+STATION_WHITELIST: frozenset = frozenset({
+    "eglc",  # London   — 4W/0L  %100 wr   roi+241%
+    "eham",  # Amsterdam — 2W/2L  %50  wr   roi+115%
+    "epwa",  # Warsaw   — 1W/1L  %50  wr   roi+41%
+    "eddm",  # Munich   — 2W/3L  %40  wr   roi+45%
+    "ltac",  # Ankara   — 2W/4L  %33  wr   roi+32%
+    "lfpg",  # Paris    — 1W/2L  %33  wr   roi+64%
+})
+
+# Ana bucket için minimum fiyat (backtest: <15¢ → %0 win rate, %−100 ROI).
+# Micro-hedge / komşu bucket'lar için MIN_PRICE (5¢) hâlâ geçerli.
+MIN_MAIN_PRICE = 0.25
+
+# D+1 minimum sinyal skoru: D+1 backtest %14 win rate vs D+2 %47.
+# Market D+1'i çok verimli fiyatlıyor; sadece çok yüksek sinyale gir.
+D1_MIN_SIGNAL_SCORE = 88
+
+# Günlük maksimum pozisyon sayısı (station bazlı, D+1 ve D+2 ayrı ayrı).
+# Her tarih için en iyi signal_score'lu N istasyon seçilir.
+MAX_DAILY_POSITIONS_PER_DATE = 3
+
+# Multi-bucket bütçe tavanı (limit fiyatları toplamı):
+#   2-bucket: main(≤35¢) + adj1(≤10¢) ≤ 45¢
+#   3-bucket: main(≤35¢) + adj1(≤20¢) + adj2(≤10¢) ≤ 65¢
+# Simülasyon: 3-bucket → win rate %32→%75, ROI %23→%64 (37 trade backtest)
+TWO_BUCKET_BUDGET   = 0.45
+THREE_BUCKET_BUDGET = 0.65
+MULTI_BUCKET_N      = 3      # 3 = 3-bucket aktif, 2 = eski 2-bucket, 1 = single
+
 
 def should_pause_station(station: str) -> bool:
     """İstasyon-bazlı skill pause aktif mi? (negatif skill korunağı).
@@ -304,13 +338,19 @@ def get_actual_temp_open_meteo(station: str, date: str):
 # ── Scan: Tek Tarih İçin İstasyon Tara ─────────────────────────────────────
 def scan_date(station: str, target_date: str, trades: list,
               station_biases: dict | None = None,
-              live_mode: bool = False, trader=None) -> dict | None:
+              live_mode: bool = False, trader=None,
+              horizon: int = 2) -> dict | None:
     """Bir istasyon + tarih için sinyal ara. Yeni trade dict döner veya None.
 
     station_biases: compute_station_biases() çıktısı — adaptif tahmin düzeltmesi.
     live_mode/trader: aktarılırsa, paper var ama live order eksikse retry_live tuple döner.
+    horizon: 1=D+1, 2=D+2 — D+1 için daha yüksek signal_score eşiği uygulanır.
     """
     label = STATION_LABELS.get(station, station.upper())
+
+    # ── Faz 9: İstasyon whitelist (negatif ROI istasyonları erken elek) ────
+    if station not in STATION_WHITELIST:
+        return None  # sessiz — whitelist dışı istasyonlar log'a bile düşmez
 
     # ── Faz 5: istasyon-bazlı skill pause (ağ çağrısından önce erken çık) ──
     if should_pause_station(station):
@@ -537,8 +577,9 @@ def scan_date(station: str, target_date: str, trades: list,
     # 3. Karar ver
     pct = round(price * 100)
 
-    if price < MIN_PRICE:
-        print(f"  ⬜ {station.upper()} {label}  🎯{top_pick}°C @ {pct}¢ — çok ucuz, şüpheli")
+    # Faz 9: Ana bucket için 25¢ floor (<15¢ → backtest %0 win rate).
+    if price < MIN_MAIN_PRICE:
+        print(f"  ⬜ {station.upper()} {label}  🎯{top_pick}°C @ {pct}¢ — ucuz bucket ({int(price*100)}¢ < {int(MIN_MAIN_PRICE*100)}¢ floor), pas")
         return None
 
     # İstasyon bazlı fiyat tavanı (Paris gibi sistematik sorunlu istasyonlar)
@@ -590,6 +631,16 @@ def scan_date(station: str, target_date: str, trades: list,
         print(
             f"  ⛔ {station.upper()} {label}  🎯{top_pick}°C @ {pct}¢"
             f" — sinyal skoru {signal_score} < {MIN_SIGNAL_SCORE} (zayıf), pas"
+        )
+        return None
+
+    # ── Faz 9: D+1 yüksek sinyal eşiği ──────────────────────────────────────
+    # D+1 backtest: %14 win rate vs D+2 %47. Market D+1'i çok daha verimli
+    # fiyatlıyor; sadece D1_MIN_SIGNAL_SCORE (≥88) olan sinyallere gir.
+    if horizon == 1 and signal_score is not None and signal_score < D1_MIN_SIGNAL_SCORE:
+        print(
+            f"  ⛔ {station.upper()} {label}  🎯{top_pick}°C @ {pct}¢"
+            f" — D+1 eşiği: {signal_score} < {D1_MIN_SIGNAL_SCORE}, pas"
         )
         return None
 
@@ -662,185 +713,151 @@ def scan_date(station: str, target_date: str, trades: list,
     )
     result_trades = [trade]
 
-    # ── 2-Bucket Stratejisi ─────────────────────────────────────────────────
-    # Ensemble 2. adayı birinciye bitişikse (±1°C) ve yeterli edge varsa,
-    # her iki bucket'a girer: ±1°C ölçüm/WU belirsizliğine karşı hedge.
-    # Maliyet 2×risk, biri kazanırsa net ~+$5.50 (2×$2.25 risk, $10 payout).
-    if (
-        second_pick is not None
-        and second_pct is not None
-        and abs(second_pick - top_pick) == 1
-        and second_pct >= MIN_MODE_PCT
-        and not is_mid_range_mode(second_pct)   # Faz 5: mid-range skip
-    ):
-        second_bucket = find_top_pick_bucket(buckets, second_pick)
-        if second_bucket:
-            s_price = second_bucket.get("yes_price", 0)
-            s_edge  = (second_pct / 100) - s_price
-            # 2. bucket için zaten pozisyon var mı?
-            already_second = any(
-                t["station"] == station and t["date"] == target_date
-                and t["top_pick"] == second_pick and t["status"] == "open"
-                for t in trades
-            )
-            station_max = STATION_MAX_PRICE.get(station, MAX_PRICE)
-            if (
-                not already_second
-                and MIN_PRICE <= s_price < station_max
-                and s_edge >= MIN_EDGE
-            ):
-                # ── Faz 5: 2.bucket için signal_score gate (ana ile sim.) ──
-                s_sig_info = _score_for_second_bucket(
-                    second_pct, mode_ci_low, mode_ci_high,
-                    s_edge, unc, is_bimodal,
-                    len(members) if members else 0,
-                )
-                if is_weak_signal(s_sig_info.get("signal_score")):
-                    print(
-                        f"  ⛔ 2.BUCKET  {station.upper()} {label}  "
-                        f"🎯{second_pick}°C — sinyal skoru "
-                        f"{s_sig_info.get('signal_score')} < {MIN_SIGNAL_SCORE}, atlandı"
-                    )
-                    return result_trades
-                s_cond_raw = second_bucket.get("condition_id", "")
-                if isinstance(s_cond_raw, str) and s_cond_raw.startswith("0x"):
-                    s_cond = str(int(s_cond_raw, 16))
-                else:
-                    s_cond = str(s_cond_raw)
-                s_cost    = round(SHARES * s_price, 2)
-                s_pot_win = round(SHARES - s_cost, 2)
-                s_pct     = round(s_price * 100)
-                second_trade = {
-                    "id":            f"{station}_{target_date}_{datetime.now().strftime('%H%M%S')}_2nd",
-                    "station":       station,
-                    "date":          target_date,
-                    "blend":         round(blend, 1),
-                    "spread":        round(spread, 2),
-                    "uncertainty":   unc,
-                    "top_pick":      second_pick,
-                    "raw_top_pick":  second_pick,
-                    "bias_applied":  0,
-                    "ens_mode_pct":  second_pct,
-                    "ens_2nd_pick":  top_pick,
-                    "ens_2nd_pct":   mode_pct,
-                    "ens_is_bimodal":   is_bimodal,
-                    "ens_peak_sep":     peak_sep,
-                    "ens_mode_ci_low":  mode_ci_low,
-                    "ens_mode_ci_high": mode_ci_high,
-                    # Faz 3: ikinci bucket için ayrı sinyal skoru (önceden hesap)
-                    **s_sig_info,
-                    "bucket_title":  second_bucket["title"],
-                    "condition_id":  s_cond,
-                    "entry_price":   s_price,
-                    "shares":        SHARES,
-                    "cost_usd":      s_cost,
-                    "potential_win": s_pot_win,
-                    "liquidity":     liq,
-                    "status":        "open",
-                    "entered_at":    datetime.now().isoformat(),
-                    "actual_temp":   None,
-                    "result":        None,
-                    "pnl":           None,
-                    "settled_at":    None,
-                    "two_bucket":    True,
-                }
-                print(
-                    f"  🔀 2.BUCKET  {station.upper()} {label}  "
-                    f"🎯{second_pick}°C [ens%{second_pct}] @ {s_pct}¢  "
-                    f"{SHARES} share · risk=${s_cost:.2f} · edge{s_edge:+.0%}"
-                )
-                result_trades.append(second_trade)
+    # ── Faz 9: Multi-Bucket Stratejisi ─────────────────────────────────────
+    # Backtest: 3-bucket → win rate %32→%75, ROI %23→%64 (37 trade).
+    #
+    # Bütçe mantığı:
+    #   MULTI_BUCKET_N=3 → THREE_BUCKET_BUDGET=65¢ toplam limit fiyat
+    #   MULTI_BUCKET_N=2 → TWO_BUCKET_BUDGET=45¢
+    #
+    # Aday seçimi: ensemble'ın en çok oy alan bucket'larını büyükten küçüğe
+    # sırala. Ana pick'e ±2°C mesafede olanları bütçeye sığacak kadar al.
+    # Her komşu bucket için MIN_PRICE (5¢) alt sınırı uygulanır (ana için
+    # MIN_MAIN_PRICE=25¢ ayrı eşik, zaten üstte kontrol edildi).
+    if members and MULTI_BUCKET_N >= 2:
+        budget = THREE_BUCKET_BUDGET if MULTI_BUCKET_N >= 3 else TWO_BUCKET_BUDGET
+        remaining_budget = budget - price  # ana pick'ten sonra kalan bütçe
+        added = 0
 
-    # ── Faz 8: Micro-hedge (off-by-one koruması) ────────────────────────────
-    # Ana pick açıldıysa, ensemble 2. peak bitişik değilse (2-bucket tetiklemedi)
-    # ve sinyal en az "moderate" (≥55) ise, blend-top_pick drift yönüne göre
-    # ±1°C komşuya ana boyutun %40'ı kadar küçük hedge koy. 23 Nisan off-by-one
-    # (5/7) kayıplarına karşı ucuz sigorta.
-    two_bucket_fired = any(t.get("two_bucket") for t in result_trades)
-    micro_cond = (
-        len(result_trades) == 1
-        and not two_bucket_fired
-        and signal_score is not None
-        and signal_score >= MICRO_HEDGE_MIN_SIGNAL
-    )
-    if micro_cond:
-        drift      = float(blend) - float(top_pick)
-        hedge_dir  = 1 if drift >= 0 else -1
-        hedge_pick = top_pick + hedge_dir
-        h_bucket   = find_top_pick_bucket(buckets, hedge_pick)
-        station_max_h = STATION_MAX_PRICE.get(station, MAX_PRICE)
-        if h_bucket is not None:
-            h_price = h_bucket.get("yes_price", 0) or 0
-            # Ensemble olasılığı: komşu bucket için member count'a bak
-            if members:
-                h_count   = sum(1 for m in members if round(m) == hedge_pick)
-                h_mode_pct = round(h_count / len(members) * 100) if h_count else 0
-            else:
-                h_mode_pct = 0
-            h_edge = (h_mode_pct / 100.0) - h_price
-            # Aynı hedge zaten açıksa tekrar açma
-            already_hedge = any(
+        # Ensemble içindeki komşu bucket'ları oy sayısına göre sırala
+        # (top_pick zaten alındı, onu atla; ±2°C içinde kal)
+        cand_picks_sorted = [
+            (temp, count)
+            for temp, count in counts.most_common(10)
+            if temp != top_pick and abs(temp - top_pick) <= 2
+        ]
+
+        for cand_temp, cand_count in cand_picks_sorted:
+            if added >= MULTI_BUCKET_N - 1:
+                break  # yeterince komşu eklendi
+            if remaining_budget < MIN_PRICE:
+                break  # bütçe bitti
+
+            c_bucket = find_top_pick_bucket(buckets, cand_temp)
+            if not c_bucket:
+                continue
+
+            c_price = float(c_bucket.get("yes_price", 0) or 0)
+            if c_price < MIN_PRICE or c_price > remaining_budget:
+                continue  # fiyat bütçe aşıyor veya çok ucuz
+
+            # Zaten aynı bucket için açık pozisyon var mı?
+            already_open = any(
                 t["station"] == station and t["date"] == target_date
-                and t["top_pick"] == hedge_pick and t["status"] == "open"
+                and t["top_pick"] == cand_temp and t["status"] == "open"
                 for t in trades
             )
-            if (
-                not already_hedge
-                and MIN_PRICE <= h_price < station_max_h
-                and h_edge > 0
-            ):
-                h_shares = max(1, round(trade_shares * MICRO_HEDGE_SIZE_RATIO))
-                h_cost   = round(h_shares * h_price, 2)
-                h_potwin = round(h_shares - h_cost, 2)
-                h_cond_raw = h_bucket.get("condition_id", "")
-                if isinstance(h_cond_raw, str) and h_cond_raw.startswith("0x"):
-                    h_cond = str(int(h_cond_raw, 16))
-                else:
-                    h_cond = str(h_cond_raw)
-                hedge_trade = {
-                    "id":            f"{station}_{target_date}_{datetime.now().strftime('%H%M%S')}_hedge",
-                    "station":       station,
-                    "date":          target_date,
-                    "blend":         round(blend, 1),
-                    "spread":        round(spread, 2),
-                    "uncertainty":   unc,
-                    "top_pick":      hedge_pick,
-                    "raw_top_pick":  hedge_pick,
-                    "bias_applied":  0,
-                    "ens_mode_pct":  h_mode_pct,
-                    "ens_2nd_pick":  top_pick,
-                    "ens_2nd_pct":   mode_pct,
-                    "ens_is_bimodal":   is_bimodal,
-                    "ens_peak_sep":     peak_sep,
-                    "ens_mode_ci_low":  mode_ci_low,
-                    "ens_mode_ci_high": mode_ci_high,
-                    # Ana sinyalin skorunu taşı (hedge bağımlı kararlı sinyale)
-                    "signal_score":     signal_score,
-                    "signal_grade":     signal_grade,
-                    "bucket_title":  h_bucket["title"],
-                    "condition_id":  h_cond,
-                    "entry_price":   h_price,
-                    "shares":        h_shares,
-                    "cost_usd":      h_cost,
-                    "potential_win": h_potwin,
-                    "liquidity":     liq,
-                    "status":        "open",
-                    "entered_at":    datetime.now().isoformat(),
-                    "actual_temp":   None,
-                    "result":        None,
-                    "pnl":           None,
-                    "settled_at":    None,
-                    "trade_type":    "micro_hedge",
-                }
-                h_pct = round(h_price * 100)
-                print(
-                    f"  🛡️  MICRO-HEDGE  {station.upper()} {label}  "
-                    f"🎯{hedge_pick}°C (drift {drift:+.1f}) @ {h_pct}¢  "
-                    f"{h_shares} share · risk=${h_cost:.2f} · edge{h_edge:+.0%}"
-                )
-                result_trades.append(hedge_trade)
+            if already_open:
+                continue
+
+            c_cond_raw = c_bucket.get("condition_id", "")
+            c_cond = (
+                str(int(c_cond_raw, 16))
+                if isinstance(c_cond_raw, str) and c_cond_raw.startswith("0x")
+                else str(c_cond_raw)
+            )
+            c_pct_ens = round(cand_count / len(members) * 100)
+            c_cost    = round(trade_shares * c_price, 2)
+            c_potwin  = round(trade_shares - c_cost, 2)
+            c_pct_lbl = round(c_price * 100)
+
+            adj_trade = {
+                "id":               f"{station}_{target_date}_{datetime.now().strftime('%H%M%S')}_adj{added+1}",
+                "station":          station,
+                "date":             target_date,
+                "blend":            round(blend, 1),
+                "spread":           round(spread, 2),
+                "uncertainty":      unc,
+                "top_pick":         cand_temp,
+                "raw_top_pick":     cand_temp,
+                "bias_applied":     0,
+                "ens_mode_pct":     c_pct_ens,
+                "ens_2nd_pick":     top_pick,
+                "ens_2nd_pct":      mode_pct,
+                "ens_is_bimodal":   is_bimodal,
+                "ens_peak_sep":     peak_sep,
+                "ens_mode_ci_low":  mode_ci_low,
+                "ens_mode_ci_high": mode_ci_high,
+                "signal_score":     signal_score,
+                "signal_grade":     signal_grade,
+                "bucket_title":     c_bucket["title"],
+                "condition_id":     c_cond,
+                "entry_price":      c_price,
+                "shares":           trade_shares,
+                "cost_usd":         c_cost,
+                "potential_win":    c_potwin,
+                "liquidity":        liq,
+                "status":           "open",
+                "entered_at":       datetime.now().isoformat(),
+                "actual_temp":      None,
+                "result":           None,
+                "pnl":              None,
+                "settled_at":       None,
+                "trade_type":       "multi_bucket",
+                "bucket_num":       added + 2,  # 1=main, 2=1.komşu, 3=2.komşu
+                "main_pick":        top_pick,   # referans için
+            }
+            bucket_n = added + 2
+            print(
+                f"  🎯 BUCKET-{bucket_n}  {station.upper()} {label}  "
+                f"🎯{cand_temp}°C [ens%{c_pct_ens}] @ {c_pct_lbl}¢  "
+                f"{trade_shares} share · risk=${c_cost:.2f}"
+                f"  (bütçe: {int(price*100)}+{int(c_price*100)}={int((price+c_price)*100)}¢/"
+                f"{int(budget*100)}¢)"
+            )
+            result_trades.append(adj_trade)
+            remaining_budget -= c_price
+            added += 1
 
     return result_trades
+
+
+# ── Faz 9: Yardımcı — En İyi N Aday Seçimi ─────────────────────────────────
+def _select_top_candidates(candidates: list, max_n: int = MAX_DAILY_POSITIONS_PER_DATE) -> list:
+    """Aday trade'leri signal_score'a göre station bazlı sıralar, top N station döner.
+
+    Her station'ın tüm bucket'larını (main + adj) birlikte tutar.
+    Örn: max_n=3 → en iyi 3 station'ın trade'leri (her biri 1-3 trade içerebilir).
+    """
+    if not candidates:
+        return []
+
+    # Station'a göre grupla
+    by_station: dict = {}
+    for t in candidates:
+        s = t.get("station", "?")
+        by_station.setdefault(s, []).append(t)
+
+    # Her station'ın primary signal_score'unu bul (main bucket = bucket_num yok veya 1)
+    def primary_score(station_trades: list) -> int:
+        primaries = [
+            t for t in station_trades
+            if not t.get("trade_type") in ("multi_bucket", "micro_hedge")
+        ]
+        src = primaries if primaries else station_trades
+        scores = [t.get("signal_score") or 0 for t in src]
+        return max(scores)
+
+    sorted_stations = sorted(
+        by_station.items(),
+        key=lambda kv: primary_score(kv[1]),
+        reverse=True,
+    )
+
+    selected: list = []
+    for _station, station_trades in sorted_stations[:max_n]:
+        selected.extend(station_trades)
+    return selected
 
 
 # ── Scan: Fırsat Tara (D+1 ve D+2) ─────────────────────────────────────────
@@ -896,16 +913,25 @@ def scan():
     total_new = 0
     live_total = 0
     for i, target_date in enumerate(scan_targets, start=1):
+        horizon = i   # 1=D+1, 2=D+2
         print(f"\n  ── D+{i} ({target_date}) {'─'*38}")
+        if horizon == 1:
+            print(f"  ℹ️  D+1: sinyal eşiği yüksek ({D1_MIN_SIGNAL_SCORE}+), sadece premium sinyal")
         day_new  = 0
         day_live = 0
-        for station in STATIONS:
-            trade = scan_date(station, target_date, trades, station_biases,
-                              live_mode=live_mode, trader=trader if live_mode else None)
 
-            # Özel durum: paper var ama live order eksik → sadece live order at
-            if isinstance(trade, tuple) and trade[0] == "retry_live":
-                _, paper_match = trade
+        # ── Faz 9: Retry-live (paper var, live eksik) ─────────────────────
+        # Bu kolu scan başında işle — best-N filtresi dışında (zaten paper var).
+        for station in STATIONS:
+            if station not in STATION_WHITELIST:
+                continue
+            retry = scan_date(
+                station, target_date, trades, station_biases,
+                live_mode=live_mode, trader=trader if live_mode else None,
+                horizon=horizon,
+            )
+            if isinstance(retry, tuple) and retry[0] == "retry_live":
+                _, paper_match = retry
                 if live_mode:
                     try:
                         live_r = trader.place_limit_order(
@@ -922,43 +948,70 @@ def scan():
                             live_total += 1
                     except Exception as e:
                         print(f"  ⚠️  Live order hatası ({station}): {e}")
+
+        # ── Faz 9: Tüm adayları topla, top-N seç ─────────────────────────
+        date_candidates: list = []
+        for station in STATIONS:
+            if station not in STATION_WHITELIST:
                 continue
+            result = scan_date(
+                station, target_date, trades, station_biases,
+                live_mode=False, trader=None,   # dry-run, kaydet değil
+                horizon=horizon,
+            )
+            if isinstance(result, list) and result:
+                date_candidates.extend(result)
 
-            # scan_date artık liste döner ([trade] veya [trade, second_trade])
-            new_list = trade if isinstance(trade, list) else []
-            if new_list:
-                # Yeni top_pick seti: artık sadece bu setde olmayanlar supersede edilir
-                new_top_picks = {t["top_pick"] for t in new_list}
-                for old in trades:
-                    if (old["station"] == station and old["date"] == target_date
-                            and old["status"] == "open"
-                            and old["top_pick"] not in new_top_picks):
-                        old["status"] = "superseded"
-                        picks_str = ", ".join(f"{p}°C" for p in sorted(new_top_picks))
-                        old["notes"]  = f"Tahmin değişti → {picks_str}"
+        # Seçilmeyenleri logla, seçilenleri kaydet
+        selected = _select_top_candidates(date_candidates, max_n=MAX_DAILY_POSITIONS_PER_DATE)
+        selected_stations = {t["station"] for t in selected}
+        skipped_stations  = {
+            t["station"] for t in date_candidates
+            if t["station"] not in selected_stations
+        }
+        if skipped_stations:
+            print(
+                f"  📊 Best-{MAX_DAILY_POSITIONS_PER_DATE} filtresi: "
+                f"{', '.join(s.upper() for s in sorted(skipped_stations))} "
+                f"sinyal sırasına göre elendi"
+            )
 
-                for new_trade in new_list:
-                    trades.append(new_trade)
-                    day_new  += 1
-                    total_new += 1
+        for new_trade in selected:
+            station = new_trade["station"]
+            # Supersede: aynı station+date'de eski open trade'leri kapat
+            new_top_picks = {
+                t["top_pick"] for t in selected
+                if t["station"] == station and t["date"] == target_date
+            }
+            for old in trades:
+                if (old["station"] == station and old["date"] == target_date
+                        and old["status"] == "open"
+                        and old["top_pick"] not in new_top_picks):
+                    old["status"] = "superseded"
+                    picks_str = ", ".join(f"{p}°C" for p in sorted(new_top_picks))
+                    old["notes"] = f"Tahmin değişti → {picks_str}"
 
-                    # Live mode: CLOB'a gönder
-                    if live_mode:
-                        try:
-                            live_r = trader.place_limit_order(
-                                condition_id = new_trade["condition_id"],
-                                price        = new_trade["entry_price"],
-                                station      = new_trade["station"],
-                                date         = new_trade["date"],
-                                top_pick     = new_trade["top_pick"],
-                                bucket_title = new_trade["bucket_title"],
-                                paper_id     = new_trade["id"],
-                            )
-                            if live_r:
-                                day_live  += 1
-                                live_total += 1
-                        except Exception as e:
-                            print(f"  ⚠️  Live order hatası ({station}): {e}")
+            trades.append(new_trade)
+            day_new   += 1
+            total_new += 1
+
+            # Live mode: CLOB'a gönder
+            if live_mode:
+                try:
+                    live_r = trader.place_limit_order(
+                        condition_id = new_trade["condition_id"],
+                        price        = new_trade["entry_price"],
+                        station      = new_trade["station"],
+                        date         = new_trade["date"],
+                        top_pick     = new_trade["top_pick"],
+                        bucket_title = new_trade["bucket_title"],
+                        paper_id     = new_trade["id"],
+                    )
+                    if live_r:
+                        day_live  += 1
+                        live_total += 1
+                except Exception as e:
+                    print(f"  ⚠️  Live order hatası ({station}): {e}")
 
         live_str = f"  |  🔴 {day_live} live emir" if live_mode else ""
         print(f"  → D+{i}: {day_new} yeni paper{live_str}")

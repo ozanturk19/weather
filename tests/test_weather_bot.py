@@ -1302,9 +1302,9 @@ test("2-bucket: alt komşu da geçerli (14→13)", lambda:
         top_price=0.28, second_price=0.20
     ), ["primary", "secondary"])
 )
-test("2-bucket: kaynak kodda two_bucket flag var (trade kaydı)", lambda:
-    ok("two_bucket" in SCANNER_SRC,
-       "scanner.py 2-bucket trade dict'inde 'two_bucket' flag yok")
+test("multi-bucket: kaynak kodda multi_bucket flag var (trade kaydı)", lambda:
+    ok("multi_bucket" in SCANNER_SRC,
+       "scanner.py multi-bucket trade dict'inde 'multi_bucket' flag yok")
 )
 test("2-bucket: kaynak kodda second_bucket mantığı mevcut", lambda: (
     ok("result_trades" in SCANNER_SRC,
@@ -3422,14 +3422,16 @@ test("scan_date: pause istasyon için ağ çağrısı yapmaz",
 
 
 def test_scan_date_non_pause_station_proceeds():
-    """Pause olmayan istasyon için akış devam eder (ilk httpx çağrısı yapılır)."""
+    """Pause olmayan whitelist istasyon için akış devam eder (ilk httpx çağrısı yapılır)."""
     s = _import_scanner_module()
+    # Whitelist'teki bir istasyon kullan (efhk whitelist dışı olduğu için eglc)
+    whitelist_station = next(iter(s.STATION_WHITELIST))
     # İlk httpx.get'e (weather API) hata fırlat — downstream'de patlamasın
     with patch("bot.scanner.httpx.get",
                side_effect=Exception("weather api down")) as mock_get:
-        result = s.scan_date("efhk", "2026-05-01", trades=[])
+        result = s.scan_date(whitelist_station, "2026-05-01", trades=[])
     eq(result, None, "API hatası → None")
-    ok(mock_get.called, "pause olmayan istasyon için httpx çağrılmalı")
+    ok(mock_get.called, "pause olmayan whitelist istasyon için httpx çağrılmalı")
 
 test("scan_date: pause olmayan istasyon akışa girer",
      test_scan_date_non_pause_station_proceeds)
@@ -3469,19 +3471,22 @@ test("scanner.py: signal_score gate doğru sırada",
      test_scanner_source_has_signal_score_gate)
 
 
-def test_scanner_second_bucket_has_mid_range_skip():
-    """2-bucket logic: second_pct mid-range ise eklenmemeli."""
+def test_scanner_multi_bucket_gate():
+    """Multi-bucket (Faz 9): MULTI_BUCKET_N ve budget sabitleri mevcut."""
     scanner_path = Path(__file__).resolve().parent.parent / "bot" / "scanner.py"
     src = scanner_path.read_text(encoding="utf-8")
-    # second_pct >= MIN_MODE_PCT if'inden hemen sonra is_mid_range_mode(second_pct)
-    ok("is_mid_range_mode(second_pct)" in src,
-       "2-bucket için mid-range skip yok")
-    # 2.BUCKET zayıf sinyal log'u da var mı?
-    ok("2.BUCKET" in src and "sinyal skoru" in src,
-       "2-bucket için signal_score gate log'u eksik")
+    ok("MULTI_BUCKET_N" in src, "MULTI_BUCKET_N sabiti eksik")
+    ok("THREE_BUCKET_BUDGET" in src, "THREE_BUCKET_BUDGET sabiti eksik")
+    ok("TWO_BUCKET_BUDGET" in src, "TWO_BUCKET_BUDGET sabiti eksik")
+    ok("multi_bucket" in src, "multi_bucket trade_type marker eksik")
+    # Whitelist + D1 threshold + best-N de var mı?
+    ok("STATION_WHITELIST" in src, "STATION_WHITELIST eksik")
+    ok("D1_MIN_SIGNAL_SCORE" in src, "D1_MIN_SIGNAL_SCORE eksik")
+    ok("MAX_DAILY_POSITIONS_PER_DATE" in src, "MAX_DAILY_POSITIONS_PER_DATE eksik")
+    ok("MIN_MAIN_PRICE" in src, "MIN_MAIN_PRICE eksik")
 
-test("scanner.py: 2-bucket mid-range + signal gate var",
-     test_scanner_second_bucket_has_mid_range_skip)
+test("scanner.py: Faz 9 strateji sabitleri ve multi-bucket marker mevcut",
+     test_scanner_multi_bucket_gate)
 
 
 def test_phase5_retrospective_impact():
@@ -3877,81 +3882,75 @@ test("flip-flop guard: güçlü sinyalde re-entry geçer",
      test_flip_flop_guard_allows_strong_signal)
 
 
-# ── 36.3: Micro-hedge (off-by-one koruması) ────────────────────────────────
-def test_micro_hedge_opens_adjacent_bucket():
-    """Moderate sinyalde blend drift yönüne ±1°C küçük hedge açılır."""
+# ── 36.3: Multi-bucket (Faz 9 — eski micro-hedge + 2-bucket birleşimi) ──────
+def test_multi_bucket_opens_adjacent_bucket():
+    """Whitelist istasyonda multi-bucket: 19°C komşu bucket da açılır."""
     s = _import_scanner_module()
 
-    # Weather API mock (blend=18.4 — drift=+0.4 → hedge_pick=19)
+    # Whitelist'teki bir istasyon seç (eglc)
+    wl_station = "eglc"
+    target_date = "2026-05-01"
+
+    # Weather API: blend=18.4, top_pick=18
     weather_resp = MagicMock()
     weather_resp.raise_for_status = MagicMock()
-    weather_resp.json = lambda: {"days": {"2026-05-01": {"blend": {
+    weather_resp.json = lambda: {"days": {target_date: {"blend": {
         "max_temp": 18.4, "spread": 1.2, "uncertainty": "Düşük",
         "bias_active": False,
     }}}}
 
-    # Ensemble API mock — mode_pct=45 (mid-range gate ∈ [50,80) DIŞINDA),
-    # second peak (25) uzak → 2-bucket tetiklenmez; komşu 19°C %20.
-    members = [18]*9 + [19]*4 + [25]*7   # 20 üye: 18→45%, 19→20%, 25→35%
-    # second peak (top_2) mode_pct=35 → second_pick=25 (abs(25-18)=7 > 1)
-    # → 2-bucket tetiklenmez ✓
+    # Ensemble: 18°C mode=80% (mid-range skip [50,80) DIŞINDA — 80 ≥ 80),
+    # 19°C komşu %10, 17°C %10 → multi-bucket tetiklenmeli
+    # mode_pct=80, edge=0.50 → signal_score yüksek (≥55 eşiğini geçer)
+    members = [18]*16 + [19]*2 + [17]*2   # 20 üye: 18→80%, 19→10%, 17→10%
     ens_resp = MagicMock()
     ens_resp.raise_for_status = MagicMock()
-    ens_resp.json = lambda: {"days": {"2026-05-01": {
+    ens_resp.json = lambda: {"days": {target_date: {
         "member_maxes": members,
         "is_bimodal": False, "peak_separation": None,
-        "mode_ci_low": 35, "mode_ci_high": 55,
+        "mode_ci_low": 70, "mode_ci_high": 88,
     }}}
 
-    # Polymarket API: bucket 18 (ana), bucket 19 (hedge), bucket 25 (far 2nd)
+    # PM buckets: 18°C @ 30¢ (main, ≥ MIN_MAIN_PRICE), 19°C @ 10¢ (adj, ≤ 65-30=35¢)
     pm_resp = MagicMock()
     pm_resp.raise_for_status = MagicMock()
     pm_resp.json = lambda: {
         "buckets": [
             {"threshold": 18, "is_below": False, "is_above": False,
-             "yes_price": 0.20, "condition_id": "0x100",
-             "title": "18°C"},
+             "yes_price": 0.30, "condition_id": "0x200", "title": "18°C"},
             {"threshold": 19, "is_below": False, "is_above": False,
-             "yes_price": 0.18, "condition_id": "0x101",
-             "title": "19°C"},
-            {"threshold": 25, "is_below": False, "is_above": False,
-             "yes_price": 0.10, "condition_id": "0x102",
-             "title": "25°C"},
+             "yes_price": 0.10, "condition_id": "0x201", "title": "19°C"},
+            {"threshold": 17, "is_below": False, "is_above": False,
+             "yes_price": 0.08, "condition_id": "0x202", "title": "17°C"},
         ],
-        "liquidity": 5000,
+        "liquidity": 8000,
     }
 
     def fake_get(url, **kw):
-        # URL'e göre doğru response döndür
-        if "/api/weather" in url:
-            return weather_resp
-        if "/api/ensemble" in url:
-            return ens_resp
-        if "/api/polymarket" in url:
-            return pm_resp
+        if "/api/weather" in url:   return weather_resp
+        if "/api/ensemble" in url:  return ens_resp
+        if "/api/polymarket" in url: return pm_resp
         raise RuntimeError(f"Beklenmeyen URL: {url}")
 
-    # efhk pause'de değil (tek karlı istasyon). DB pause'u da olmasın.
     with patch("bot.scanner.httpx.get", side_effect=fake_get), \
          patch.object(s, "should_pause_station", return_value=False):
-        result = s.scan_date("efhk", "2026-05-01", trades=[])
+        result = s.scan_date(wl_station, target_date, trades=[])
 
     ok(isinstance(result, list) and len(result) >= 2,
-       f"result listesi beklenir + hedge ile en az 2 trade: {result}")
-    hedges = [t for t in result if t.get("trade_type") == "micro_hedge"]
-    eq(len(hedges), 1, f"tek bir micro_hedge beklenir: {hedges}")
-    # drift=+0.4 → hedge_pick = 18+1 = 19
-    eq(hedges[0]["top_pick"], 19,
-       f"Hedge pick 19 olmalı (drift +): {hedges[0]['top_pick']}")
-    # %40 boyut: ana trade_shares * 0.40 round ≥ 1
-    main = [t for t in result if t.get("trade_type") != "micro_hedge"][0]
-    expected_h_shares = max(1, round(main["shares"] * s.MICRO_HEDGE_SIZE_RATIO))
-    eq(hedges[0]["shares"], expected_h_shares,
-       f"Hedge shares = round(main*{s.MICRO_HEDGE_SIZE_RATIO}): "
-       f"{hedges[0]['shares']} vs beklenen {expected_h_shares}")
+       f"Multi-bucket: en az 2 trade beklenir: {result}")
+    # Ana trade: pick=18, adj trade: pick=19 veya 17
+    picks = [t["top_pick"] for t in result]
+    ok(18 in picks, f"Ana pick 18°C beklenir: {picks}")
+    adj_trades = [t for t in result if t.get("trade_type") == "multi_bucket"]
+    ok(len(adj_trades) >= 1,
+       f"multi_bucket trade_type ile en az 1 komşu beklenir: {adj_trades}")
+    # Bütçe kontrolü: tüm entry_price toplamı ≤ THREE_BUCKET_BUDGET
+    total_price = sum(t["entry_price"] for t in result)
+    ok(total_price <= s.THREE_BUCKET_BUDGET + 0.01,
+       f"Toplam fiyat ≤ {s.THREE_BUCKET_BUDGET}: {total_price:.2f}")
 
-test("micro-hedge: moderate sinyal + uzak 2. peak → ±1°C hedge açılır",
-     test_micro_hedge_opens_adjacent_bucket)
+test("multi-bucket: whitelist istasyonda komşu bucket(lar) açılır (Faz 9)",
+     test_multi_bucket_opens_adjacent_bucket)
 
 
 # ── 36.4: Horizon-specific settlement delta ─────────────────────────────────
