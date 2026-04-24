@@ -145,6 +145,14 @@ TWO_BUCKET_BUDGET   = 0.45
 THREE_BUCKET_BUDGET = 0.65
 MULTI_BUCKET_N      = 3      # 3 = 3-bucket aktif, 2 = eski 2-bucket, 1 = single
 
+# Faz 10: Isınma/soğuma trend tiebreaker (settlement_delta yönü)
+# Sistematik sıcaklık sapması ≥ TREND_BIAS_THRESHOLD ise, adj bucket sıralamasında
+# trend yönündeki bucket'a sanal TREND_PRICE_BONUS eklenir.
+# → Market fiyatı primary; sadece yakın fiyatlarda (< ~3¢ fark) etkili.
+# Örn: ısınma trendi (+1.2°C) + 19°C@20¢ vs 17°C@21¢ → 20+3=23 > 21 → 19°C öne çıkar.
+TREND_BIAS_THRESHOLD = 0.30   # °C: bu altındaki sdelta nötr (bias uygulanmaz)
+TREND_PRICE_BONUS    = 0.03   # sanal bonus (3¢ ≈ 1 kademe fiyat farkına eşdeğer)
+
 
 def should_pause_station(station: str) -> bool:
     """İstasyon-bazlı skill pause aktif mi? (negatif skill korunağı).
@@ -751,7 +759,24 @@ def scan_date(station: str, target_date: str, trades: list,
                 continue
             _ens = counts.get(_t, 0) if members else 0
             _adj_cands.append((_t, _ens, _bp))
-        _adj_cands.sort(key=lambda x: (-x[2], -x[1]))
+        # Faz 10: Trend yönü tiebreaker
+        # sdelta ≥ TREND_BIAS_THRESHOLD ise trend yönündeki bucket'a sanal bonus.
+        _trend_dir = 0
+        if abs(sdelta) >= TREND_BIAS_THRESHOLD:
+            _trend_dir = 1 if sdelta > 0 else -1
+            _trend_label = "ısınma ↑" if _trend_dir > 0 else "soğuma ↓"
+            print(
+                f"  🌡️  {station.upper()} {label}  "
+                f"trend bias: {_trend_label} (δ={sdelta:+.1f}°C) "
+                f"→ {'sıcak' if _trend_dir > 0 else 'soğuk'} yönlü adj öncelikli"
+            )
+
+        _adj_cands.sort(
+            key=lambda x, _dir=_trend_dir: (
+                -(x[2] + (TREND_PRICE_BONUS if (_dir and (x[0] - top_pick) * _dir > 0) else 0.0)),
+                -x[1],
+            )
+        )
         cand_picks_sorted = [(_t, _e) for _t, _e, _ in _adj_cands]
 
         for cand_temp, cand_count in cand_picks_sorted:

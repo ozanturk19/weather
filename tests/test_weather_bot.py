@@ -3424,8 +3424,10 @@ test("scan_date: pause istasyon için ağ çağrısı yapmaz",
 def test_scan_date_non_pause_station_proceeds():
     """Pause olmayan whitelist istasyon için akış devam eder (ilk httpx çağrısı yapılır)."""
     s = _import_scanner_module()
-    # Whitelist'teki bir istasyon kullan (efhk whitelist dışı olduğu için eglc)
-    whitelist_station = next(iter(s.STATION_WHITELIST))
+    # STATION_WHITELIST ∩ STATION_SKILL_PAUSE dışından al (frozenset hash order deterministik değil)
+    # ltac/lfpg whitelist'te ama paused → erken çıkar → httpx çağrılmaz → test yanlış başarısız
+    non_paused = s.STATION_WHITELIST - s.STATION_SKILL_PAUSE
+    whitelist_station = next(iter(sorted(non_paused)))  # sorted → deterministik (eddm/eglc/eham/epwa)
     # İlk httpx.get'e (weather API) hata fırlat — downstream'de patlamasın
     with patch("bot.scanner.httpx.get",
                side_effect=Exception("weather api down")) as mock_get:
@@ -4359,6 +4361,134 @@ def test_settle_live_onchain_agrees_no_override():
 
 test("settle_live: on-chain+OM uyuşuyorsa override mesajı yok",
      test_settle_live_onchain_agrees_no_override)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+print("\n" + "═"*62)
+print(" TEST 39: Faz 10 — Trend Bias Tiebreaker (adj bucket yönü)")
+print("═"*62)
+
+def test_trend_bias_warming():
+    """Isınma trendi (sdelta > threshold) → adj1 için +1°C bucket öne çıkar."""
+    s = _import_scanner_module()
+    top_pick = 18
+    # İki komşu eşit fiyatta — trend olmadan sıralama belirsiz; trend ile deterministik
+    cands = [
+        (17, 5, 0.20),   # -1°C, 20¢
+        (19, 5, 0.20),   # +1°C, 20¢
+    ]
+    sdelta = 1.0   # ısınma
+    trend_dir = 1 if abs(sdelta) >= s.TREND_BIAS_THRESHOLD else 0
+    sorted_c = sorted(
+        cands,
+        key=lambda x, _d=trend_dir: (
+            -(x[2] + (s.TREND_PRICE_BONUS if (_d and (x[0] - top_pick) * _d > 0) else 0.0)),
+            -x[1],
+        ),
+    )
+    eq(sorted_c[0][0], 19, "Isınma: +1°C (19°C) adj1 olarak seçilmeli")
+
+test("trend bias: ısınma → +1°C bucket önce (eşit fiyat)", test_trend_bias_warming)
+
+
+def test_trend_bias_cooling():
+    """Soğuma trendi (sdelta < -threshold) → adj1 için -1°C bucket öne çıkar."""
+    s = _import_scanner_module()
+    top_pick = 18
+    cands = [
+        (17, 5, 0.20),
+        (19, 5, 0.20),
+    ]
+    sdelta = -1.0  # soğuma
+    trend_dir = -1
+    sorted_c = sorted(
+        cands,
+        key=lambda x, _d=trend_dir: (
+            -(x[2] + (s.TREND_PRICE_BONUS if (_d and (x[0] - top_pick) * _d > 0) else 0.0)),
+            -x[1],
+        ),
+    )
+    eq(sorted_c[0][0], 17, "Soğuma: -1°C (17°C) adj1 olarak seçilmeli")
+
+test("trend bias: soğuma → -1°C bucket önce (eşit fiyat)", test_trend_bias_cooling)
+
+
+def test_trend_bias_neutral():
+    """Nötr sdelta (< threshold) → trend bias devreye girmez, market fiyatı belirler."""
+    s = _import_scanner_module()
+    top_pick = 18
+    cands = [
+        (17, 5, 0.22),   # -1°C, 22¢ → daha pahalı
+        (19, 5, 0.20),   # +1°C, 20¢
+    ]
+    sdelta = 0.1  # threshold altında → nötr
+    trend_dir = 0
+    sorted_c = sorted(
+        cands,
+        key=lambda x, _d=trend_dir: (
+            -(x[2] + (s.TREND_PRICE_BONUS if (_d and (x[0] - top_pick) * _d > 0) else 0.0)),
+            -x[1],
+        ),
+    )
+    eq(sorted_c[0][0], 17, "Nötr: market fiyatı belirler → 22¢ olan 17°C önce")
+
+test("trend bias: nötr sdelta → market fiyatı öncelikli", test_trend_bias_neutral)
+
+
+def test_trend_bias_market_wins_large_diff():
+    """Isınma trendi aktif ama market fiyat farkı > TREND_PRICE_BONUS → market kazanır."""
+    s = _import_scanner_module()
+    top_pick = 18
+    # 17°C@26¢ vs 19°C@20¢: ısınma bonus = +3¢ → efektif 23¢, ama 26¢ hâlâ yüksek
+    cands = [
+        (17, 5, 0.26),
+        (19, 5, 0.20),
+    ]
+    sdelta = 1.0
+    trend_dir = 1
+    sorted_c = sorted(
+        cands,
+        key=lambda x, _d=trend_dir: (
+            -(x[2] + (s.TREND_PRICE_BONUS if (_d and (x[0] - top_pick) * _d > 0) else 0.0)),
+            -x[1],
+        ),
+    )
+    eq(sorted_c[0][0], 17, "Isınma var ama 17°C@26¢ >> 19°C@23¢(+bonus) → 17°C kazanır")
+
+test("trend bias: ısınma ama büyük fiyat farkında market kazanır", test_trend_bias_market_wins_large_diff)
+
+
+def test_trend_bias_tiebreaker_activates():
+    """Isınma trendi: 19°C@20¢ + 3¢ bonus = 23¢ > 17°C@22¢ → 19°C öne geçer."""
+    s = _import_scanner_module()
+    top_pick = 18
+    cands = [
+        (17, 5, 0.22),   # -1°C, 22¢
+        (19, 5, 0.20),   # +1°C, 20¢ + 3¢ bonus = 23¢ efektif
+    ]
+    sdelta = 0.5   # threshold üstü
+    trend_dir = 1
+    sorted_c = sorted(
+        cands,
+        key=lambda x, _d=trend_dir: (
+            -(x[2] + (s.TREND_PRICE_BONUS if (_d and (x[0] - top_pick) * _d > 0) else 0.0)),
+            -x[1],
+        ),
+    )
+    eq(sorted_c[0][0], 19, "Tiebreaker: 20¢+3¢=23¢ > 22¢ → 19°C adj1 olarak seçilmeli")
+
+test("trend bias: tiebreaker devreye girer (20¢+3¢ > 22¢)", test_trend_bias_tiebreaker_activates)
+
+
+def test_trend_bias_constants_exist():
+    """TREND_BIAS_THRESHOLD ve TREND_PRICE_BONUS sabitleri scanner'da mevcut."""
+    s = _import_scanner_module()
+    ok(hasattr(s, "TREND_BIAS_THRESHOLD"), "TREND_BIAS_THRESHOLD sabiti mevcut")
+    ok(hasattr(s, "TREND_PRICE_BONUS"), "TREND_PRICE_BONUS sabiti mevcut")
+    eq(s.TREND_BIAS_THRESHOLD, 0.30, "TREND_BIAS_THRESHOLD = 0.30")
+    eq(s.TREND_PRICE_BONUS, 0.03, "TREND_PRICE_BONUS = 0.03")
+
+test("trend bias: sabitler scanner'da mevcut (0.30 / 0.03)", test_trend_bias_constants_exist)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
