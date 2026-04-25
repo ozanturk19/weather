@@ -3968,7 +3968,7 @@ test("multi-bucket: whitelist istasyonda komşu bucket(lar) açılır (Faz 9)",
 
 # ── 36.4: Horizon-specific settlement delta ─────────────────────────────────
 def test_horizon_delta_dampening():
-    """horizon_days=2 ise delta %70'e azaltılır."""
+    """horizon_days=2 ise delta %85'e azaltılır (Faz A1: eski %70 çok muhafazakârdı)."""
     import tempfile
     from pathlib import Path as _P
     from bot import db as bot_db
@@ -3999,9 +3999,9 @@ def test_horizon_delta_dampening():
 
     eq(round(d_none, 2), 1.00, f"Raw delta 1.0 olmalı: {d_none}")
     eq(round(d_h1,   2), 1.00, f"D+1: raw * 1.0 = 1.00: {d_h1}")
-    eq(round(d_h2,   2), 0.70, f"D+2: raw * 0.7 = 0.70: {d_h2}")
+    eq(round(d_h2,   2), 0.85, f"D+2: raw * 0.85 = 0.85: {d_h2}")
 
-test("settlement_delta: horizon_days=2 dampening (%70)",
+test("settlement_delta: horizon_days=2 dampening (%85, Faz A1)",
      test_horizon_delta_dampening)
 
 
@@ -4631,6 +4631,114 @@ def test_asian_stations_whitelist():
 
 test("Asya model config: vhhh whitelist'te, rksi/rjtt dışında (Faz 11)",
      test_asian_stations_whitelist)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+print("\n══════════════════════════════════════════════════════════════")
+print(" TEST 41: Faz A — Settlement Delta Hızlandırma + Prior'lar")
+print("══════════════════════════════════════════════════════════════")
+
+def _import_settlement_delta():
+    import importlib, sys
+    if "bot.settlement_delta" in sys.modules:
+        del sys.modules["bot.settlement_delta"]
+    return importlib.import_module("bot.settlement_delta")
+
+def test_settlement_delta_constants():
+    """Faz A1: yeni sabitler doğru değerde."""
+    sd = _import_settlement_delta()
+    eq(sd.MIN_PAIRED_SAMPLES, 3,
+       f"MIN_PAIRED_SAMPLES=3 beklenir (eski:5): {sd.MIN_PAIRED_SAMPLES}")
+    eq(sd.DEFAULT_WINDOW_DAYS, 30,
+       f"DEFAULT_WINDOW_DAYS=30 beklenir (eski:60): {sd.DEFAULT_WINDOW_DAYS}")
+    eq(sd.HORIZON_DELTA_DAMPENING.get(1), 1.0,
+       "D+1 dampening=1.0 (tam uygula)")
+    eq(sd.HORIZON_DELTA_DAMPENING.get(2), 0.85,
+       f"D+2 dampening=0.85 beklenir (eski:0.70): {sd.HORIZON_DELTA_DAMPENING.get(2)}")
+
+test("Faz A1: settlement_delta sabitleri güncellendi (3/30/0.85)",
+     test_settlement_delta_constants)
+
+
+def test_station_delta_priors_exist():
+    """Faz A2: STATION_DELTA_PRIORS dict mevcut ve doğru."""
+    sd = _import_settlement_delta()
+    ok(hasattr(sd, "STATION_DELTA_PRIORS"), "STATION_DELTA_PRIORS mevcut")
+    ok(isinstance(sd.STATION_DELTA_PRIORS, dict), "dict olmalı")
+    # Tutarlı pozitif bias istasyonlar prior > 0
+    ok(sd.STATION_DELTA_PRIORS.get("eddm", 0) > 0, "eddm prior > 0 (tutarlı +1.5°C METAR-OM)")
+    ok(sd.STATION_DELTA_PRIORS.get("lfpg", 0) > 0, "lfpg prior > 0 (tutarlı +1.4°C)")
+    ok(sd.STATION_DELTA_PRIORS.get("limc", 0) > 0, "limc prior > 0 (tutarlı +1.75°C)")
+    ok(sd.STATION_DELTA_PRIORS.get("eham", 0) > 0, "eham prior > 0 (tutarlı +0.4°C)")
+    # Belirsiz istasyonlar prior = 0 (muhafazakâr)
+    eq(sd.STATION_DELTA_PRIORS.get("eglc", 0), 0.0, "eglc prior=0 (METAR proxy güvenilmez)")
+    eq(sd.STATION_DELTA_PRIORS.get("epwa", 0), 0.0, "epwa prior=0 (nötr)")
+
+test("Faz A2: STATION_DELTA_PRIORS dict doğru değerlerde",
+     test_station_delta_priors_exist)
+
+
+def test_learn_station_delta_uses_prior():
+    """Faz A2: veri yoksa prior kullanılır."""
+    sd = _import_settlement_delta()
+    # DB yok → compute_station_deltas {} döner → prior devreye girer
+    # eddm prior = 1.0
+    prior_val = sd.STATION_DELTA_PRIORS.get("eddm", 0)
+    ok(prior_val > 0, f"eddm prior mevcut: {prior_val}")
+    # learn_station_delta DB erişimi olmadan (fake path)
+    from pathlib import Path
+    delta = sd.learn_station_delta("eddm", db_path=Path("/nonexistent.db"))
+    eq(delta, prior_val, f"DB yokken prior dönmeli: {delta} == {prior_val}")
+
+test("Faz A2: learn_station_delta DB yokken prior kullanır",
+     test_learn_station_delta_uses_prior)
+
+
+def test_learn_station_delta_prior_zero_for_uncertain():
+    """Faz A2: belirsiz istasyonlar için prior=0 → delta=0."""
+    sd = _import_settlement_delta()
+    from pathlib import Path
+    for station in ("eglc", "epwa", "efhk"):
+        delta = sd.learn_station_delta(station, db_path=Path("/nonexistent.db"))
+        eq(delta, 0.0, f"{station} prior=0 → delta=0: {delta}")
+
+test("Faz A2: belirsiz istasyonlar (eglc/epwa/efhk) prior=0 döner",
+     test_learn_station_delta_prior_zero_for_uncertain)
+
+
+def test_horizon_dampening_applied():
+    """Faz A1: D+2 dampening 0.85 uygulanır."""
+    sd = _import_settlement_delta()
+    from pathlib import Path
+    # eddm prior=1.0, D+1 → 1.0, D+2 → 0.85
+    d1 = sd.learn_station_delta("eddm", db_path=Path("/nonexistent.db"), horizon_days=1)
+    d2 = sd.learn_station_delta("eddm", db_path=Path("/nonexistent.db"), horizon_days=2)
+    prior = sd.STATION_DELTA_PRIORS.get("eddm", 0)
+    eq(d1, round(prior * 1.0, 2), f"D+1 tam uygula: {d1}")
+    eq(d2, round(prior * 0.85, 2), f"D+2 %85: {d2}")
+    ok(d2 < d1, f"D+2 < D+1 ({d2} < {d1})")
+
+test("Faz A1: D+2 dampening 0.85 doğru uygulanıyor",
+     test_horizon_dampening_applied)
+
+
+def test_summary_includes_priors():
+    """summary() prior'ları da döndürür (source='prior')."""
+    sd = _import_settlement_delta()
+    from pathlib import Path
+    items = sd.summary(db_path=Path("/nonexistent.db"))
+    # Prior'u > 0 olan istasyonlar listede olmalı
+    stations_in_summary = {item["station"] for item in items}
+    for st in ("eddm", "lfpg", "limc"):
+        ok(st in stations_in_summary, f"{st} summary'de mevcut (prior > 0)")
+    # Kaynak 'prior' olmalı
+    for item in items:
+        if item["station"] == "eddm":
+            eq(item.get("source"), "prior",
+               f"eddm source='prior': {item.get('source')}")
+
+test("Faz A2: summary() prior istasyonları da döndürür",
+     test_summary_includes_priors)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

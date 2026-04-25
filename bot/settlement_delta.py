@@ -6,7 +6,7 @@ Problem: Polymarket marketleri Weather Underground (WU) verisiyle settle olur;
 bot ise Open-Meteo arşivinden ölçüm alır (tahmin kaynağı ile uyumlu).
 İki kaynak arasında istasyon × mevsim bazlı sistematik sapma var.
 
-Örnek: LFPG için WU günlük max tipik +1.9°C Open-Meteo üstünde → top_pick 17°C
+Örnek: LFPG için WU günlük max tipik +1.4°C Open-Meteo üstünde → top_pick 17°C
 olsa bile gerçek settle 19°C'ye yakın → yanlış bucket seçimi.
 
 Mevcut veri kaynağı: `settlement_audit` tablosu (Faz 6b) — her gün her kaynak
@@ -16,33 +16,61 @@ medyan olarak blend'e eklenir.
 Kullanım:
     from bot.settlement_delta import learn_station_delta, apply_delta
 
-    delta = learn_station_delta("lfpg")     # rolling 60 gün median
+    delta = learn_station_delta("lfpg")     # rolling 30 gün median
     adjusted_top_pick = apply_delta("lfpg", top_pick=17)  # → 19
 
-Fallback: yeterli veri yoksa (<5 gün çift kaynak), delta=0 (etkisiz).
+Fallback (Faz A2): yeterli gözlem yoksa (<3 çift kaynak), STATION_DELTA_PRIORS
+kullanılır. Bu değerler METAR-OM proxy analizi + ilk 3 haftalık canlı settlement
+verisinden türetilmiştir; WU doğrudan entegre edilene kadar muhafazakâr tutulur.
 """
 from __future__ import annotations
 
 from datetime import datetime, timedelta
 from pathlib import Path
 
+# ── Faz A1: Hız ayarları ───────────────────────────────────────────────────
+# Önceki: MIN_PAIRED_SAMPLES=5, DEFAULT_WINDOW_DAYS=60, D+2 dampening=0.70
+# Yeni:   3 gözlem yeterli (daha hızlı aktivasyon), 30 gün pencere (daha güncel),
+#         D+2 dampening 0.85 (settlement bias D+2'de de güçlü).
+
 # Minimum çift-kaynaklı gözlem sayısı delta güvenilir sayılsın
-MIN_PAIRED_SAMPLES = 5
+MIN_PAIRED_SAMPLES = 3
 
 # Delta tavanı — saçma değerleri kes (anomalik gün blend'i mahvetmesin)
 MAX_DELTA_C = 3.0
 
-# Rolling pencere
-DEFAULT_WINDOW_DAYS = 60
+# Rolling pencere (gün)
+DEFAULT_WINDOW_DAYS = 30
 
-# Faz 8: horizon-specific dampening
-# settlement_audit horizon'dan bağımsız actual temp tutar, fakat delta'yı
-# UYGULAMA aşamasında horizon'a göre zayıflatmak gerek. D+2 forecast'ında
-# bias kaynakları çeşitlenir (model skew + settlement skew birbirini örter);
-# D+2'de delta'yı %30 tone-down et. D+1 tam kuvvet.
+# Faz 8/A1: horizon-specific dampening
+# D+2'de hem model skew hem settlement skew birlikte var. %85'e çıkarıldı:
+# bias tutarlı olduğunda agresif düzeltme > ihtiyatlı ton-down.
 HORIZON_DELTA_DAMPENING: dict[int, float] = {
-    1: 1.0,   # D+1: tam uygula
-    2: 0.7,   # D+2: %30 azalt (model bias + settlement bias karışabilir)
+    1: 1.0,    # D+1: tam uygula
+    2: 0.85,   # D+2: %15 azalt (eski: %30 — çok muhafazakârdı)
+}
+
+# ── Faz A2: İstasyon prior'ları (cold-start kalibrasyonu) ──────────────────
+# Kaynak: METAR − Open-Meteo audit analizi (ilk 3 hafta, n=1-3 gözlem)
+# Sadece tutarlı pozitif bias olan istasyonlara prior uygulandı.
+# EGLC, EFHK, LEMD: METAR proxy güvenilmez (WU lokasyonu farklı) → 0.0
+# Değerler bilinçli olarak muhafazakâr (gerçek deltanın ~%70'i):
+# gerçek WU entegrasyonu tamamlandığında üzerine yazılacak.
+STATION_DELTA_PRIORS: dict[str, float] = {
+    "eddm":  1.0,   # METAR-OM median +1.50°C (3 gün, tutarlı) → prior 1.0
+    "eham":  0.4,   # METAR-OM median +0.40°C (3 gün, tutarlı)
+    "lfpg":  0.8,   # METAR-OM +1.40°C (1 gün) — muhafazakâr
+    "limc":  0.8,   # METAR-OM +1.75°C (2 gün) — muhafazakâr
+    "ltac":  0.5,   # METAR-OM median +1.20°C ama yüksek varyasyon → dikkatli
+    "ltfm":  0.4,   # METAR-OM median +0.40°C (3 gün, tutarlı)
+    "eglc":  0.0,   # METAR < OM (airport kanalı farkı); WU belirsiz
+    "efhk":  0.0,   # karma (-0.40), WU lokasyonu farklı
+    "epwa":  0.0,   # nötr (median 0.0, 3 gün)
+    "lemd":  0.0,   # negatif eğilim (-0.70), az veri
+    "rjtt":  0.0,   # 1 gün veri, nötr (-0.10)
+    "rksi":  0.0,   # yapısal soğuk bias ayrı ele alınıyor
+    "vhhh":  0.0,   # henüz yeterli audit yok
+    "omdb":  0.0,   # çölde METAR-WU farkı farklı dinamik
 }
 
 
@@ -134,18 +162,28 @@ def learn_station_delta(
     db_path: Path | None = None,
     horizon_days: int | None = None,
 ) -> float:
-    """Tek istasyon için delta — yeterli veri yoksa 0.0.
+    """Tek istasyon için delta.
 
-    Faz 8: horizon_days verilmişse HORIZON_DELTA_DAMPENING çarpanı uygulanır.
-    D+2 (horizon_days=2) için delta %70'e zayıflatılır (bias çakışmalarına
-    karşı). audit tablosu horizon bağımsız olduğu için aynı medyan kullanılır,
-    sadece uygulama ölçeklenir.
+    Öncelik sırası:
+      1. Yeterli gözlem (n >= MIN_PAIRED_SAMPLES): rolling medyan kullan
+      2. Az gözlem (n < threshold): STATION_DELTA_PRIORS kullan (Faz A2)
+      3. Hiç gözlem yoksa: prior (ya da 0)
+
+    Faz 8/A1: horizon_days verilmişse HORIZON_DELTA_DAMPENING çarpanı uygulanır.
     """
     deltas = compute_station_deltas(days=days, db_path=db_path)
     info = deltas.get(station)
-    if info is None:
+
+    if info is not None:
+        # Yeterli gözlem var → rolling medyan kullan
+        raw = float(info["delta"])
+    else:
+        # Gözlem yok ya da threshold altı → prior kullan (Faz A2)
+        raw = STATION_DELTA_PRIORS.get(station, 0.0)
+
+    if raw == 0.0:
         return 0.0
-    raw = float(info["delta"])
+
     if horizon_days is None:
         return raw
     factor = HORIZON_DELTA_DAMPENING.get(int(horizon_days), 1.0)
@@ -161,7 +199,7 @@ def apply_delta(
 ) -> int:
     """top_pick'e settlement delta'yı uygular (round) → adjusted top_pick.
 
-    horizon_days geçilirse horizon-specific dampening aktif (Faz 8).
+    horizon_days geçilirse horizon-specific dampening aktif (Faz 8/A1).
     """
     delta = learn_station_delta(
         station, days=days, db_path=db_path, horizon_days=horizon_days,
@@ -174,7 +212,20 @@ def apply_delta(
 def summary(days: int = DEFAULT_WINDOW_DAYS, db_path: Path | None = None) -> list:
     """Tüm istasyonlar için delta özeti (dashboard için)."""
     deltas = compute_station_deltas(days=days, db_path=db_path)
-    return [
-        {"station": s, **info}
-        for s, info in sorted(deltas.items())
-    ]
+    # Prior'ları da dahil et (gözlem yoksa prior göster)
+    all_stations = set(deltas.keys()) | set(STATION_DELTA_PRIORS.keys())
+    result = []
+    for s in sorted(all_stations):
+        if s in deltas:
+            result.append({"station": s, **deltas[s], "source": "observed"})
+        else:
+            prior = STATION_DELTA_PRIORS.get(s, 0.0)
+            if prior != 0.0:
+                result.append({
+                    "station": s,
+                    "delta": prior,
+                    "n": 0,
+                    "source_pair": "prior",
+                    "source": "prior",
+                })
+    return result
