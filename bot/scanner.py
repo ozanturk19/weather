@@ -63,8 +63,10 @@ MAX_PRICE    = 0.40   # 40¢ üzeri pozisyonlarda edge zayıflıyor → pas
 
 # Kalite filtreleri
 SKIP_UNCERTAINTY = {"yüksek", "high", "very high"}  # bu seviyelerde hiç pozisyon açma
-MIN_BIAS_TRADES  = 8   # bias hesabı için minimum kapalı trade (4'ten artırıldı)
-                       # Az veriyle yanlış bias uygulanmasını önler (Paris +3°C vakası)
+MIN_BIAS_TRADES  = 5   # bias hesabı için minimum kapalı trade (8'den düşürüldü — Faz A)
+                       # 4'te Paris +3°C vakası → 8'e çıkardık; şimdi 5-7 gerçek gözlem var
+                       # Settlement delta (Faz A2) WU-OM offset'ini ayrıca ele aldığı için
+                       # Kalman bias daha az kritik → 5 güvenli eşik
 MAX_BIAS_CORRECTION = 2  # bias tavanı: en fazla ±2°C düzeltme uygulanır
 
 # Ensemble kalite filtreleri
