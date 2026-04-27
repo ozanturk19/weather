@@ -1074,6 +1074,30 @@ body.dark .lb-badge-cancel  { background:#1f2937; color:#9ca3af; }
     <div class="cc-hint">Detay ↗ <span id="cc-pm-efhk"></span></div>
     <div class="cc-conf-bar"></div>
   </div>
+
+  <div class="cc" id="cc-rjtt" onclick="openModal('rjtt')">
+    <div class="cc-header"><div><div class="cc-name">🇯🇵 RJTT</div><div class="cc-sub">Tokyo Haneda <span class="cc-settle">WU</span></div></div><div id="cc-bias-rjtt"></div></div>
+    <div class="cc-temp" id="cc-blend-rjtt">—</div>
+    <div class="cc-range" id="cc-range-rjtt"></div>
+    <div class="cc-unc"   id="cc-unc-rjtt"></div>
+    <div class="cc-ctx"   id="cc-ctx-rjtt"></div>
+    <div class="cc-metar" id="cc-metar-rjtt"></div>
+    <div class="cc-edge"  id="cc-edge-rjtt"></div>
+    <div class="cc-hint">Detay ↗ <span id="cc-pm-rjtt"></span></div>
+    <div class="cc-conf-bar"></div>
+  </div>
+
+  <div class="cc" id="cc-rksi" onclick="openModal('rksi')">
+    <div class="cc-header"><div><div class="cc-name">🇰🇷 RKSI</div><div class="cc-sub">Seoul Incheon <span class="cc-settle">WU</span></div></div><div id="cc-bias-rksi"></div></div>
+    <div class="cc-temp" id="cc-blend-rksi">—</div>
+    <div class="cc-range" id="cc-range-rksi"></div>
+    <div class="cc-unc"   id="cc-unc-rksi"></div>
+    <div class="cc-ctx"   id="cc-ctx-rksi"></div>
+    <div class="cc-metar" id="cc-metar-rksi"></div>
+    <div class="cc-edge"  id="cc-edge-rksi"></div>
+    <div class="cc-hint">Detay ↗ <span id="cc-pm-rksi"></span></div>
+    <div class="cc-conf-bar"></div>
+  </div>
 </div>
 
 <!-- EN İYİ İŞLEMLER -->
@@ -1254,6 +1278,40 @@ body.dark .lb-badge-cancel  { background:#1f2937; color:#9ca3af; }
     <div class="modal-col-right">
       <div class="modal-section-label">Polymarket Buckets</div>
       <div id="pm-markets-efhk"><span class="loading">yükleniyor...</span></div>
+    </div>
+  </div>
+
+  <div id="panel-rjtt">
+    <div class="modal-col-left">
+      <div><div id="bias-rjtt"></div><div class="summary-box" id="summary-rjtt"><span class="loading">yükleniyor...</span></div></div>
+      <div><div class="modal-section-label">Blend Tahmini</div>
+        <div class="blend-block"><div class="blend-temp" id="blend-rjtt">—</div><div class="blend-range" id="range-rjtt"></div><div id="unc-rjtt"></div></div></div>
+      <div><div class="modal-section-label">Saatlik Tahmin</div><div id="h-rjtt"><span class="loading">yükleniyor...</span></div></div>
+      <div><div class="modal-section-label">ICON Ensemble <span id="ens-label-rjtt" style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">ICON · — üye</span></div><div id="ens-rjtt"><span class="loading">yükleniyor...</span></div></div>
+      <div><div class="modal-section-label">METAR Gözlem</div><div id="metar-rjtt"><span class="loading">yükleniyor...</span></div>
+        <div class="wu-badge"><span>⚖️ WU settlement:</span> <a href="https://www.wunderground.com/history/daily/jp/tokyo/RJTT" target="_blank">RJTT · tam °C</a></div></div>
+      <div><div class="model-toggle" onclick="toggleModels('rjtt')"><span id="toggle-icon-rjtt">▸</span> 5 model detayı</div><div class="model-grid" id="models-rjtt"></div></div>
+    </div>
+    <div class="modal-col-right">
+      <div class="modal-section-label">Polymarket Buckets</div>
+      <div id="pm-markets-rjtt"><span class="loading">yükleniyor...</span></div>
+    </div>
+  </div>
+
+  <div id="panel-rksi">
+    <div class="modal-col-left">
+      <div><div id="bias-rksi"></div><div class="summary-box" id="summary-rksi"><span class="loading">yükleniyor...</span></div></div>
+      <div><div class="modal-section-label">Blend Tahmini</div>
+        <div class="blend-block"><div class="blend-temp" id="blend-rksi">—</div><div class="blend-range" id="range-rksi"></div><div id="unc-rksi"></div></div></div>
+      <div><div class="modal-section-label">Saatlik Tahmin</div><div id="h-rksi"><span class="loading">yükleniyor...</span></div></div>
+      <div><div class="modal-section-label">ICON Ensemble <span id="ens-label-rksi" style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">ICON · — üye</span></div><div id="ens-rksi"><span class="loading">yükleniyor...</span></div></div>
+      <div><div class="modal-section-label">METAR Gözlem</div><div id="metar-rksi"><span class="loading">yükleniyor...</span></div>
+        <div class="wu-badge"><span>⚖️ WU settlement:</span> <a href="https://www.wunderground.com/history/daily/kr/incheon/RKSI" target="_blank">RKSI · tam °C</a></div></div>
+      <div><div class="model-toggle" onclick="toggleModels('rksi')"><span id="toggle-icon-rksi">▸</span> 5 model detayı</div><div class="model-grid" id="models-rksi"></div></div>
+    </div>
+    <div class="modal-col-right">
+      <div class="modal-section-label">Polymarket Buckets</div>
+      <div id="pm-markets-rksi"><span class="loading">yükleniyor...</span></div>
     </div>
   </div>
 
@@ -2119,6 +2177,7 @@ const MODAL_TITLES = {
   lemd:'🇪🇸 LEMD — Madrid Barajas',    lfpg:'🇫🇷 LFPG — Paris CDG',
   eham:'🇳🇱 EHAM — Amsterdam Schiphol', eddm:'🇩🇪 EDDM — Münih',
   epwa:'🇵🇱 EPWA — Varşova Chopin',    efhk:'🇫🇮 EFHK — Helsinki Vantaa',
+  rjtt:'🇯🇵 RJTT — Tokyo Haneda',      rksi:'🇰🇷 RKSI — Seoul Incheon',
 };
 
 function openModal(id) {
@@ -2343,9 +2402,9 @@ function renderDailyReport() {
   const today = dates[0];
   const tomorrow = dates[1];
   const now = new Date().toLocaleString('tr-TR', { dateStyle: 'long', timeStyle: 'short' });
-  const SN = { eglc:'EGLC · Londra', ltac:'LTAC · Ankara', limc:'LIMC · Milano', ltfm:'LTFM · İstanbul', lemd:'LEMD · Madrid', lfpg:'LFPG · Paris', eham:'EHAM · Amsterdam', eddm:'EDDM · Münih', epwa:'EPWA · Varşova', efhk:'EFHK · Helsinki' };
-  const FL = { eglc:'🇬🇧', ltac:'🇹🇷', limc:'🇮🇹', ltfm:'🇹🇷', lemd:'🇪🇸', lfpg:'🇫🇷', eham:'🇳🇱', eddm:'🇩🇪', epwa:'🇵🇱', efhk:'🇫🇮' };
-  const ST = { eglc:'WU', ltac:'WU', limc:'WU', ltfm:'NOAA', lemd:'WU', lfpg:'WU', eham:'WU', eddm:'WU', epwa:'WU', efhk:'WU' };
+  const SN = { eglc:'EGLC · Londra', ltac:'LTAC · Ankara', limc:'LIMC · Milano', ltfm:'LTFM · İstanbul', lemd:'LEMD · Madrid', lfpg:'LFPG · Paris', eham:'EHAM · Amsterdam', eddm:'EDDM · Münih', epwa:'EPWA · Varşova', efhk:'EFHK · Helsinki', rjtt:'RJTT · Tokyo', rksi:'RKSI · Seoul' };
+  const FL = { eglc:'🇬🇧', ltac:'🇹🇷', limc:'🇮🇹', ltfm:'🇹🇷', lemd:'🇪🇸', lfpg:'🇫🇷', eham:'🇳🇱', eddm:'🇩🇪', epwa:'🇵🇱', efhk:'🇫🇮', rjtt:'🇯🇵', rksi:'🇰🇷' };
+  const ST = { eglc:'WU', ltac:'WU', limc:'WU', ltfm:'NOAA', lemd:'WU', lfpg:'WU', eham:'WU', eddm:'WU', epwa:'WU', efhk:'WU', rjtt:'WU', rksi:'WU' };
 
   // Fırsat hesaplayıcı — her iki gün için
   function calcEdges(dateKey) {
@@ -2974,7 +3033,7 @@ function renderTopTrades() {
     return;
   }
 
-  const stationLabels = { eglc:'EGLC · Londra', ltac:'LTAC · Ankara', limc:'LIMC · Milano', ltfm:'LTFM · İstanbul', lemd:'LEMD · Madrid', lfpg:'LFPG · Paris', eham:'EHAM · Amsterdam', eddm:'EDDM · Münih', epwa:'EPWA · Varşova', efhk:'EFHK · Helsinki' };
+  const stationLabels = { eglc:'EGLC · Londra', ltac:'LTAC · Ankara', limc:'LIMC · Milano', ltfm:'LTFM · İstanbul', lemd:'LEMD · Madrid', lfpg:'LFPG · Paris', eham:'EHAM · Amsterdam', eddm:'EDDM · Münih', epwa:'EPWA · Varşova', efhk:'EFHK · Helsinki', rjtt:'RJTT · Tokyo', rksi:'RKSI · Seoul' };
   const sel = selections;
 
   listEl.innerHTML = trades.map((t, idx) => {
@@ -3277,7 +3336,7 @@ async function loadPolymarket(id) {
 // --- METAR ENSEMBLE SENSÖRÜ (İyileştirme #4) ---
 // 15:00 sonrası: METAR day_max bir alt sınır.
 // Observed max'ın altında kalan ensemble üyeleri → imkânsız → max'a yuvarla.
-const TZ_MAP = { eglc:'Europe/London', ltac:'Europe/Istanbul', limc:'Europe/Rome', ltfm:'Europe/Istanbul', lemd:'Europe/Madrid', lfpg:'Europe/Paris', eham:'Europe/Amsterdam', eddm:'Europe/Berlin', epwa:'Europe/Warsaw', efhk:'Europe/Helsinki' };
+const TZ_MAP = { eglc:'Europe/London', ltac:'Europe/Istanbul', limc:'Europe/Rome', ltfm:'Europe/Istanbul', lemd:'Europe/Madrid', lfpg:'Europe/Paris', eham:'Europe/Amsterdam', eddm:'Europe/Berlin', epwa:'Europe/Warsaw', efhk:'Europe/Helsinki', rjtt:'Asia/Tokyo', rksi:'Asia/Seoul' };
 
 function localHourFor(id) {
   return parseInt(new Date().toLocaleString('en-US', { timeZone: TZ_MAP[id] || 'UTC', hour: 'numeric', hour12: false }), 10);
