@@ -1418,7 +1418,7 @@ function toggleTheme() {
   document.getElementById('themeBtn').textContent = isDark ? '☀️' : '🌙';
 }
 
-const STATIONS = ['eglc', 'ltac', 'limc', 'ltfm', 'lemd', 'lfpg', 'eham', 'eddm', 'epwa', 'efhk'];
+const STATIONS = ['eglc', 'ltac', 'limc', 'ltfm', 'lemd', 'lfpg', 'eham', 'eddm', 'epwa', 'efhk', 'rjtt', 'rksi'];
 const KEY_HOURS = ['06:00', '09:00', '12:00', '15:00', '18:00'];
 const MODEL_LABELS = { gfs: 'GFS', ecmwf: 'ECMWF', icon: 'ICON', ukmo: 'UKMO', meteofrance: 'MF' };
 
@@ -1554,12 +1554,12 @@ async function selectReport() {
 const LB_FLAGS = {
   eglc:'🇬🇧', ltac:'🇹🇷', limc:'🇮🇹', ltfm:'🇹🇷', lemd:'🇪🇸',
   lfpg:'🇫🇷', eham:'🇳🇱', eddm:'🇩🇪', epwa:'🇵🇱', efhk:'🇫🇮',
-  omdb:'🇦🇪', rjtt:'🇯🇵',
+  omdb:'🇦🇪', rjtt:'🇯🇵', rksi:'🇰🇷',
 };
 const LB_CITY = {
   eglc:'Londra City', ltac:'Ankara', limc:'Milano', ltfm:'İstanbul',
   lemd:'Madrid', lfpg:'Paris CDG', eham:'Amsterdam', eddm:'Münih',
-  epwa:'Varşova', efhk:'Helsinki', omdb:'Dubai', rjtt:'Tokyo',
+  epwa:'Varşova', efhk:'Helsinki', omdb:'Dubai', rjtt:'Tokyo', rksi:'Seul',
 };
 let _liveBotData = null;      // önbellek (diğer panelleri de besler)
 let _liveBalance = null;
@@ -2875,8 +2875,8 @@ function renderBias(id) {
 }
 
 // --- TOP TRADES ---
-const STATION_FLAGS  = { eglc:'🇬🇧', ltac:'🇹🇷', limc:'🇮🇹', ltfm:'🇹🇷', lemd:'🇪🇸', lfpg:'🇫🇷', eham:'🇳🇱', eddm:'🇩🇪', epwa:'🇵🇱', efhk:'🇫🇮' };
-const SETTLEMENT_SRC = { eglc:'WU', ltac:'WU', limc:'WU', ltfm:'NOAA', lemd:'WU', lfpg:'WU', eham:'WU', eddm:'WU', epwa:'WU', efhk:'WU' };
+const STATION_FLAGS  = { eglc:'🇬🇧', ltac:'🇹🇷', limc:'🇮🇹', ltfm:'🇹🇷', lemd:'🇪🇸', lfpg:'🇫🇷', eham:'🇳🇱', eddm:'🇩🇪', epwa:'🇵🇱', efhk:'🇫🇮', rjtt:'🇯🇵', rksi:'🇰🇷' };
+const SETTLEMENT_SRC = { eglc:'WU', ltac:'WU', limc:'WU', ltfm:'NOAA', lemd:'WU', lfpg:'WU', eham:'WU', eddm:'WU', epwa:'WU', efhk:'WU', rjtt:'WU', rksi:'WU' };
 const OUTLIER_THRESHOLD = 5;
 
 function computeTopTrades() {
@@ -3634,7 +3634,7 @@ async function refreshLive() {
 setInterval(() => { if (!_isLoading) refreshLive(); }, 20 * 60 * 1000);
 
 // --- WALLET & PORTFÖY ---
-const CITY_SLUG = { eglc:'london', ltac:'ankara', limc:'milan', ltfm:'istanbul', lemd:'madrid', lfpg:'paris', eham:'amsterdam', eddm:'munich', epwa:'warsaw', efhk:'helsinki' };
+const CITY_SLUG = { eglc:'london', ltac:'ankara', limc:'milan', ltfm:'istanbul', lemd:'madrid', lfpg:'paris', eham:'amsterdam', eddm:'munich', epwa:'warsaw', efhk:'helsinki', rjtt:'tokyo', rksi:'seoul' };
 const MONTH_EN  = ['january','february','march','april','may','june','july','august','september','october','november','december'];
 
 function walletInputChange() {
@@ -3708,7 +3708,7 @@ function renderPortfolio() {
   if (!portfolioCache.length) { box.style.display = 'none'; return; }
   box.style.display = 'block';
 
-  const STATION_FLAG = { eglc:'🇬🇧', ltac:'🇹🇷', limc:'🇮🇹', ltfm:'🇹🇷', lemd:'🇪🇸', lfpg:'🇫🇷', eham:'🇳🇱', eddm:'🇩🇪', epwa:'🇵🇱', efhk:'🇫🇮' };
+  const STATION_FLAG = { eglc:'🇬🇧', ltac:'🇹🇷', limc:'🇮🇹', ltfm:'🇹🇷', lemd:'🇪🇸', lfpg:'🇫🇷', eham:'🇳🇱', eddm:'🇩🇪', epwa:'🇵🇱', efhk:'🇫🇮', rjtt:'🇯🇵', rksi:'🇰🇷' };
 
   const rows = portfolioCache.map(p => {
     let stFlag = '🌍';
