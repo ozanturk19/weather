@@ -291,8 +291,8 @@ def bootstrap_mode_ci(member_maxes: list[float], n_boot: int = BOOTSTRAP_SAMPLES
         "top_pick": top_pick,
     }
 
-# Bias düzeltmesi için minimum gün sayısı
-BIAS_MIN_DAYS = 7
+# Bias düzeltmesi için minimum gün sayısı (7'den 5'e düşürüldü — daha hızlı aktivasyon)
+BIAS_MIN_DAYS = 5
 
 KEY_HOURS = ["06:00", "09:00", "12:00", "15:00", "18:00"]
 
@@ -775,6 +775,197 @@ async def get_ensemble(station: str):
     return {"station": station, "days": days}
 
 
+def _get_recent_actuals(station: str, n_days: int = 3) -> list:
+    """Son n_days günün gerçek max sıcaklıklarını predictions.json'dan döndür.
+
+    Döner: [{"date": "2026-04-25", "actual": 21.0}, ...]  — en yeni önde.
+    NO bot ve analiz için: model blind spot tespiti.
+    """
+    try:
+        preds = _load_preds()
+        entries = []
+        for date, e in sorted(preds.get(station, {}).items(), reverse=True):
+            actual = e.get("actual")
+            if actual is not None:
+                entries.append({"date": date, "actual": float(actual)})
+                if len(entries) >= n_days:
+                    break
+        return entries
+    except Exception:
+        return []
+
+
+def _compute_model_streak(station: str) -> dict:
+    """Model bias yönünde kaç gün üst üste yanılıyor?
+
+    cold_streak: actual > blend olan ardışık gün sayısı (model alttan vuruyor)
+    warm_streak: actual < blend olan ardışık gün sayısı (model üstten vuruyor)
+    streak_delta: son streak'teki ortalama sapma (°C)
+    """
+    try:
+        preds = _load_preds()
+        entries_sorted = sorted(
+            [(d, e) for d, e in preds.get(station, {}).items()
+             if e.get("blend") is not None and e.get("actual") is not None],
+            key=lambda x: x[0],
+            reverse=True,   # en yeni önce
+        )
+        cold_streak = warm_streak = 0
+        cold_deltas: list = []
+        warm_deltas: list = []
+        for _, e in entries_sorted:
+            err = e["actual"] - e["blend"]   # pozitif = model soğuk, gerçek daha yüksek
+            if err > 0.5:
+                if warm_streak > 0:
+                    break   # zincir kırıldı
+                cold_streak += 1
+                cold_deltas.append(err)
+            elif err < -0.5:
+                if cold_streak > 0:
+                    break
+                warm_streak += 1
+                warm_deltas.append(abs(err))
+            else:
+                break   # nötr gün → zincir kırıldı
+        streak_delta = round(sum(cold_deltas) / len(cold_deltas), 1) if cold_deltas else (
+            round(sum(warm_deltas) / len(warm_deltas), 1) if warm_deltas else 0.0
+        )
+        return {
+            "cold_streak":   cold_streak,   # model soğuk, gerçek daha sıcak
+            "warm_streak":   warm_streak,   # model sıcak, gerçek daha soğuk
+            "streak_delta":  streak_delta,  # son streak'teki ort. sapma °C
+        }
+    except Exception:
+        return {"cold_streak": 0, "warm_streak": 0, "streak_delta": 0.0}
+
+
+@app.get("/api/ens-buckets")
+async def get_ens_buckets(station: str, date: str):
+    """
+    Bias-corrected ENS% per bucket — botun TEK veri kaynağı.
+    Dashboard ile aynı hesaplama: bias uygula + CAP_LO=3%.
+
+    Yeni alanlar (model güvenilirlik sinyalleri):
+      recent_actuals   — son 3 günün gerçek max°C (NO bot için kontekst)
+      cold_streak      — model kaç gün üst üste düşük tahmin etti
+      warm_streak      — model kaç gün üst üste yüksek tahmin etti
+      streak_delta     — o streak'teki ort. sapma °C
+    """
+    station = station.lower()
+    if station not in STATIONS:
+        raise HTTPException(status_code=404, detail="Bilinmeyen istasyon")
+
+    # 1. Raw ensemble
+    try:
+        ens_resp = await get_ensemble(station)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Ensemble alınamadı: {e}")
+
+    day_data = ens_resp.get("days", {}).get(date)
+    if not day_data:
+        raise HTTPException(status_code=404, detail=f"Ensemble verisi yok: {date}")
+
+    raw_members = day_data["member_maxes"]
+    n = len(raw_members)
+
+    # 2. Bias correction
+    bias_7d = 0.0
+    bias_active = False
+    try:
+        bias_resp = await get_prediction_bias(station)
+        bias_7d = float(bias_resp.get("bias_7d") or 0.0)
+        bias_active = bool(bias_resp.get("bias_active", False))
+    except Exception:
+        pass
+
+    # corrected = member - bias_7d
+    # bias_7d negatif (model soğuk) → çıkarma ekleme olur
+    corrected = [m - bias_7d for m in raw_members]
+    corrected_mean = round(sum(corrected) / n, 2) if n else 0.0
+
+    # 3. Polymarket buckets
+    try:
+        pm_resp = await get_polymarket_markets(station, date)
+        pm_buckets = pm_resp.get("buckets", [])
+    except Exception:
+        pm_buckets = []
+
+    # 4. ENS% per bucket (CAP_LO=3%)
+    CAP_LO = 0.03
+    bucket_results = []
+    mode_thr = None
+    mode_pct = 0.0
+
+    for b in pm_buckets:
+        thr = b.get("threshold")
+        is_below = b.get("is_below", False)
+        is_above = b.get("is_above", False)
+        if thr is None:
+            continue
+
+        if is_below:
+            cnt = sum(1 for m in corrected if round(m) <= thr)
+        elif is_above:
+            cnt = sum(1 for m in corrected if round(m) >= thr)
+        else:
+            cnt = sum(1 for m in corrected if round(m) == int(thr))
+
+        raw_pct = cnt / n if n else 0.0
+        ens_pct = max(CAP_LO, raw_pct)
+        capped  = raw_pct < CAP_LO
+
+        bucket_results.append({
+            "threshold":    thr,
+            "is_below":     is_below,
+            "is_above":     is_above,
+            "yes_price":    b.get("yes_price"),
+            "no_price":     b.get("no_price"),
+            "liquidity":    b.get("liquidity"),
+            "condition_id": b.get("condition_id"),
+            "ens_pct":      round(ens_pct, 4),
+            "ens_count":    cnt,
+            "capped":       capped,
+        })
+
+        if not is_below and not is_above and raw_pct > mode_pct:
+            mode_pct = raw_pct
+            mode_thr = int(thr)
+
+    # 5. Trend
+    TREND_THRESH = 0.3
+    corrected_mode = mode_thr or 0
+    diff = corrected_mean - corrected_mode if corrected_mode else 0.0
+    if diff > TREND_THRESH:
+        trend = "warming"
+    elif diff < -TREND_THRESH:
+        trend = "cooling"
+    else:
+        trend = "neutral"
+
+    # 6. Model güvenilirlik sinyalleri (NO bot için)
+    recent_actuals = _get_recent_actuals(station, n_days=3)
+    streak_info    = _compute_model_streak(station)
+
+    return {
+        "station":        station,
+        "date":           date,
+        "bias":           bias_7d,
+        "bias_active":    bias_active,
+        "member_count":   n,
+        "corrected_mean": corrected_mean,
+        "corrected_mode": corrected_mode,
+        "mode_pct":       round(mode_pct, 4),
+        "trend":          trend,
+        "trend_diff":     round(diff, 3),
+        "buckets":        bucket_results,
+        # Yeni alanlar — model güvenilirlik sinyalleri
+        "recent_actuals": recent_actuals,
+        "cold_streak":    streak_info["cold_streak"],
+        "warm_streak":    streak_info["warm_streak"],
+        "streak_delta":   streak_info["streak_delta"],
+    }
+
+
 @app.get("/api/metar")
 async def get_metar_obs(station: str):
     """
@@ -1076,13 +1267,20 @@ async def get_prediction_bias(station: str):
     # Bias'ı MAE ile sınırla: aşırı düzeltmeyi önle
     bias = round(max(-mae, min(mae, w_bias)), 2)
 
+    # Streak bilgisi (model hangi yönde ve kaç gün üst üste yanılıyor?)
+    streak = _compute_model_streak(station)
+
     return {
-        "station":    station,
-        "bias_7d":    bias,
-        "mae":        round(mae, 2),
-        "count":      len(recent),
+        "station":     station,
+        "bias_7d":     bias,
+        "mae":         round(mae, 2),
+        "count":       len(recent),
         "bias_active": len(recent) >= BIAS_MIN_DAYS,
-        "entries":    entries[-14:],
+        "entries":     entries[-14:],
+        # Model güvenilirlik sinyalleri
+        "cold_streak":  streak["cold_streak"],
+        "warm_streak":  streak["warm_streak"],
+        "streak_delta": streak["streak_delta"],
     }
 
 
@@ -1257,6 +1455,7 @@ async def bot_settle(x_api_token: str = Header(default="")):
 # ── Live Trading API Endpoints ───────────────────────────────────────────────
 
 LIVE_TRADES_FILE = Path("bot/live_trades.json")
+NO_TRADES_FILE   = Path(os.getenv("NO_TRADES_FILE", "/opt/polymarket/bot/data/weather_no_trades.json"))
 CLOSED_LIVE_STATUSES = ("won", "lost", "settled_win", "settled_loss", "expired", "cancelled")
 
 def _load_live_trades() -> list:
@@ -1481,6 +1680,173 @@ async def get_live_balance():
         return {"balance": balance, "raw": output}
     except Exception as e:
         return {"balance": None, "error": str(e)}
+
+
+# ── NO Bot ────────────────────────────────────────────────────────────────────
+
+CLOSED_NO_STATUSES = frozenset({"settled", "sold", "sell_filled", "cancelled", "expired", "settled_pending"})
+OPEN_NO_STATUSES   = frozenset({"pending_fill", "filled", "sell_pending"})
+
+def _load_no_trades() -> list:
+    try:
+        if NO_TRADES_FILE.exists():
+            return json.loads(NO_TRADES_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return []
+
+@app.get("/api/no-bot/trades")
+async def get_no_bot_trades():
+    trades = _load_no_trades()
+    open_t = [t for t in trades if t.get("status") in OPEN_NO_STATUSES]
+    closed = [t for t in trades if t.get("status") in CLOSED_NO_STATUSES]
+    wins   = [t for t in closed  if (t.get("result") or "").upper() == "WIN"]
+    losses = [t for t in closed  if (t.get("result") or "").upper() == "LOSS"]
+    total_pnl = round(sum(t.get("pnl_usdc") or 0 for t in closed), 2)
+    win_rate  = round(len(wins) / len(closed) * 100, 1) if closed else None
+    return {
+        "trades": trades,
+        "stats": {
+            "total":     len(trades),
+            "open":      len(open_t),
+            "closed":    len(closed),
+            "wins":      len(wins),
+            "losses":    len(losses),
+            "win_rate":  win_rate,
+            "total_pnl": total_pnl,
+        },
+    }
+
+
+@app.get("/api/no-bot/open-positions")
+async def get_no_bot_open_positions():
+    trades      = _load_no_trades()
+    open_trades = [t for t in trades if t.get("status") in OPEN_NO_STATUSES]
+
+    unique_pairs: dict = {}
+    for t in open_trades:
+        station = (t.get("station") or "").lower()
+        date    = t.get("date")
+        if not station or not date or station not in STATIONS:
+            continue
+        key = (station, date)
+        if key not in unique_pairs:
+            unique_pairs[key] = STATIONS[station]["pm_query"].lower()
+
+    pair_items = list(unique_pairs.items())
+    fetched = (
+        await asyncio.gather(
+            *[_fetch_event_markets(city, date) for ((_st, date), city) in pair_items],
+            return_exceptions=False,
+        )
+        if pair_items else []
+    )
+    markets_by_pair: dict = {}
+    for (key, _city), markets in zip(pair_items, fetched):
+        markets_by_pair[key] = markets
+
+    def _no_price_for(markets: list, no_token_id: str) -> Optional[float]:
+        if not no_token_id:
+            return None
+        cid = str(no_token_id)
+        for m in markets:
+            clob_raw = m.get("clobTokenIds", "[]")
+            if isinstance(clob_raw, str):
+                try:    clob_tokens = json.loads(clob_raw)
+                except Exception: clob_tokens = []
+            else:
+                clob_tokens = clob_raw if isinstance(clob_raw, list) else []
+            no_tok = clob_tokens[1] if len(clob_tokens) > 1 else None
+            if not (no_tok and str(no_tok) == cid):
+                continue
+            prices = m.get("outcomePrices", "[]")
+            if isinstance(prices, str):
+                try:    prices = json.loads(prices)
+                except Exception: prices = []
+            if prices and len(prices) >= 2:
+                try:    return round(float(prices[1]), 4)
+                except Exception: return None
+        return None
+
+    positions        = []
+    total_at_risk    = 0.0
+    total_mtm        = 0.0
+    total_unrealized = 0.0
+    has_any_unreal   = False
+
+    for t in open_trades:
+        station  = (t.get("station") or "").lower()
+        date     = t.get("date")
+        cid      = t.get("condition_id")
+        fill_p   = t.get("fill_price")
+        shares   = float(t.get("shares") or 0)
+        cost     = float(t.get("cost_usdc") or 0)
+        status   = t.get("status")
+        markets  = markets_by_pair.get((station, date), [])
+        no_price = _no_price_for(markets, cid)
+
+        at_risk = cost
+        if fill_p is not None and no_price is not None:
+            mtm        = round(no_price * shares, 4)
+            unrealized = round((no_price - float(fill_p)) * shares, 4)
+            unreal_pct = round((unrealized / cost) * 100, 2) if cost else None
+            has_any_unreal   = True
+            total_mtm        += mtm
+            total_unrealized += unrealized
+        elif fill_p is None:
+            mtm        = cost
+            unrealized = 0.0
+            unreal_pct = 0.0
+            total_mtm += mtm
+        else:
+            mtm = unrealized = unreal_pct = None
+
+        total_at_risk += at_risk
+
+        market_url = None
+        if station in STATIONS:
+            city       = STATIONS[station]["pm_query"].lower()
+            market_url = f"https://polymarket.com/event/{pm_slug(city, date)}"
+
+        positions.append({
+            "id":             t.get("id"),
+            "station":        station,
+            "date":           date,
+            "bucket_title":   t.get("bucket_title"),
+            "notes":          t.get("notes"),
+            "fill_price":     fill_p,
+            "limit_price":    t.get("limit_price"),
+            "shares":         shares,
+            "cost_usdc":      cost,
+            "status":         status,
+            "current_price":  no_price,
+            "unrealized_pnl": unrealized,
+            "unrealized_pct": unreal_pct,
+            "mark_to_market": mtm,
+            "market_url":     market_url,
+            "sell_price":     t.get("sell_price"),
+            "sell_order_id":  t.get("sell_order_id"),
+            "placed_at":      t.get("placed_at"),
+            "fill_time":      t.get("fill_time"),
+        })
+
+    unreal_pct_total = (
+        round((total_unrealized / total_at_risk) * 100, 2)
+        if (has_any_unreal and total_at_risk > 0) else None
+    )
+
+    return {
+        "positions": positions,
+        "totals": {
+            "open_count":          len(positions),
+            "at_risk_usdc":        round(total_at_risk, 2),
+            "mark_to_market_usdc": round(total_mtm, 2),
+            "unrealized_pnl":      round(total_unrealized, 2) if has_any_unreal else None,
+            "unrealized_pct":      unreal_pct_total,
+        },
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+    }
+
 
 @app.post("/api/live-trades/scan")
 async def live_scan(x_api_token: str = Header(default="")):
