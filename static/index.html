@@ -1287,7 +1287,7 @@ body.dark .lb-badge-cancel  { background:#1f2937; color:#9ca3af; }
       <div><div class="modal-section-label">Blend Tahmini</div>
         <div class="blend-block"><div class="blend-temp" id="blend-rjtt">—</div><div class="blend-range" id="range-rjtt"></div><div id="unc-rjtt"></div></div></div>
       <div><div class="modal-section-label">Saatlik Tahmin</div><div id="h-rjtt"><span class="loading">yükleniyor...</span></div></div>
-      <div><div class="modal-section-label">ICON Ensemble <span id="ens-label-rjtt" style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">ICON · — üye</span></div><div id="ens-rjtt"><span class="loading">yükleniyor...</span></div></div>
+      <div><div class="modal-section-label">ENS Ensemble <span id="ens-label-rjtt" style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">ENS · — üye</span></div><div id="ens-rjtt"><span class="loading">yükleniyor...</span></div></div>
       <div><div class="modal-section-label">METAR Gözlem</div><div id="metar-rjtt"><span class="loading">yükleniyor...</span></div>
         <div class="wu-badge"><span>⚖️ WU settlement:</span> <a href="https://www.wunderground.com/history/daily/jp/tokyo/RJTT" target="_blank">RJTT · tam °C</a></div></div>
       <div><div class="model-toggle" onclick="toggleModels('rjtt')"><span id="toggle-icon-rjtt">▸</span> 5 model detayı</div><div class="model-grid" id="models-rjtt"></div></div>
@@ -1304,7 +1304,7 @@ body.dark .lb-badge-cancel  { background:#1f2937; color:#9ca3af; }
       <div><div class="modal-section-label">Blend Tahmini</div>
         <div class="blend-block"><div class="blend-temp" id="blend-rksi">—</div><div class="blend-range" id="range-rksi"></div><div id="unc-rksi"></div></div></div>
       <div><div class="modal-section-label">Saatlik Tahmin</div><div id="h-rksi"><span class="loading">yükleniyor...</span></div></div>
-      <div><div class="modal-section-label">ICON Ensemble <span id="ens-label-rksi" style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">ICON · — üye</span></div><div id="ens-rksi"><span class="loading">yükleniyor...</span></div></div>
+      <div><div class="modal-section-label">ENS Ensemble <span id="ens-label-rksi" style="font-weight:400;color:var(--text-3);font-size:10px;text-transform:none">ENS · — üye</span></div><div id="ens-rksi"><span class="loading">yükleniyor...</span></div></div>
       <div><div class="modal-section-label">METAR Gözlem</div><div id="metar-rksi"><span class="loading">yükleniyor...</span></div>
         <div class="wu-badge"><span>⚖️ WU settlement:</span> <a href="https://www.wunderground.com/history/daily/kr/incheon/RKSI" target="_blank">RKSI · tam °C</a></div></div>
       <div><div class="model-toggle" onclick="toggleModels('rksi')"><span id="toggle-icon-rksi">▸</span> 5 model detayı</div><div class="model-grid" id="models-rksi"></div></div>
@@ -2693,9 +2693,10 @@ function renderEnsemble(id) {
 
   const { p10, p25, p50, p75, p90, member_maxes, count } = ens;
 
-  // Üye sayısını label'da göster
+  // Üye sayısını label'da göster — Asya istasyonları ICON değil ECMWF/AIFS kullanır
   const labelEl = document.getElementById('ens-label-' + id);
-  if (labelEl) labelEl.textContent = `ICON · ${count} üye`;
+  const ensSource = ['rjtt','rksi','vhhh'].includes(id) ? 'ENS' : 'ICON';
+  if (labelEl) labelEl.textContent = `${ensSource} · ${count} üye`;
 
   // Bar görselleştirme
   const lo = p10 - 1, hi = p90 + 1, span = hi - lo || 1;
