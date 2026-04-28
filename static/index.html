@@ -2585,11 +2585,12 @@ function renderStation(id) {
   const dayData = sc.days[date];
 
   if (!dayData) {
-    document.getElementById('blend-' + id).textContent = '—';
-    document.getElementById('range-' + id).textContent = '';
-    document.getElementById('unc-' + id).innerHTML = '';
-    document.getElementById('h-' + id).innerHTML = '<span class="err">Bu gün için veri yok</span>';
-    document.getElementById('models-' + id).innerHTML = '';
+    const _s = (sel, prop, val) => { const e = document.getElementById(sel+id); if (e) e[prop] = val; };
+    _s('blend-',  'textContent', '—');
+    _s('range-',  'textContent', '');
+    _s('unc-',    'innerHTML',   '');
+    _s('h-',      'innerHTML',   '<span class="err">Bu gün için veri yok</span>');
+    _s('models-', 'innerHTML',   '');
     return;
   }
 
@@ -3167,8 +3168,10 @@ async function loadStation(id, forceRefresh = false) {
     cache[id].days = weatherRes.value.days;
   } else {
     const msg = weatherRes.value?.detail || weatherRes.reason?.message || 'Veri alınamadı';
-    document.getElementById('h-' + id).innerHTML = `<span class="err">${msg}</span>`;
-    document.getElementById('blend-' + id).textContent = '—';
+    const hEl = document.getElementById('h-' + id);
+    if (hEl) hEl.innerHTML = `<span class="err">${msg}</span>`;
+    const blEl = document.getElementById('blend-' + id);
+    if (blEl) blEl.textContent = '—';
   }
 
   // TAF arka planda cache'e alınır, UI'da gösterilmez
@@ -3179,7 +3182,8 @@ async function loadStation(id, forceRefresh = false) {
   if (ensRes.status === 'fulfilled' && ensRes.value?.days) {
     ensCache[id].days = ensRes.value.days;
   } else {
-    document.getElementById('ens-' + id).innerHTML = '<span class="err">Ensemble zaman aşımı</span>';
+    const ensEl = document.getElementById('ens-' + id);
+    if (ensEl) ensEl.innerHTML = '<span class="err">Ensemble zaman aşımı</span>';
   }
 
   if (metarRes.status === 'fulfilled' && !metarRes.value?.detail) {
