@@ -3950,7 +3950,9 @@ def test_multi_bucket_opens_adjacent_bucket():
         raise RuntimeError(f"Beklenmeyen URL: {url}")
 
     with patch("bot.scanner.httpx.get", side_effect=fake_get), \
-         patch.object(s, "should_pause_station", return_value=False):
+         patch.object(s, "should_pause_station", return_value=False), \
+         patch("bot.settlement_delta.learn_station_delta", return_value=0.0):
+        # settlement_delta=0 → top_pick değişmez; test ortam bağımsız olur
         result = s.scan_date(wl_station, target_date, trades=[])
 
     ok(isinstance(result, list) and len(result) >= 2,
