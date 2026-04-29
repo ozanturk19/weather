@@ -3972,7 +3972,101 @@ test("multi-bucket: whitelist istasyonda komşu bucket(lar) açılır (Faz 9)",
      test_multi_bucket_opens_adjacent_bucket)
 
 
-# ── 36.4: Horizon-specific settlement delta ─────────────────────────────────
+# ── 36.3b: Faz 11 — Kom��u bucket edge koruması (ADJ_MAX_NEG_EDGE) ──────────
+def test_adj_bucket_skipped_when_market_far_from_ensemble():
+    """Komşu bucket piyasa fiyatı ens'ten ADJ_MAX_NEG_EDGE'den fazla sapınca atlanır."""
+    s = _import_scanner_module()
+
+    ok(hasattr(s, "ADJ_MAX_NEG_EDGE"),
+       "ADJ_MAX_NEG_EDGE sabiti scanner.py'de tanımlı değil")
+    ok(s.ADJ_MAX_NEG_EDGE < 0,
+       f"ADJ_MAX_NEG_EDGE negatif olmalı: {s.ADJ_MAX_NEG_EDGE}")
+
+    wl_station = "eglc"
+    target_date = "2026-06-01"
+
+    # Weather API: blend=18.4
+    weather_resp = MagicMock()
+    weather_resp.raise_for_status = MagicMock()
+    weather_resp.json = lambda: {"days": {target_date: {"blend": {
+        "max_temp": 18.4, "spread": 1.2, "uncertainty": "Düşük",
+        "bias_active": False,
+    }}}}
+
+    # Ensemble: 18°C mode=%80 (sağlam ana pick)
+    #           19°C sadece 1 üye (%5) → pozitif edge koşulunu geçer
+    #           17°C sadece 1 üye (%5) → pozitif edge koşulunu geçer
+    #           20°C SIFIR üye ama market %20 → edge=-20% < ADJ_MAX_NEG_EDGE → SKIP
+    members = [18]*16 + [19]*1 + [17]*1 + [22]*2  # 20 üye: 18→80%,19→5%,17→5%,22→10%
+    ens_resp = MagicMock()
+    ens_resp.raise_for_status = MagicMock()
+    ens_resp.json = lambda: {"days": {target_date: {
+        "member_maxes": members,
+        "is_bimodal": False, "peak_separation": None,
+        "mode_ci_low": 70, "mode_ci_high": 88,
+    }}}
+
+    # PM buckets:
+    #   18°C @ 30¢ → main pick (edge = 80%-30% = +50%)
+    #   19°C @ 8¢  → adj OK (ens=5%, edge=-3% > -8%)
+    #   17°C @ 8¢  → adj OK (ens=5%, edge=-3% > -8%)
+    #   20°C @ 25¢ → adj SKIP (ens=0%, edge=-25% < -8%)
+    pm_resp = MagicMock()
+    pm_resp.raise_for_status = MagicMock()
+    pm_resp.json = lambda: {
+        "buckets": [
+            {"threshold": 18, "is_below": False, "is_above": False,
+             "yes_price": 0.30, "condition_id": "0x300", "title": "18°C"},
+            {"threshold": 19, "is_below": False, "is_above": False,
+             "yes_price": 0.08, "condition_id": "0x301", "title": "19°C"},
+            {"threshold": 17, "is_below": False, "is_above": False,
+             "yes_price": 0.08, "condition_id": "0x302", "title": "17°C"},
+            {"threshold": 20, "is_below": False, "is_above": False,
+             "yes_price": 0.25, "condition_id": "0x303", "title": "20°C"},
+        ],
+        "liquidity": 8000,
+    }
+
+    def fake_get(url, **kw):
+        if "/api/weather"    in url: return weather_resp
+        if "/api/ensemble"   in url: return ens_resp
+        if "/api/polymarket" in url: return pm_resp
+        raise RuntimeError(f"Beklenmeyen URL: {url}")
+
+    with patch("bot.scanner.httpx.get", side_effect=fake_get), \
+         patch.object(s, "should_pause_station", return_value=False), \
+         patch("bot.settlement_delta.learn_station_delta", return_value=0.0):
+        result = s.scan_date(wl_station, target_date, trades=[])
+
+    ok(isinstance(result, list) and len(result) >= 1,
+       f"En az ana trade beklenir: {result}")
+
+    picks = {t["top_pick"] for t in result}
+
+    # 20°C bucket ens=0% ama mkt=25% → edge=-25% → ADJ_MAX_NEG_EDGE=-8% aşılır → OLMAMALI
+    ok(20 not in picks,
+       f"20°C adj bucket eklenmemeli (edge=-25% < ADJ_MAX_NEG_EDGE): picks={picks}")
+
+    # 19°C ve/veya 17°C ens=5%, mkt=8% → edge=-3% → kabul edilebilir → OLABİLİR
+    # (bütçe el veriyorsa en az biri eklenir)
+    ok(18 in picks, f"Ana pick 18°C beklenir: {picks}")
+
+
+def test_adj_max_neg_edge_constant_exists():
+    """ADJ_MAX_NEG_EDGE sabiti scanner.py'de tanımlı ve değeri makul."""
+    s = _import_scanner_module()
+    ok(hasattr(s, "ADJ_MAX_NEG_EDGE"), "ADJ_MAX_NEG_EDGE tanımlı de��il")
+    ok(-0.15 <= s.ADJ_MAX_NEG_EDGE <= -0.01,
+       f"ADJ_MAX_NEG_EDGE -0.15 ile -0.01 arasında olmalı: {s.ADJ_MAX_NEG_EDGE}")
+
+
+test("Faz 11: adj bucket piyasa ens'ten aşırı uzaksa atlanır (ADJ_MAX_NEG_EDGE)",
+     test_adj_bucket_skipped_when_market_far_from_ensemble)
+test("Faz 11: ADJ_MAX_NEG_EDGE sabiti scanner.py'de tanımlı",
+     test_adj_max_neg_edge_constant_exists)
+
+
+# ── 36.4: Horizon-specific settlement delta ─────────���───────────────────────
 def test_horizon_delta_dampening():
     """horizon_days=2 ise delta %85'e azaltılır (Faz A1: eski %70 çok muhafazakârdı)."""
     import tempfile

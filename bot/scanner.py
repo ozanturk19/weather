@@ -158,6 +158,14 @@ TWO_BUCKET_BUDGET   = 0.45
 THREE_BUCKET_BUDGET = 0.65
 MULTI_BUCKET_N      = 3      # 3 = 3-bucket aktif, 2 = eski 2-bucket, 1 = single
 
+# Faz 11: Komşu bucket edge koruması (2026-04-29 LEMD dersi)
+# Ana pick'i geçen trade için komşu bucket da eklenmeden önce:
+#   edge = (ens_pct / 100) - yes_price
+# Bu değer ADJ_MAX_NEG_EDGE'den küçükse market modelden çok uzak → pas.
+# Örn: 0% ens, 15¢ market → edge=-15% < -8% → skip (piyasa çok yüksek)
+#       3% ens, 8¢ market  → edge=-5%  > -8% → pass (ucuz sigorta)
+ADJ_MAX_NEG_EDGE    = -0.08  # komşu bucket: piyasa ens'ten max 8 puan fazla
+
 # Faz 10: Isınma/soğuma trend tiebreaker (settlement_delta yönü)
 # Sistematik sıcaklık sapması ≥ TREND_BIAS_THRESHOLD ise, adj bucket sıralamasında
 # trend yönündeki bucket'a sanal TREND_PRICE_BONUS eklenir.
@@ -805,6 +813,19 @@ def scan_date(station: str, target_date: str, trades: list,
             c_price = float(c_bucket.get("yes_price", 0) or 0)
             if c_price < MIN_PRICE or c_price > remaining_budget:
                 continue  # fiyat bütçe aşıyor veya çok ucuz
+
+            # Faz 11: komşu bucket edge koruması
+            # Piyasa, ensemble'ın öngördüğünden çok daha yüksek fiyatlarsa
+            # bu komşuya sürpriz bir şekilde girilmesin.
+            _c_pct_raw = round(cand_count / len(members) * 100) if members else 0
+            _c_edge = (_c_pct_raw / 100) - c_price
+            if _c_edge < ADJ_MAX_NEG_EDGE:
+                print(
+                    f"  ⛔ {station.upper()} {label}  adj skip {cand_temp}°C"
+                    f" — edge {_c_edge:+.0%} < {ADJ_MAX_NEG_EDGE:.0%}"
+                    f" (piyasa ens'ten uzak: ens%{_c_pct_raw} vs mkt{int(c_price*100)}¢), pas"
+                )
+                continue
 
             # Zaten aynı bucket için açık pozisyon var mı?
             already_open = any(
