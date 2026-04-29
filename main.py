@@ -1684,8 +1684,8 @@ async def get_live_balance():
 
 # ── NO Bot ────────────────────────────────────────────────────────────────────
 
-CLOSED_NO_STATUSES   = frozenset({"settled", "sold", "sell_filled", "cancelled", "expired", "settled_pending"})
-OPEN_NO_STATUSES     = frozenset({"pending_fill", "filled", "sell_pending"})
+CLOSED_NO_STATUSES   = frozenset({"settled", "sold", "sell_filled", "cancelled", "expired"})
+OPEN_NO_STATUSES     = frozenset({"pending_fill", "filled", "sell_pending", "settled_pending"})
 REALIZED_NO_STATUSES = frozenset({"sold", "sell_filled", "settled"})
 
 def _load_no_trades() -> list:
