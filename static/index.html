@@ -1699,13 +1699,29 @@ function _renderNoBotMetrics() {
   const uPctStr  = uPct != null ? (uPct >= 0 ? '+' : '') + _fmt(uPct,1) + '%' : '';
   const wrCls    = wr  == null ? '' : (wr >= 50 ? 'good' : 'bad');
 
+  // Toplam portföy = serbest USDC + CTF'de kilitli (at_risk)
+  const freeUsdc   = bal   != null ? bal   : 0;
+  const lockedUsdc = atRisk != null ? atRisk : 0;
+  const totalPort  = freeUsdc + lockedUsdc;
+  const hasPortVal = bal != null || atRisk != null;
+
   const m = document.getElementById('no-metrics');
   if (!m) return;
   m.innerHTML = `
     <div class="lb-metric">
-      <div class="lb-metric-lbl">USDC Bakiye</div>
-      <div class="lb-metric-val ${bal != null ? 'good' : ''}">${bal != null ? _usd(bal) : '—'}</div>
-      <div class="lb-metric-sub">Polymarket cüzdanı</div>
+      <div class="lb-metric-lbl">Serbest USDC</div>
+      <div class="lb-metric-val">${bal != null ? _usd(bal) : '—'}</div>
+      <div class="lb-metric-sub">CLOB serbest bakiye</div>
+    </div>
+    <div class="lb-metric">
+      <div class="lb-metric-lbl">CTF'de Kilitli</div>
+      <div class="lb-metric-val warn">${atRisk != null ? _usd(atRisk) : '—'}</div>
+      <div class="lb-metric-sub">açık pozisyon maliyeti</div>
+    </div>
+    <div class="lb-metric">
+      <div class="lb-metric-lbl">Toplam Portföy</div>
+      <div class="lb-metric-val">${hasPortVal ? _usd(totalPort) : '—'}</div>
+      <div class="lb-metric-sub">serbest + kilitli</div>
     </div>
     <div class="lb-metric">
       <div class="lb-metric-lbl">Realized P&amp;L</div>
@@ -1715,22 +1731,12 @@ function _renderNoBotMetrics() {
     <div class="lb-metric">
       <div class="lb-metric-lbl">Unrealized P&amp;L</div>
       <div class="lb-metric-val ${uCls}" style="font-size:22px">${uStr}</div>
-      <div class="lb-metric-sub ${uCls}">${uPctStr || 'açık pozisyonlar'}</div>
-    </div>
-    <div class="lb-metric">
-      <div class="lb-metric-lbl">Mark-to-Market</div>
-      <div class="lb-metric-val">${mtm != null ? _usd(mtm) : '—'}</div>
-      <div class="lb-metric-sub">risk: ${atRisk != null ? _usd(atRisk) : '—'}</div>
+      <div class="lb-metric-sub ${uCls}">${uPctStr || (mtm != null ? 'MtM: '+_usd(mtm) : 'canlı fiyat bekleniyor')}</div>
     </div>
     <div class="lb-metric">
       <div class="lb-metric-lbl">Win Rate</div>
       <div class="lb-metric-val ${wrCls}">${wr != null ? _fmt(wr,1)+'%' : '—'}</div>
-      <div class="lb-metric-sub">${stats.wins||0}W / ${stats.losses||0}L</div>
-    </div>
-    <div class="lb-metric">
-      <div class="lb-metric-lbl">Toplam İşlem</div>
-      <div class="lb-metric-val">${stats.total||0}</div>
-      <div class="lb-metric-sub">${op.open_count||0} açık · ${stats.realized||0} realized</div>
+      <div class="lb-metric-sub">${stats.wins||0}W / ${stats.losses||0}L · ${op.open_count||0} açık</div>
     </div>
   `;
 }
