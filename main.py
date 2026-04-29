@@ -1838,14 +1838,16 @@ async def get_no_bot_open_positions():
         station  = (t.get("station") or "").lower()
         date     = t.get("date")
         cid      = t.get("condition_id")
-        fill_p   = t.get("fill_price")
-        shares   = float(t.get("shares") or 0)
+        fill_p      = t.get("fill_price")
+        shares      = float(t.get("shares") or 0)
         # cost_usdc is a YES-bot field; NO-bot uses fill_price × shares
-        _raw_cost = t.get("cost_usdc")
-        cost = float(_raw_cost) if _raw_cost else (float(fill_p) * shares if fill_p else 0.0)
-        status   = t.get("status")
-        markets  = markets_by_pair.get((station, date), [])
-        no_price = _no_price_for(markets, cid)
+        _raw_cost   = t.get("cost_usdc")
+        cost        = float(_raw_cost) if _raw_cost else (float(fill_p) * shares if fill_p else 0.0)
+        status      = t.get("status")
+        # NO-bot stores the actual NO token id in "no_token_id" (not condition_id)
+        no_token_id = t.get("no_token_id") or cid
+        markets     = markets_by_pair.get((station, date), [])
+        no_price    = _no_price_for(markets, no_token_id)
 
         at_risk = cost
         if fill_p is not None and no_price is not None:
