@@ -223,7 +223,7 @@ def get_balance() -> float:
     # ── Yedek: on-chain RPC ────────────────────────────────────────────────
     USDC_E = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
     RPCS = [
-        "https://rpc-mainnet.matic.quiknode.pro",
+        "https://polygon.gateway.tenderly.co",
         "https://polygon-bor-rpc.publicnode.com",
     ]
     try:
@@ -1072,7 +1072,7 @@ def cmd_approve_usdc():
 # ── Auto Redeem Kazanan Token'lar ───────────────────────────────────────────
 
 POLYGON_RPCS = [
-    "https://rpc-mainnet.matic.quiknode.pro",
+    "https://polygon.gateway.tenderly.co",
     "https://polygon.drpc.org",
     "https://polygon-bor-rpc.publicnode.com",
 ]
