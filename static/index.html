@@ -883,6 +883,22 @@ body.dark .lb-badge-cancel  { background:#1f2937; color:#9ca3af; }
   font-size:12px; font-style:italic;
 }
 
+/* NO Bot section divider */
+.lb-no-divider {
+  display: flex; align-items: center; gap: 12px;
+  margin: 10px 0 2px;
+}
+.lb-no-divider::before,
+.lb-no-divider::after {
+  content: ''; flex: 1;
+  height: 1px; background: var(--border);
+}
+.lb-no-divider-label {
+  font-family: var(--display); font-size: 14px; font-weight: 700;
+  color: var(--amber); letter-spacing: .02em; white-space: nowrap;
+  padding: 0 4px;
+}
+
 .lb-pnl-big {
   font-family: var(--mono);
   font-size: 11px;
@@ -1454,6 +1470,59 @@ body.dark .lb-badge-cancel  { background:#1f2937; color:#9ca3af; }
         <div class="lb-empty">Paneli açınca yüklenir…</div>
       </div>
     </details>
+
+    <!-- ═══════════════════════════════════════════════════════════════
+         NO BOT SECTION
+    ════════════════════════════════════════════════════════════════ -->
+    <div class="lb-no-divider">
+      <span class="lb-no-divider-label">📉 NO Bot</span>
+    </div>
+
+    <!-- NO Bot özet metrikleri -->
+    <div class="lb-hero" id="no-hero">
+      <div class="lb-hero-top">
+        <div class="lb-hero-title" style="font-size:18px">
+          <span class="lb-dot" style="background:var(--amber);box-shadow:0 0 0 4px rgba(245,158,11,.2)"></span>
+          NO Bot Durumu
+        </div>
+      </div>
+      <div class="lb-metrics" id="no-metrics">
+        <div class="lb-empty">Yükleniyor…</div>
+      </div>
+    </div>
+
+    <!-- NO Açık & Bekleyen Pozisyonlar (default: açık) -->
+    <details class="ap-card" id="no-open" open>
+      <summary>
+        🟡 NO Açık &amp; Bekleyen Pozisyonlar
+        <span class="lb-count" id="no-open-count">—</span>
+      </summary>
+      <div class="ap-body" id="no-open-body">
+        <div class="lb-empty">Yükleniyor…</div>
+      </div>
+    </details>
+
+    <!-- NO Bot P&L Geçmişi — hesap ekstresi (default: açık) -->
+    <details class="ap-card" id="no-history" open>
+      <summary>
+        💰 NO Bot P&amp;L Geçmişi (Hesap Ekstresi)
+        <span class="lb-count" id="no-history-count">—</span>
+      </summary>
+      <div class="ap-body" id="no-history-body">
+        <div class="lb-empty">Yükleniyor…</div>
+      </div>
+    </details>
+
+    <!-- NO Bot İptal (default: kapalı) -->
+    <details class="ap-card" id="no-cancelled">
+      <summary>
+        ❌ NO Bot İptal
+        <span class="lb-count" id="no-cancelled-count">—</span>
+      </summary>
+      <div class="ap-body" id="no-cancelled-body">
+        <div class="lb-empty">Paneli açınca yüklenir…</div>
+      </div>
+    </details>
   </div>
 </div>
 
@@ -1622,6 +1691,7 @@ const LB_CITY = {
 let _liveBotData = null;      // önbellek (diğer panelleri de besler)
 let _liveBalance = null;
 let _liveOpenPosData = null;  // /api/live-open-positions cache (unrealized P&L)
+let _noBotData = null;        // NO bot trades cache
 
 async function selectLiveBot() {
   document.querySelectorAll('.day-tab').forEach(t => t.classList.remove('active'));
@@ -1638,14 +1708,16 @@ async function renderLiveBot(force) {
   if (btn) btn.disabled = true;
   try {
     if (force || !_liveBotData) {
-      const [trades, bal, openPos] = await Promise.allSettled([
+      const [trades, bal, openPos, noTrades] = await Promise.allSettled([
         fetchJSON('/api/live-trades'),
         fetchJSON('/api/live-balance'),
         fetchJSON('/api/live-open-positions'),
+        fetchJSON('/api/no-bot/trades'),
       ]);
-      _liveBotData     = (trades.status  === 'fulfilled') ? trades.value  : { trades: [], stats: {} };
-      _liveBalance     = (bal.status     === 'fulfilled') ? bal.value     : null;
-      _liveOpenPosData = (openPos.status === 'fulfilled') ? openPos.value : null;
+      _liveBotData     = (trades.status   === 'fulfilled') ? trades.value   : { trades: [], stats: {} };
+      _liveBalance     = (bal.status      === 'fulfilled') ? bal.value      : null;
+      _liveOpenPosData = (openPos.status  === 'fulfilled') ? openPos.value  : null;
+      _noBotData       = (noTrades.status === 'fulfilled') ? noTrades.value : { trades: [], stats: {} };
     }
     _renderLbMetrics();
     _renderLbOpen();
@@ -1655,6 +1727,11 @@ async function renderLiveBot(force) {
     _renderLbCancelled();
     _renderLbRedeem();
     _renderLbAll();
+    // NO bot sections
+    _renderNoBotMetrics();
+    _renderNoBotOpen();
+    _renderNoBotHistory();
+    _renderNoBotCancelled();
     const el = document.getElementById('lb-last-update');
     if (el) el.textContent = 'Güncel: ' + new Date().toLocaleTimeString('tr-TR');
   } catch (e) {
@@ -2165,6 +2242,234 @@ function _renderLbAll() {
       });
     });
   });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// NO BOT RENDERING
+// ═══════════════════════════════════════════════════════════════════════════
+
+function _noStatusBadge(t) {
+  const s = t.status;
+  const r = (t.result || '').toUpperCase();
+  if (s === 'pending_fill')     return '<span class="lb-pos-badge lb-badge-pending">Beklemede</span>';
+  if (s === 'sell_pending')     return '<span class="lb-pos-badge lb-badge-sold">Sell Aktif</span>';
+  if (s === 'sell_filled')      return '<span class="lb-pos-badge lb-badge-sold">Satıldı</span>';
+  if (s === 'settled_pending')  return '<span class="lb-pos-badge lb-badge-pending">Settle Bekleniyor</span>';
+  if (s === 'sold')             return r === 'WIN'
+    ? '<span class="lb-pos-badge lb-badge-won">Satış Kâr</span>'
+    : '<span class="lb-pos-badge lb-badge-lost">Satış Zarar</span>';
+  if (s === 'settled') {
+    if (r === 'WIN')  return '<span class="lb-pos-badge lb-badge-won">NO Kazandı</span>';
+    if (r === 'LOSS') return '<span class="lb-pos-badge lb-badge-lost">NO Kaybetti</span>';
+    return '<span class="lb-pos-badge lb-badge-cancel">Settled</span>';
+  }
+  if (s === 'cancelled') return '<span class="lb-pos-badge lb-badge-cancel">İptal</span>';
+  if (s === 'expired')   return '<span class="lb-pos-badge lb-badge-cancel">Süresi Bitti</span>';
+  return `<span class="lb-pos-badge lb-badge-cancel">${_escape(s||'?')}</span>`;
+}
+
+function _noPnlClass(t) {
+  const pnl = t.pnl_usdc;
+  if (pnl == null) return '';
+  return pnl >= 0 ? 'good' : 'bad';
+}
+
+// ── NO Bot Metrikler ───────────────────────────────────────────────────────
+function _renderNoBotMetrics() {
+  const d     = _noBotData || {};
+  const stats = d.stats  || {};
+  const trades = d.trades || [];
+  const openCount = trades.filter(t =>
+    ['pending_fill','sell_pending','settled_pending'].includes(t.status)).length;
+  const pnl      = stats.total_pnl;
+  const wr       = stats.win_rate;
+  const pnlCls   = pnl == null ? '' : (pnl >= 0 ? 'good' : 'bad');
+  const pnlStr   = pnl != null ? (pnl >= 0 ? '+' : '') + _usd(pnl) : '—';
+  const wrCls    = wr  == null ? '' : (wr >= 50 ? 'good' : 'bad');
+  const m = document.getElementById('no-metrics');
+  if (!m) return;
+  m.innerHTML = `
+    <div class="lb-metric">
+      <div class="lb-metric-lbl">Realized P&amp;L</div>
+      <div class="lb-metric-val ${pnlCls}" style="font-size:22px">${pnlStr}</div>
+      <div class="lb-metric-sub">${stats.realized||0} gerçekleşen işlem</div>
+    </div>
+    <div class="lb-metric">
+      <div class="lb-metric-lbl">Win Rate</div>
+      <div class="lb-metric-val ${wrCls}">${wr != null ? _fmt(wr,1)+'%' : '—'}</div>
+      <div class="lb-metric-sub">${stats.wins||0}W / ${stats.losses||0}L</div>
+    </div>
+    <div class="lb-metric">
+      <div class="lb-metric-lbl">Açık / Bekleyen</div>
+      <div class="lb-metric-val">${openCount}</div>
+      <div class="lb-metric-sub">pozisyon</div>
+    </div>
+    <div class="lb-metric">
+      <div class="lb-metric-lbl">Toplam İşlem</div>
+      <div class="lb-metric-val">${stats.total||0}</div>
+      <div class="lb-metric-sub">${stats.closed||0} kapalı</div>
+    </div>
+  `;
+}
+
+// ── NO Bot Açık & Bekleyen ──────────────────────────────────────────────────
+function _renderNoBotOpen() {
+  const trades = (_noBotData?.trades || [])
+    .filter(t => ['pending_fill','sell_pending','settled_pending'].includes(t.status))
+    .sort((a,b) => (b.created_at||'').localeCompare(a.created_at||''));
+  const countEl = document.getElementById('no-open-count');
+  const body    = document.getElementById('no-open-body');
+  if (!countEl || !body) return;
+  countEl.textContent = trades.length ? `${trades.length} aktif` : 'yok';
+  if (!trades.length) {
+    body.innerHTML = '<div class="lb-empty">Açık NO pozisyonu yok.</div>';
+    return;
+  }
+  body.innerHTML = `
+    <table class="lb-table">
+      <thead><tr>
+        <th>Tarih</th><th>İst.</th><th>Bucket</th>
+        <th class="num">Fill</th><th class="num">Shares</th><th class="num">Maliyet</th>
+        <th>Durum</th><th>Notlar</th>
+      </tr></thead>
+      <tbody>
+        ${trades.map(t => {
+          const cost = (Number(t.fill_price||0) * Number(t.shares||0));
+          const bucketLabel = t.threshold != null ? `< ${t.threshold}°C` : (t.bucket || '—');
+          return `<tr>
+            <td>${_lbShortDate(t.date)}</td>
+            <td>${LB_FLAGS[t.station]||''} ${(t.station||'').toUpperCase()}</td>
+            <td>${_escape(bucketLabel)}</td>
+            <td class="num">${_lbCents(t.fill_price)}</td>
+            <td class="num">${t.shares||'—'}</td>
+            <td class="num">${_usd(cost)}</td>
+            <td>${_noStatusBadge(t)}</td>
+            <td style="font-size:10px;color:var(--text-3)">${_escape(t.notes||'—')}</td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+// ── NO Bot P&L Geçmişi ────────────────────────────────────────────────────
+function _renderNoBotHistory() {
+  const allTrades = (_noBotData?.trades || []);
+  const realized  = allTrades
+    .filter(t => t.pnl_usdc != null)
+    .sort((a,b) => (b.fill_time||b.created_at||'').localeCompare(a.fill_time||a.created_at||''));
+  const countEl = document.getElementById('no-history-count');
+  const body    = document.getElementById('no-history-body');
+  if (!countEl || !body) return;
+  countEl.textContent = realized.length ? `${realized.length} işlem` : 'yok';
+  if (!realized.length) {
+    body.innerHTML = '<div class="lb-empty">Henüz gerçekleşen işlem yok.</div>';
+    return;
+  }
+
+  const totalPnl    = realized.reduce((s,t) => s + t.pnl_usdc, 0);
+  const totalCost   = realized.reduce((s,t) => s + (Number(t.fill_price||0)*Number(t.shares||0)), 0);
+  const totalRev    = realized.reduce((s,t) => {
+    const s_ = t.status;
+    if (s_ === 'sold' || s_ === 'sell_filled') return s + (Number(t.sell_price||0)*Number(t.shares||0));
+    if (s_ === 'settled' && (t.result||'').toUpperCase() === 'WIN') return s + Number(t.shares||0);
+    return s; // NO-LOST → $0 revenue
+  }, 0);
+  const wins   = realized.filter(t => (t.result||'').toUpperCase() === 'WIN').length;
+  const losses = realized.filter(t => (t.result||'').toUpperCase() === 'LOSS').length;
+
+  body.innerHTML = `
+    <div class="ap-metric-row" style="margin-bottom:14px">
+      <div class="ap-metric">
+        <div class="ap-metric-lbl">Toplam Maliyet</div>
+        <div class="ap-metric-val">${_usd(totalCost)}</div>
+      </div>
+      <div class="ap-metric">
+        <div class="ap-metric-lbl">Toplam Gelir</div>
+        <div class="ap-metric-val">${_usd(totalRev)}</div>
+      </div>
+      <div class="ap-metric">
+        <div class="ap-metric-lbl">Net Realized P&amp;L</div>
+        <div class="ap-metric-val ${totalPnl>=0?'good':'bad'}">${(totalPnl>=0?'+':'')+_usd(totalPnl)}</div>
+      </div>
+      <div class="ap-metric">
+        <div class="ap-metric-lbl">W / L</div>
+        <div class="ap-metric-val">${wins} / ${losses}</div>
+      </div>
+    </div>
+    <table class="lb-table">
+      <thead><tr>
+        <th>Tarih</th><th>İst.</th><th>Bucket</th>
+        <th class="num">Fill</th><th class="num">Shares</th>
+        <th class="num">Maliyet</th><th class="num">Gelir</th><th class="num">P&amp;L</th>
+        <th>Sonuç</th><th>Notlar</th>
+      </tr></thead>
+      <tbody>
+        ${realized.map(t => {
+          const fp    = Number(t.fill_price||0);
+          const sh    = Number(t.shares||0);
+          const cost  = fp * sh;
+          const s     = t.status;
+          const rev   = (s==='sold'||s==='sell_filled') ? (Number(t.sell_price||0)*sh)
+                        : ((t.result||'').toUpperCase()==='WIN' ? sh : 0);
+          const pnl   = t.pnl_usdc;
+          const bucketLabel = t.threshold != null ? `< ${t.threshold}°C` : (t.bucket || '—');
+          return `<tr>
+            <td>${_lbShortDate(t.date)}</td>
+            <td>${LB_FLAGS[t.station]||''} ${(t.station||'').toUpperCase()}</td>
+            <td>${_escape(bucketLabel)}</td>
+            <td class="num">${_lbCents(fp)}</td>
+            <td class="num">${sh||'—'}</td>
+            <td class="num">${_usd(cost)}</td>
+            <td class="num">${_usd(rev)}</td>
+            <td class="num"><span class="lb-pnl-big ${_lbPnlClass(pnl)}">${pnl!=null?(pnl>=0?'+':'')+_usd(pnl):'—'}</span></td>
+            <td>${_noStatusBadge(t)}</td>
+            <td style="font-size:10px;color:var(--text-3);max-width:160px;word-break:break-word">${_escape(t.notes||'—')}</td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+    <div class="ap-note" style="margin-top:10px">
+      <b>Hesap ekstresi:</b> Satış (sold) = <i>(satış fiyatı − alış) × adet</i>.
+      Settled NO-LOST = tam kayıp. Settled NO-WIN = <i>(1.00 − alış) × adet</i>.
+    </div>
+  `;
+}
+
+// ── NO Bot İptal ───────────────────────────────────────────────────────────
+function _renderNoBotCancelled() {
+  const trades = (_noBotData?.trades || [])
+    .filter(t => ['cancelled','expired'].includes(t.status))
+    .sort((a,b) => (b.created_at||'').localeCompare(a.created_at||''));
+  const countEl = document.getElementById('no-cancelled-count');
+  const body    = document.getElementById('no-cancelled-body');
+  if (!countEl || !body) return;
+  countEl.textContent = trades.length ? `${trades.length} iptal` : 'yok';
+  if (!trades.length) {
+    body.innerHTML = '<div class="lb-empty">İptal işlem yok.</div>';
+    return;
+  }
+  body.innerHTML = `
+    <table class="lb-table">
+      <thead><tr>
+        <th>Tarih</th><th>İst.</th><th>Bucket</th>
+        <th class="num">Buy Price</th><th>Durum</th><th>Notlar</th>
+      </tr></thead>
+      <tbody>
+        ${trades.map(t => {
+          const bucketLabel = t.threshold != null ? `< ${t.threshold}°C` : (t.bucket || '—');
+          return `<tr>
+            <td>${_lbShortDate(t.date)}</td>
+            <td>${LB_FLAGS[t.station]||''} ${(t.station||'').toUpperCase()}</td>
+            <td>${_escape(bucketLabel)}</td>
+            <td class="num">${_lbCents(t.buy_price)}</td>
+            <td>${_noStatusBadge(t)}</td>
+            <td style="font-size:10px;color:var(--text-3)">${_escape(t.notes||'—')}</td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+  `;
 }
 
 // ── MODAL ──────────────────────────────────────────────────────────────────

@@ -1684,8 +1684,9 @@ async def get_live_balance():
 
 # ── NO Bot ────────────────────────────────────────────────────────────────────
 
-CLOSED_NO_STATUSES = frozenset({"settled", "sold", "sell_filled", "cancelled", "expired", "settled_pending"})
-OPEN_NO_STATUSES   = frozenset({"pending_fill", "filled", "sell_pending"})
+CLOSED_NO_STATUSES   = frozenset({"settled", "sold", "sell_filled", "cancelled", "expired", "settled_pending"})
+OPEN_NO_STATUSES     = frozenset({"pending_fill", "filled", "sell_pending"})
+REALIZED_NO_STATUSES = frozenset({"sold", "sell_filled", "settled"})
 
 def _load_no_trades() -> list:
     try:
@@ -1695,24 +1696,83 @@ def _load_no_trades() -> list:
         pass
     return []
 
+def _calc_no_trade_pnl(t: dict):
+    """Return (pnl_usdc, result) computed from raw NO-bot trade fields.
+    Returns (None, None) if the trade is not yet realized.
+
+    P&L rules
+    ---------
+    sold / sell_filled : pnl = (sell_price - fill_price) × shares
+    settled + NO-LOST  : pnl = -fill_price × shares   (YES won → NO redeems $0)
+    settled (NO won)   : pnl = (1.0 - fill_price) × shares  (NO redeems $1/token)
+    Everything else    : not realized → (None, None)
+    """
+    status = t.get("status", "")
+    if status not in REALIZED_NO_STATUSES:
+        return None, None
+
+    fill_price = t.get("fill_price")
+    sell_price = t.get("sell_price")
+    shares     = t.get("shares")
+    notes      = t.get("notes") or ""
+
+    if fill_price is None or shares is None:
+        return None, None
+
+    fp = float(fill_price)
+    sh = float(shares)
+
+    if status in ("sold", "sell_filled"):
+        if sell_price is None:
+            return None, None
+        pnl    = (float(sell_price) - fp) * sh
+        result = "WIN" if pnl >= 0 else "LOSS"
+    elif status == "settled":
+        if "NO-LOST" in notes:
+            # YES outcome won → NO tokens expire worthless; redeem = 0
+            pnl    = -fp * sh
+            result = "LOSS"
+        else:
+            # NO outcome won → redeem $1 per token
+            pnl    = (1.0 - fp) * sh
+            result = "WIN"
+    else:
+        return None, None
+
+    return round(pnl, 4), result
+
 @app.get("/api/no-bot/trades")
 async def get_no_bot_trades():
-    trades = _load_no_trades()
-    open_t = [t for t in trades if t.get("status") in OPEN_NO_STATUSES]
-    closed = [t for t in trades if t.get("status") in CLOSED_NO_STATUSES]
-    wins   = [t for t in closed  if (t.get("result") or "").upper() == "WIN"]
-    losses = [t for t in closed  if (t.get("result") or "").upper() == "LOSS"]
-    total_pnl = round(sum(t.get("pnl_usdc") or 0 for t in closed), 2)
-    win_rate  = round(len(wins) / len(closed) * 100, 1) if closed else None
+    raw_trades = _load_no_trades()
+
+    # Enrich every trade with computed pnl_usdc + result (where realized)
+    enriched: list = []
+    for t in raw_trades:
+        tc = dict(t)
+        pnl, result = _calc_no_trade_pnl(tc)
+        if pnl is not None:
+            tc["pnl_usdc"] = pnl
+            tc["result"]   = result
+        enriched.append(tc)
+
+    open_t   = [t for t in enriched if t.get("status") in OPEN_NO_STATUSES]
+    closed   = [t for t in enriched if t.get("status") in CLOSED_NO_STATUSES]
+    realized = [t for t in enriched if t.get("pnl_usdc") is not None]
+    wins     = [t for t in realized if (t.get("result") or "").upper() == "WIN"]
+    losses   = [t for t in realized if (t.get("result") or "").upper() == "LOSS"]
+    total_pnl = round(sum(t["pnl_usdc"] for t in realized), 2)
+    win_rate  = round(len(wins) / len(realized) * 100, 1) if realized else None
+
     return {
-        "trades": trades,
+        "trades": enriched,
         "stats": {
-            "total":     len(trades),
-            "open":      len(open_t),
-            "closed":    len(closed),
-            "wins":      len(wins),
-            "losses":    len(losses),
-            "win_rate":  win_rate,
+            "total":    len(enriched),
+            "open":     len(open_t),
+            "closed":   len(closed),
+            "realized": len(realized),
+            "wins":     len(wins),
+            "losses":   len(losses),
+            "win_rate": win_rate,
             "total_pnl": total_pnl,
         },
     }
