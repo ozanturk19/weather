@@ -1468,7 +1468,7 @@ function fetchJSON(url, timeoutMs = 25000) {
   return new Promise((resolve, reject) => {
     const ctrl = new AbortController();
     const tid  = setTimeout(() => { ctrl.abort(); reject(new Error('timeout')); }, timeoutMs);
-    fetch(url, { signal: ctrl.signal })
+    fetch(url, { signal: ctrl.signal, cache: 'no-store' })
       .then(r => {
         if (!r.ok) return r.json().then(d => { throw new Error(d.detail || `HTTP ${r.status}`); });
         return r.json();
