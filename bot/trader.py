@@ -200,10 +200,10 @@ def wallet_address_from_pk(pk: str) -> str:
     from eth_account import Account
     return Account.from_key(pk).address
 
-# ── USDC Bakiyesi ───────────────────────────────────────────────────────────
+# ── pUSD Bakiyesi ───────────────────────────────────────────────────────────
 def get_balance() -> float:
-    """Polymarket USDC bakiyesini döner.
-    Önce CLOB API (birincil), sonra on-chain RPC (yedek) dener.
+    """Polymarket pUSD bakiyesini döner (Apr-2025 pUSD V2 geçişi).
+    Önce CLOB API (birincil), sonra on-chain RPC / pUSD kontratı (yedek) dener.
     """
     import urllib.request as _ur, json as _json
     # ── Birincil: CLOB API balance_allowance ──────────────────────────────
@@ -221,7 +221,8 @@ def get_balance() -> float:
         print(f"  ⚠️  CLOB balance_allowance başarısız: {e_clob}")
 
     # ── Yedek: on-chain RPC ────────────────────────────────────────────────
-    USDC_E = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
+    # Polymarket Apr-2025 → pUSD (V2) collateral
+    USDC_E = "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB"
     RPCS = [
         "https://polygon.gateway.tenderly.co",
         "https://polygon-bor-rpc.publicnode.com",
@@ -1008,7 +1009,7 @@ def cmd_balance():
     pending_cost = sum(
         t["cost_usdc"] for t in trades if t["status"] == "pending_fill"
     )
-    print(f"\n  💰 USDC Bakiyesi   : ${bal:.4f}")
+    print(f"\n  💰 pUSD Bakiyesi   : ${bal:.4f}")
     print(f"  📊 Bugün harcanan  : ${spent:.2f} / ${MAX_DAILY_SPEND_USDC:.2f} limit")
     print(f"  📈 Kalan bütçe     : ${remaining_budget:.2f}")
     print(f"  🔒 Emir'deki USDC  : ${pending_cost:.2f}\n")
@@ -1077,7 +1078,7 @@ POLYGON_RPCS = [
     "https://polygon-bor-rpc.publicnode.com",
 ]
 CTF_CONTRACT  = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"
-USDC_CONTRACT = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
+USDC_CONTRACT = "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB"  # pUSD (V2, Apr-2025)
 CTF_ABI = [
     {
         "inputs": [

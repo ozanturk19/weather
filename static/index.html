@@ -1699,7 +1699,7 @@ function _renderNoBotMetrics() {
   const uPctStr  = uPct != null ? (uPct >= 0 ? '+' : '') + _fmt(uPct,1) + '%' : '';
   const wrCls    = wr  == null ? '' : (wr >= 50 ? 'good' : 'bad');
 
-  // Toplam portföy = serbest USDC + CTF'de kilitli (at_risk)
+  // Toplam portföy = serbest pUSD + CTF'de kilitli (at_risk)
   const freeUsdc   = bal   != null ? bal   : 0;
   const lockedUsdc = atRisk != null ? atRisk : 0;
   const totalPort  = freeUsdc + lockedUsdc;
@@ -1709,9 +1709,9 @@ function _renderNoBotMetrics() {
   if (!m) return;
   m.innerHTML = `
     <div class="lb-metric">
-      <div class="lb-metric-lbl">Serbest USDC</div>
+      <div class="lb-metric-lbl">Serbest pUSD</div>
       <div class="lb-metric-val">${bal != null ? _usd(bal) : '—'}</div>
-      <div class="lb-metric-sub">CLOB serbest bakiye</div>
+      <div class="lb-metric-sub">cüzdan / CLOB bakiye</div>
     </div>
     <div class="lb-metric">
       <div class="lb-metric-lbl">CTF'de Kilitli</div>
