@@ -961,34 +961,42 @@ CRONTAB = _get_crontab()
 if not ON_VPS:
     print("  ⏭️  Lokal Mac — cron testleri atlandı")
 
+# \s+ → dakika/saat arasında 1 veya 2 boşluk kabul eder (crontab hizalama)
 REQUIRED_CRONS = [
-    (r"0 4,10,16,22.*scanner.*scan.*--live",
-     "Scanner scan  → 04:00/10:00/16:00/22:00"),
-    (r"0 11.*scanner.*settle",
-     "Scanner settle → 11:00"),
-    (r"5 11.*trader.*settle",
-     "Trader settle  → 11:05"),
-    (r"15 11.*trader.*redeem",
-     "Trader redeem  → 11:15  (kazanç claim)"),
+    # (pattern, desc, optional=False)
+    # optional=True → cron yoksa warn eder ama testi geçirir (kasıtlı pause OK)
+    (r"0\s+4,10,16,22.*scanner.*scan.*--live",
+     "Scanner scan  → 04:00/10:00/16:00/22:00", True),   # NO bot aldığında pause edilebilir
+    (r"0\s+11.*scanner.*settle",
+     "Scanner settle → 11:00", False),
+    (r"5\s+11.*trader.*settle",
+     "Trader settle  → 11:05", False),
+    (r"15\s+11.*trader.*redeem",
+     "Trader redeem  → 11:15  (kazanç claim)", False),
     (r"\*/30.*trader.*check-fills",
-     "Fill check     → her 30dk"),
+     "Fill check     → her 30dk", False),
     (r"0 4,8,12,16,20.*trader.*cancel-stale",
-     "Cancel stale   → 04/08/12/16/20h"),
+     "Cancel stale   → 04/08/12/16/20h", False),
     (r"venv/bin/python3",
-     "Tüm işler venv Python kullanıyor (py_clob_client erişimi için şart)"),
+     "Tüm işler venv Python kullanıyor (py_clob_client erişimi için şart)", False),
 ]
 
-def make_cron_test(pattern: str, desc: str):
+def make_cron_test(pattern: str, desc: str, optional: bool = False):
     def _t():
         if not ON_VPS:
             return
-        ok(bool(re.search(pattern, CRONTAB)),
+        found = bool(re.search(pattern, CRONTAB))
+        if not found and optional:
+            print(f"  ⚠️  Opsiyonel cron eksik (kasıtlı pause olabilir): {desc}")
+            return
+        ok(found,
            f"Cron eksik veya yanlış: {desc}\n"
            f"     Beklenen pattern: {pattern}")
     return _t
 
-for cron_pattern, cron_desc in REQUIRED_CRONS:
-    test(f"cron: {cron_desc}", make_cron_test(cron_pattern, cron_desc))
+for _cp, _cd, *_opt in REQUIRED_CRONS:
+    _optional = bool(_opt and _opt[0])
+    test(f"cron: {_cd}", make_cron_test(_cp, _cd, _optional))
 
 # ══════════════════════════════════════════════════════════════════════════════
 print("\n══════════════════════════════════════════════════════════════")
