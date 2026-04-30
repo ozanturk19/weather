@@ -4074,6 +4074,126 @@ test("Faz 11: ADJ_MAX_NEG_EDGE sabiti scanner.py'de tanımlı",
      test_adj_max_neg_edge_constant_exists)
 
 
+# ── Faz 12: Blend-Ensemble uyum filtresi ─────────────────────────────────────
+def test_blend_ensemble_skip_when_large_drift():
+    """Blend ile ensemble modu >=2°C ayrışınca scan_date None döner (EHAM 2026-04-24)."""
+    s = _import_scanner_module()
+
+    ok(hasattr(s, "BLEND_ENSEMBLE_MAX_DRIFT"),
+       "BLEND_ENSEMBLE_MAX_DRIFT sabiti scanner.py'de tanımlı değil")
+
+    wl_station = "eglc"
+    target_date = "2026-06-01"
+
+    # blend=16.3°C ama ensemble mode=14°C → fark=2.3°C ≥ 2.0°C → SKIP beklenir
+    weather_resp = MagicMock()
+    weather_resp.raise_for_status = MagicMock()
+    weather_resp.json = lambda: {"days": {target_date: {"blend": {
+        "max_temp": 16.3, "spread": 0.8, "uncertainty": "Düşük",
+        "bias_active": False,
+    }}}}
+
+    # Ensemble: mode=14°C (%80 konsensüs — yüksek güven, ama blend'den 2.3°C uzak)
+    members = [14] * 16 + [13] * 2 + [15] * 2  # 20 üye: 14→80%
+    ens_resp = MagicMock()
+    ens_resp.raise_for_status = MagicMock()
+    ens_resp.json = lambda: {"days": {target_date: {
+        "member_maxes": members,
+        "is_bimodal": False, "peak_separation": None,
+        "mode_ci_low": 65, "mode_ci_high": 90,
+    }}}
+
+    pm_resp = MagicMock()
+    pm_resp.raise_for_status = MagicMock()
+    pm_resp.json = lambda: {"buckets": [
+        {"threshold": 14, "is_below": False, "is_above": False,
+         "yes_price": 0.30, "condition_id": "0xccc", "title": "14°C"},
+        {"threshold": 15, "is_below": False, "is_above": False,
+         "yes_price": 0.10, "condition_id": "0xccd", "title": "15°C"},
+    ], "liquidity": 10000}
+
+    def fake_get(url, **kw):
+        if "/api/weather"    in url: return weather_resp
+        if "/api/ensemble"   in url: return ens_resp
+        if "/api/polymarket" in url: return pm_resp
+        raise RuntimeError(f"Beklenmeyen URL: {url}")
+
+    with patch("bot.scanner.httpx.get", side_effect=fake_get), \
+         patch.object(s, "should_pause_station", return_value=False), \
+         patch("bot.settlement_delta.learn_station_delta", return_value=0.0):
+        result = s.scan_date(wl_station, target_date, trades=[])
+
+    ok(result is None,
+       f"blend=16.3 vs ens_mode=14 fark=2.3°C → None beklenir, sonuç: {result}")
+
+
+def test_blend_ensemble_no_skip_within_drift():
+    """Blend ile ensemble modu <2°C ayrışırsa trade devam eder."""
+    s = _import_scanner_module()
+
+    wl_station = "eglc"
+    target_date = "2026-06-01"
+
+    # blend=15.1°C, ensemble mode=14°C → fark=1.1°C < 2.0°C → geçer
+    weather_resp = MagicMock()
+    weather_resp.raise_for_status = MagicMock()
+    weather_resp.json = lambda: {"days": {target_date: {"blend": {
+        "max_temp": 15.1, "spread": 0.8, "uncertainty": "Düşük",
+        "bias_active": False,
+    }}}}
+
+    members = [14] * 16 + [13] * 2 + [15] * 2
+    ens_resp = MagicMock()
+    ens_resp.raise_for_status = MagicMock()
+    ens_resp.json = lambda: {"days": {target_date: {
+        "member_maxes": members,
+        "is_bimodal": False, "peak_separation": None,
+        "mode_ci_low": 65, "mode_ci_high": 90,
+    }}}
+
+    pm_resp = MagicMock()
+    pm_resp.raise_for_status = MagicMock()
+    pm_resp.json = lambda: {"buckets": [
+        {"threshold": 14, "is_below": False, "is_above": False,
+         "yes_price": 0.30, "condition_id": "0xcce", "title": "14°C"},
+        {"threshold": 15, "is_below": False, "is_above": False,
+         "yes_price": 0.10, "condition_id": "0xccf", "title": "15°C"},
+    ], "liquidity": 10000}
+
+    def fake_get(url, **kw):
+        if "/api/weather"    in url: return weather_resp
+        if "/api/ensemble"   in url: return ens_resp
+        if "/api/polymarket" in url: return pm_resp
+        raise RuntimeError(f"Beklenmeyen URL: {url}")
+
+    with patch("bot.scanner.httpx.get", side_effect=fake_get), \
+         patch.object(s, "should_pause_station", return_value=False), \
+         patch("bot.settlement_delta.learn_station_delta", return_value=0.0):
+        result = s.scan_date(wl_station, target_date, trades=[])
+
+    ok(result is not None,
+       f"blend=15.1 vs ens_mode=14 fark=1.1°C → trade beklenir, sonuç: {result}")
+    picks = {t["top_pick"] for t in result} if isinstance(result, list) else set()
+    ok(14 in picks, f"Ana pick 14°C beklenir: {picks}")
+
+
+def test_blend_ensemble_max_drift_constant_exists():
+    """BLEND_ENSEMBLE_MAX_DRIFT sabiti scanner.py'de tanımlı ve değeri makul."""
+    s = _import_scanner_module()
+    ok(hasattr(s, "BLEND_ENSEMBLE_MAX_DRIFT"),
+       "BLEND_ENSEMBLE_MAX_DRIFT tanımlı değil")
+    ok(1.5 <= s.BLEND_ENSEMBLE_MAX_DRIFT <= 3.0,
+       f"BLEND_ENSEMBLE_MAX_DRIFT 1.5-3.0°C arasında olmalı: {s.BLEND_ENSEMBLE_MAX_DRIFT}")
+
+
+test("Faz 12: blend-ensemble büyük fark (≥2°C) → trade atlanır",
+     test_blend_ensemble_skip_when_large_drift)
+test("Faz 12: blend-ensemble küçük fark (<2°C) → trade devam eder",
+     test_blend_ensemble_no_skip_within_drift)
+test("Faz 12: BLEND_ENSEMBLE_MAX_DRIFT sabiti scanner.py'de tanımlı",
+     test_blend_ensemble_max_drift_constant_exists)
+
+
 # ── 36.4: Horizon-specific settlement delta ─────────���───────────────────────
 def test_horizon_delta_dampening():
     """horizon_days=2 ise delta %85'e azaltılır (Faz A1: eski %70 çok muhafazakârdı)."""

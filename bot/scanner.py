@@ -166,6 +166,14 @@ MULTI_BUCKET_N      = 3      # 3 = 3-bucket aktif, 2 = eski 2-bucket, 1 = single
 #       3% ens, 8¢ market  → edge=-5%  > -8% → pass (ucuz sigorta)
 ADJ_MAX_NEG_EDGE    = -0.08  # komşu bucket: piyasa ens'ten max 8 puan fazla
 
+# Faz 12: Blend-Ensemble uyum filtresi (2026-04-24 EHAM dersi)
+# NWP blend (6 deterministik model ort.) ile ensemble modu bu kadar ayrışırsa
+# iki tahmin sistemi ciddi biçimde çelişiyor: hangi sistemin haklı olduğu
+# belirsiz → trade atlanır.
+# Örn: blend=16.3°C, ens_mode=14°C → fark=2.3°C ≥ 2.0°C → pas
+#       blend=15.1°C, ens_mode=14°C → fark=1.1°C < 2.0°C → devam
+BLEND_ENSEMBLE_MAX_DRIFT = 2.0  # °C: bu eşiği geçen blend-ens uyumsuzluğu skip
+
 # Faz 10: Isınma/soğuma trend tiebreaker (settlement_delta yönü)
 # Sistematik sıcaklık sapması ≥ TREND_BIAS_THRESHOLD ise, adj bucket sıralamasında
 # trend yönündeki bucket'a sanal TREND_PRICE_BONUS eklenir.
@@ -525,6 +533,18 @@ def scan_date(station: str, target_date: str, trades: list,
                     f"  🎯 {station.upper()} {label}  "
                     f"settlement delta {sdelta:+.1f}°C  ({pre_sdelta}°C → {top_pick}°C)"
                 )
+
+        # ── Faz 12: Blend-Ensemble uyum kontrolü ─────────────────────────────
+        # NWP blend ile nihai top_pick çok ayrışırsa iki sistem çelişiyor → pas.
+        _blend_drift = abs(blend - top_pick)
+        if _blend_drift >= BLEND_ENSEMBLE_MAX_DRIFT:
+            print(
+                f"  ⛔ {station.upper()} {label}  🎯{top_pick}°C"
+                f" — blend-ensemble uyumsuz"
+                f" (blend={blend:.1f}°C, ens_mode={top_pick}°C"
+                f", fark={_blend_drift:.1f}°C ≥ {BLEND_ENSEMBLE_MAX_DRIFT}°C), pas"
+            )
+            return None
 
         # Aynı station + tarih + top_pick için zaten pozisyon var mı?
         already_same = any(
