@@ -406,14 +406,27 @@ def scan_date(station: str, target_date: str, trades: list,
         blend_obj = day_data.get("blend", {})
 
         # Bias düzeltmeli blend kullan
+        raw_blend = blend_obj.get("max_temp")   # ham blend (bias öncesi)
         if blend_obj.get("bias_active") and blend_obj.get("bias_corrected_blend"):
             blend = blend_obj["bias_corrected_blend"]
         else:
-            blend = blend_obj.get("max_temp")
+            blend = raw_blend
 
         if blend is None:
             print(f"  ⬜ {station.upper()} {label}  — tahmin yok")
             return None
+
+        # Faz 13: Ham blend'i predictions.json'a logla (dashboard açık olmasa da
+        # kalibrasyon verisi biriksin; raw_blend = pre-correction → doğru hata ölçer)
+        if raw_blend is not None:
+            try:
+                httpx.post(
+                    f"{WEATHER_API}/api/log-prediction",
+                    json={"station": station, "date": target_date, "blend": raw_blend},
+                    timeout=5,
+                )
+            except Exception:
+                pass   # sessiz başarısızlık — scan flow'unu bozmamalı
 
         spread = blend_obj.get("spread", 0) or 0
         unc    = blend_obj.get("uncertainty", "?")
@@ -1167,6 +1180,22 @@ def settle():
                     record_settlement_source(station, yesterday, "metar", actual_metar_raw)
             except Exception:
                 pass
+
+            # Faz 13: predictions.json actual'ı OM ile güncelle.
+            # Dashboard METAR day_max loglar — METAR LFPG gibi istasyonlarda
+            # WU oracle'dan sistematik sapabilir → bias kalibrasyon bozulur.
+            # OM ise Polymarket WU ile ~%95 uyumlu → doğru kalibrasyon kaynağı.
+            # OM yoksa METAR fallback (yine de hiç yoktan iyi).
+            _actual_for_log = actual_om_raw if actual_om_raw is not None else actual_metar_raw
+            if _actual_for_log is not None:
+                try:
+                    httpx.post(
+                        f"{WEATHER_API}/api/log-prediction",
+                        json={"station": station, "date": yesterday, "actual": _actual_for_log},
+                        timeout=5,
+                    )
+                except Exception:
+                    pass   # sessiz başarısızlık — settle flow'unu bozmamalı
 
             # Birincil: Open-Meteo (Polymarket WU kaynağıyla uyumlu daily max)
             if actual_om_raw is not None:

@@ -4970,6 +4970,238 @@ test("Faz A2: summary() prior istasyonları da döndürür",
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# ── Faz 13: Prediction-Bias Kalibrasyon Düzeltmesi ───────────────────────────
+# Problem: dashboard METAR day_max'ı "actual" olarak predictions.json'a yazar.
+# METAR (LFPG gibi istasyonlarda) WU oracle'dan sistematik sapabilir → bias
+# kalibrasyon yanlış → model warm-corrected → tahmin kötüleşir.
+# Çözüm: scanner scan raw blend'i, scanner settle OM actual'ı loglar.
+print("\n══════════════════════════════════════════════════════════════")
+print(" TEST 38: Faz 13 — Prediction-Bias Kalibrasyon Düzeltmesi")
+print("══════════════════════════════════════════════════════════════")
+
+def test_scan_logs_raw_blend():
+    """scan_date() /api/log-prediction'a raw blend (bias öncesi) POST eder."""
+    import importlib
+    import sys
+    from unittest.mock import MagicMock, patch, call
+
+    # scanner modülünü temiz import
+    if "bot.scanner" in sys.modules:
+        del sys.modules["bot.scanner"]
+    import bot.scanner as s
+
+    weather_resp = {
+        "days": {
+            "2026-05-04": {
+                "blend": {
+                    "max_temp": 16.5,          # raw blend
+                    "bias_corrected_blend": 18.0,
+                    "bias_active": True,
+                    "spread": 1.2,
+                    "uncertainty": "medium",
+                    "bias_count": 5,
+                    "bias_correction": -1.5,
+                },
+            }
+        }
+    }
+    ens_resp = {
+        "days": {
+            "2026-05-04": {
+                "member_maxes": [18] * 60 + [17] * 20 + [19] * 20,
+                "is_bimodal": False,
+                "peak_separation": None,
+                "mode_ci_low": None,
+                "mode_ci_high": None,
+            }
+        }
+    }
+    pm_resp = {
+        "markets": [
+            {
+                "station": "lfpg",
+                "date": "2026-05-04",
+                "buckets": [
+                    {"threshold": 17, "title": "17°C", "yes_price": 0.12, "cond_id": "cA"},
+                    {"threshold": 18, "title": "18°C", "yes_price": 0.35, "cond_id": "cB"},
+                    {"threshold": 19, "title": "19°C", "yes_price": 0.28, "cond_id": "cC"},
+                ],
+            }
+        ]
+    }
+
+    posted_calls = []
+
+    def mock_httpx_get(url, timeout=30):
+        r = MagicMock()
+        r.raise_for_status = MagicMock()
+        if "/api/weather" in url:
+            r.json.return_value = weather_resp
+        elif "/api/ensemble" in url:
+            r.json.return_value = ens_resp
+        elif "/api/polymarket" in url:
+            r.json.return_value = pm_resp
+        else:
+            r.json.return_value = {}
+        return r
+
+    def mock_httpx_post(url, json=None, timeout=5):
+        posted_calls.append({"url": url, "json": json})
+        r = MagicMock()
+        return r
+
+    with patch.object(s.httpx, "get", side_effect=mock_httpx_get), \
+         patch.object(s.httpx, "post", side_effect=mock_httpx_post), \
+         patch.object(s, "load_trades", return_value=[]), \
+         patch.object(s, "save_trades"):
+        s.scan_date("lfpg", "2026-05-04", trades=[])
+
+    # log-prediction çağrısı yapılmış mı?
+    log_calls = [c for c in posted_calls if "log-prediction" in c["url"]]
+    ok(len(log_calls) >= 1, f"log-prediction POST çağrısı yapılmadı (posted: {posted_calls})")
+
+    # Raw blend (16.5) loglanmış mı? (bias-corrected=18.0 DEĞİL)
+    blend_logged = next(
+        (c["json"].get("blend") for c in log_calls if c["json"].get("blend") is not None),
+        None
+    )
+    ok(blend_logged is not None, "blend alanı loglanmamış")
+    eq(blend_logged, 16.5, f"raw blend 16.5°C loglanmalı (bias_corrected değil): {blend_logged}")
+
+    # İstasyon ve tarih doğru mu?
+    eq(log_calls[0]["json"].get("station"), "lfpg",   "station='lfpg' loglanmalı")
+    eq(log_calls[0]["json"].get("date"),    "2026-05-04", "date doğru loglanmalı")
+
+
+def test_settle_logs_om_actual():
+    """settle() /api/log-prediction'a Open-Meteo actual POST eder (METAR override)."""
+    import importlib
+    import sys
+    from unittest.mock import MagicMock, patch
+
+    if "bot.scanner" in sys.modules:
+        del sys.modules["bot.scanner"]
+    import bot.scanner as s
+
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    trade = {
+        "station":    "lfpg",
+        "date":       yesterday,
+        "status":     "open",
+        "bucket_title": "18°C",
+        "top_pick":   18,
+        "blend":      17.5,
+        "id":         "t_lfpg_001",
+        "cost_usd":   5.0,
+        "potential_win": 3.0,
+    }
+
+    posted_calls = []
+
+    def mock_httpx_get(url, timeout=30):
+        r = MagicMock()
+        r.raise_for_status = MagicMock()
+        r.json.return_value = {}
+        return r
+
+    def mock_httpx_post(url, json=None, timeout=5):
+        posted_calls.append({"url": url, "json": json})
+        r = MagicMock()
+        return r
+
+    def fake_om(station, date):
+        return 17.3   # Open-Meteo actual
+
+    with patch.object(s, "load_trades",  return_value=[trade]), \
+         patch.object(s, "save_trades"), \
+         patch.object(s, "get_actual_temp_open_meteo", side_effect=fake_om), \
+         patch.object(s.httpx, "get", return_value=MagicMock(
+             raise_for_status=MagicMock(),
+             json=MagicMock(return_value={"daily_maxes": []})
+         )), \
+         patch.object(s.httpx, "post", side_effect=mock_httpx_post), \
+         patch("bot.db.record_settlement_source", return_value=None), \
+         patch("bot.db.record_forecast_error",    return_value=None), \
+         patch("bot.db.already_recorded_error",   return_value=False), \
+         patch("bot.db.record_model_actuals",      return_value=None):
+        s.settle()
+
+    # log-prediction çağrısı yapılmış mı?
+    log_calls = [c for c in posted_calls if "log-prediction" in c["url"]]
+    ok(len(log_calls) >= 1, f"settle() log-prediction POST yapmadı (posted: {posted_calls})")
+
+    # OM actual (17.3) loglanmış mı?
+    actual_logged = next(
+        (c["json"].get("actual") for c in log_calls if c["json"].get("actual") is not None),
+        None
+    )
+    ok(actual_logged is not None, "actual alanı loglanmamış")
+    eq(actual_logged, 17.3, f"OM actual 17.3°C loglanmalı: {actual_logged}")
+
+    # İstasyon ve tarih doğru mu?
+    eq(log_calls[0]["json"].get("station"), "lfpg",      "station='lfpg' loglanmalı")
+    eq(log_calls[0]["json"].get("date"),    yesterday,   "date=yesterday loglanmalı")
+
+
+def test_settle_logs_metar_fallback_when_om_fails():
+    """settle() Open-Meteo yoksa METAR actual'ı loglar."""
+    import sys
+    from unittest.mock import MagicMock, patch
+
+    if "bot.scanner" in sys.modules:
+        del sys.modules["bot.scanner"]
+    import bot.scanner as s
+
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    trade = {
+        "station": "eham", "date": yesterday, "status": "open",
+        "bucket_title": "19°C", "top_pick": 19, "blend": 18.5, "id": "t_eham_001",
+        "cost_usd": 5.0, "potential_win": 3.0,
+    }
+
+    posted_calls = []
+
+    def mock_post(url, json=None, timeout=5):
+        posted_calls.append({"url": url, "json": json})
+        return MagicMock()
+
+    metar_resp = MagicMock()
+    metar_resp.raise_for_status = MagicMock()
+    metar_resp.json.return_value = {
+        "daily_maxes": [{"date": yesterday, "max_temp": 19.8}]
+    }
+
+    with patch.object(s, "load_trades",  return_value=[trade]), \
+         patch.object(s, "save_trades"), \
+         patch.object(s, "get_actual_temp_open_meteo", return_value=None), \
+         patch.object(s.httpx, "get",  return_value=metar_resp), \
+         patch.object(s.httpx, "post", side_effect=mock_post), \
+         patch("bot.db.record_settlement_source", return_value=None), \
+         patch("bot.db.record_forecast_error",    return_value=None), \
+         patch("bot.db.already_recorded_error",   return_value=False), \
+         patch("bot.db.record_model_actuals",      return_value=None):
+        s.settle()
+
+    log_calls = [c for c in posted_calls if "log-prediction" in c["url"]]
+    ok(len(log_calls) >= 1, f"METAR fallback durumunda da log-prediction çağrılmalı")
+    actual_logged = next(
+        (c["json"].get("actual") for c in log_calls if c["json"].get("actual") is not None),
+        None
+    )
+    ok(actual_logged is not None, "METAR fallback actual loglanmamış")
+    eq(actual_logged, 19.8, f"METAR actual 19.8°C loglanmalı: {actual_logged}")
+
+
+test("Faz 13: scan_date() raw blend'i log-prediction'a POST eder",
+     test_scan_logs_raw_blend)
+test("Faz 13: settle() Open-Meteo actual'ı log-prediction'a POST eder",
+     test_settle_logs_om_actual)
+test("Faz 13: settle() OM yoksa METAR fallback actual'ı POST eder",
+     test_settle_logs_metar_fallback_when_om_fails)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 print(f"\n{'═'*62}")
 print(f"  SONUÇ: {PASS} geçti / {FAIL} başarısız / {PASS+FAIL} toplam")
 if FAIL == 0:
