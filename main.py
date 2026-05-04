@@ -966,6 +966,8 @@ async def get_ens_buckets(station: str, date: str):
         "cold_streak":    streak_info["cold_streak"],
         "warm_streak":    streak_info["warm_streak"],
         "streak_delta":   streak_info["streak_delta"],
+        # ENS max — bias-corrected en sicak uye (T1 guvenlik marji icin)
+        "ens_max":        round(max(corrected), 2) if corrected else 0.0,
     }
 
 
