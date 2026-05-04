@@ -112,14 +112,6 @@ STATION_SKILL_PAUSE: frozenset = frozenset()
 # "Zayıf" sinyalleri (<50) gate'te düşür.
 MIN_SIGNAL_SCORE = 55
 
-# ── Faz 8: Micro-hedge (off-by-one koruması) ──────────────────────────────
-# 23 Nisan'da 7 filled pozisyonun 5'i off-by-one miss oldu (pick ±1°C uzak).
-# Ana pick yüksek güvenli olsa bile blend ile top_pick arasındaki drift
-# ensemble'ın kenara düştüğünü ima ediyor olabilir. Moderate sinyalde
-# (≥55) ±1°C komşuya ana boyutun %40'ı kadar hedge koy (ucuz sigorta).
-MICRO_HEDGE_SIZE_RATIO  = 0.40
-MICRO_HEDGE_MIN_SIGNAL  = 55
-
 # ── Faz 9: Strateji geliştirmeleri (backtest 37 trade analizi) ────────────
 #
 # İstasyon whitelist: pozitif ROI'li istasyonlar (backtest bazlı).
@@ -291,22 +283,6 @@ def compute_station_biases(trades: list) -> dict:
     return biases
 
 # ── Sinyal Skoru Yardımcısı (Faz 3) ─────────────────────────────────────────
-def _score_for_second_bucket(
-    mode_pct, mode_ci_low, mode_ci_high, edge, unc, is_bimodal, n_members
-) -> dict:
-    """İkinci bucket için {signal_score, signal_grade} döner. Sessiz fallback."""
-    try:
-        from bot.signal_score import compute_signal_score
-        sig = compute_signal_score(
-            mode_pct=mode_pct, mode_ci_low=mode_ci_low,
-            mode_ci_high=mode_ci_high, edge=edge,
-            uncertainty=unc, is_bimodal=is_bimodal, n_members=n_members,
-        )
-        return {"signal_score": sig["score"], "signal_grade": sig["grade"]}
-    except Exception:
-        return {"signal_score": None, "signal_grade": None}
-
-
 # ── Bucket Eşleştirme ───────────────────────────────────────────────────────
 def find_top_pick_bucket(buckets: list, top_pick: int) -> dict | None:
     """round(blend) için doğru PM bucket'ını bul."""
@@ -548,13 +524,18 @@ def scan_date(station: str, target_date: str, trades: list,
                 )
 
         # ── Faz 12: Blend-Ensemble uyum kontrolü ─────────────────────────────
-        # NWP blend ile nihai top_pick çok ayrışırsa iki sistem çelişiyor → pas.
-        _blend_drift = abs(blend - top_pick)
+        # NWP blend ile HAM ensemble modu (Kalman/delta düzeltmesi öncesi) çok
+        # ayrışırsa iki tahmin sistemi temelden çelişiyor → pas.
+        # raw_top_pick kullanılır — Kalman bias ve settlement delta meşru
+        # düzeltmeler olduğundan bunları "uyumsuzluk" saymak yanlış olur.
+        # Örn: blend=16, raw_ens_mode=16, Kalman+2 → top_pick=18.
+        #   Eski: |16-18|=2 → yanlış blok.  Yeni: |16-16|=0 → geçer. ✓
+        _blend_drift = abs(blend - raw_top_pick)
         if _blend_drift >= BLEND_ENSEMBLE_MAX_DRIFT:
             print(
                 f"  ⛔ {station.upper()} {label}  🎯{top_pick}°C"
                 f" — blend-ensemble uyumsuz"
-                f" (blend={blend:.1f}°C, ens_mode={top_pick}°C"
+                f" (blend={blend:.1f}°C, raw_ens_mode={raw_top_pick}°C"
                 f", fark={_blend_drift:.1f}°C ≥ {BLEND_ENSEMBLE_MAX_DRIFT}°C), pas"
             )
             return None
@@ -757,6 +738,7 @@ def scan_date(station: str, target_date: str, trades: list,
         "liquidity":     liq,
         "status":        "open",
         "entered_at":    datetime.now().isoformat(),
+        "horizon":       horizon,           # D+1 veya D+2 — settle/RMSE analizi için
         "actual_temp":   None,
         "result":        None,
         "pnl":           None,
@@ -875,7 +857,7 @@ def scan_date(station: str, target_date: str, trades: list,
                 if isinstance(c_cond_raw, str) and c_cond_raw.startswith("0x")
                 else str(c_cond_raw)
             )
-            c_pct_ens = round(cand_count / len(members) * 100) if members else 0
+            c_pct_ens = _c_pct_raw   # edge check'te zaten hesaplandı, tekrar etme
             c_cost    = round(trade_shares * c_price, 2)
             c_potwin  = round(trade_shares - c_cost, 2)
             c_pct_lbl = round(c_price * 100)
@@ -908,6 +890,7 @@ def scan_date(station: str, target_date: str, trades: list,
                 "liquidity":        liq,
                 "status":           "open",
                 "entered_at":       datetime.now().isoformat(),
+                "horizon":          horizon,
                 "actual_temp":      None,
                 "result":           None,
                 "pnl":              None,
@@ -1225,7 +1208,14 @@ def settle():
             won = bucket_won(trade["bucket_title"], actual)
 
             if won is None:
-                print(f"  ❓ {station.upper()} {label}  — bucket sonuç belirlenemedi")
+                # bucket_won() parse edemediyse trade'i terminal statüye al.
+                # "open" bırakmak → her gün yeniden settle denenir → veri kirliliği.
+                trade.update({
+                    "status":     "stale_result",
+                    "settled_at": datetime.now().isoformat(),
+                    "notes":      "bucket başlığı parse edilemedi",
+                })
+                print(f"  ❓ {station.upper()} {label}  — bucket parse edilemedi → stale_result")
                 continue
 
             # Eski format uyumluluğu: cost_usd yoksa size_usd'den al
@@ -1250,7 +1240,7 @@ def settle():
                     record_forecast_error(
                         date=yesterday,
                         station=station,
-                        horizon_days=None,     # scanner bu bilgiyi henüz taşımıyor
+                        horizon_days=trade.get("horizon"),  # D+1/D+2 trade'de kayıtlı
                         blend=trade.get("blend"),
                         top_pick=trade.get("top_pick"),
                         spread=trade.get("spread"),

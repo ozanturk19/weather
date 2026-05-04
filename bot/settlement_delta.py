@@ -104,7 +104,9 @@ def compute_station_deltas(
     try:
         with get_db(path, readonly=True) as conn:
             rows = conn.execute(sql, (cutoff,)).fetchall()
-    except Exception:
+    except Exception as _db_err:
+        # DB erişimi başarısız → prior'lara fallback olacak, ama sessiz kalmamalı.
+        print(f"  ⚠️  settlement_delta DB erişim hatası: {_db_err}")
         return {}
 
     # İstasyon + tarih bazında gruplandır
