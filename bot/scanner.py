@@ -540,6 +540,17 @@ def scan_date(station: str, target_date: str, trades: list,
             )
             return None
 
+        # Faz 14: Büyük oracle düzeltmesi uyarısı (Kalman + delta toplamı)
+        # Blend ve ensemble hemfikir olsa bile, corrections top_pick'i çok
+        # kaydırıyorsa bunu logla — bloklamaz ama risk takibi için görünür olsun.
+        _correction_total = abs(top_pick - raw_top_pick)
+        if _correction_total >= 2:
+            print(
+                f"  ⚠️  {station.upper()} {label}  büyük oracle düzeltmesi: "
+                f"ens_mode={raw_top_pick}°C → top_pick={top_pick}°C "
+                f"(Kalman+delta={_correction_total:+d}°C) — trade devam ediyor"
+            )
+
         # Aynı station + tarih + top_pick için zaten pozisyon var mı?
         already_same = any(
             t["station"] == station and t["date"] == target_date
