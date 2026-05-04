@@ -890,8 +890,11 @@ async def get_ens_buckets(station: str, date: str):
     except Exception:
         pm_buckets = []
 
-    # 4. ENS% per bucket (CAP_LO=3%)
-    CAP_LO = 0.03
+    # 4. ENS% per bucket (CAP_LO=1%)
+    # 0 oy alan bucket'lara %3 yerine %1 taban uygulanır.
+    # %3 yapay yüksekti — gerçek ihtimal çok daha düşük (≈%0.5).
+    # NO bot edge hesabı: PM% - ENS% = PM% - 0.01 → daha temiz pozitif edge görünümü.
+    CAP_LO = 0.01
     bucket_results = []
     mode_thr = None
     mode_pct = 0.0
