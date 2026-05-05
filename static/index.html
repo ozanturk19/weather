@@ -2548,7 +2548,7 @@ function updateProb(id) {
   const pctExact = Math.round(corrMaxes.filter(m => Math.round(m) === thresh).length / n * 100);
   // P(≥ eşik) = kümülatif / "or above" market için
   const pctAbove = Math.round(corrMaxes.filter(m => Math.round(m) >= thresh).length / n * 100);
-  const cap = p => Math.min(97, Math.max(3, p));
+  const cap = p => Math.min(97, Math.max(1, p));
 
   const censoredNote = maxes !== rawMaxes
     ? `<span style="font-size:10px;color:#0891b2;margin-left:4px" title="METAR gözlemi uygulandı">📍</span>` : '';
@@ -3185,7 +3185,7 @@ function ensBucketProb(memberMaxes, bucket, modelDist, bias) {
   if (t == null) return null;
   const b = (typeof bias === 'number' && !isNaN(bias)) ? bias : 0;
 
-  const CAP_LO = 0.03, CAP_HI = 0.97;
+  const CAP_LO = 0.01, CAP_HI = 0.97;
   const cap = p => Math.min(CAP_HI, Math.max(CAP_LO, p));
 
   // Gaussian olasılık — kalibre edilmiş std (backtest faktörü)
