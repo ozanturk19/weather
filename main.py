@@ -37,6 +37,18 @@ def require_token(x_api_token: str = Header(default="")):
 _weather_cache: dict = {}   # {station: {"ts": float, "data": dict}}
 CACHE_TTL = 600             # saniye (10 dakika)
 
+# ── Ensemble cache ───────────────────────────────────────────────────────────
+# Ensemble verisi (ICON 40 + ECMWF 50 + AIFS 50 = 140 üye) her istasyon için
+# 3 ayrı Open-Meteo isteği gerektirir. 14 istasyon × 3 = 42 istek/yükleme.
+# 20 dk cache → dashboard yeniden yüklemede anlık yanıt.
+_ensemble_cache: dict = {}
+ENSEMBLE_CACHE_TTL = 1200   # saniye (20 dakika)
+
+# ── METAR history cache ──────────────────────────────────────────────────────
+# 7 günlük METAR geçmişi nadir değişir; 30 dk cache dashboard'u hızlandırır.
+_metar_history_cache: dict = {}
+METAR_HISTORY_CACHE_TTL = 1800  # saniye (30 dakika)
+
 # Open-Meteo eşzamanlı istek sınırı: 12 istasyon × 6 model = 72 req → HTTP 429.
 # Semaphore ile aynı anda max 5 istek → rate limit aşılmaz (AIFS eklendi).
 _openmeteo_sem = asyncio.Semaphore(5)
@@ -293,6 +305,13 @@ def bootstrap_mode_ci(member_maxes: list[float], n_boot: int = BOOTSTRAP_SAMPLES
 
 # Bias düzeltmesi için minimum gün sayısı (7'den 5'e düşürüldü — daha hızlı aktivasyon)
 BIAS_MIN_DAYS = 5
+
+# Bias outlier filtresi: geçiş günü anomalilerini dışarıda bırak.
+# WU urban ≠ METAR airport farkı geçiş günlerinde sahte büyük hata üretir
+# (örn. LFPG May03: model=14.6, METAR=12.9 → +1.7°C ama WU≈14.5 → gerçek hata ~0.1).
+# Bu anomali üstel ağırlık yüzünden bias'ı ters yöne iter (cooling correction).
+# 1.5°C üstü hatalar geçiş günü sayılır ve bias hesabına dahil edilmez.
+BIAS_OUTLIER_CAP = 1.5  # °C
 
 KEY_HOURS = ["06:00", "09:00", "12:00", "15:00", "18:00"]
 
@@ -573,11 +592,14 @@ async def get_weather(station: str, refresh: bool = False):
             pass
 
     # Bias düzeltmesi: predictions.json'dan sistematik hatayı hesapla
+    # BIAS_OUTLIER_CAP: geçiş günü anomalilerini filtrele — sahte ters correction'ı önler.
     preds = _load_preds()
     bias_entries = []
     for date_key, e in sorted(preds.get(station, {}).items()):
         if e.get("blend") is not None and e.get("actual") is not None:
-            bias_entries.append(e["blend"] - e["actual"])
+            err = e["blend"] - e["actual"]
+            if abs(err) <= BIAS_OUTLIER_CAP:
+                bias_entries.append(err)
 
     recent_bias = bias_entries[-7:]
     bias_active  = len(recent_bias) >= BIAS_MIN_DAYS
@@ -614,16 +636,23 @@ async def clear_weather_cache(station: str = ""):
 
 
 @app.get("/api/ensemble")
-async def get_ensemble(station: str):
+async def get_ensemble(station: str, refresh: bool = False):
     """
     Çok-model ensemble: ICON (40 üye) + ECMWF IFS (50 üye) = 90 üye.
     Her iki model de Open-Meteo ensemble API'sinden çekilir, paralel istek.
     ECMWF başarısız olursa sadece ICON ile devam edilir (graceful fallback).
     member_maxes: birleştirilmiş tüm üyelerin günlük maksimumları (backward compatible).
+    Cache: 20 dakika — dashboard'da 14 istasyon × 3 model = 42 req/yükleme önlenir.
     """
     station = station.lower()
     if station not in STATIONS:
         raise HTTPException(status_code=404, detail="Bilinmeyen istasyon")
+
+    # Cache kontrolü
+    cached = _ensemble_cache.get(station)
+    now = time.monotonic()
+    if not refresh and cached and (now - cached["ts"]) < ENSEMBLE_CACHE_TTL:
+        return cached["data"]
 
     s = STATIONS[station]
 
@@ -772,7 +801,9 @@ async def get_ensemble(station: str):
             "mode_ci_high":  mode_ci["ci_high"],
         }
 
-    return {"station": station, "days": days}
+    result = {"station": station, "days": days}
+    _ensemble_cache[station] = {"ts": time.monotonic(), "data": result}
+    return result
 
 
 def _get_recent_actuals(station: str, n_days: int = 3) -> list:
@@ -883,6 +914,17 @@ async def get_ens_buckets(station: str, date: str):
     corrected = [m - bias_7d for m in raw_members]
     corrected_mean = round(sum(corrected) / n, 2) if n else 0.0
 
+    # oracle_delta: WU settlement kaynağının sistematik farkı (settlement_delta.py)
+    # corrected = model tahmini; oracle_shifted = WU'nun göreceği değer
+    # oracle_pct → NO bot için gerçek risk göstergesi (WU bazlı olasılık)
+    oracle_delta = 0.0
+    try:
+        from bot.settlement_delta import learn_station_delta
+        oracle_delta = learn_station_delta(station)
+    except Exception:
+        pass
+    oracle_shifted = [m + oracle_delta for m in corrected]
+
     # 3. Polymarket buckets
     try:
         pm_resp = await get_polymarket_markets(station, date)
@@ -894,6 +936,7 @@ async def get_ens_buckets(station: str, date: str):
     # 0 oy alan bucket'lara %3 yerine %1 taban uygulanır.
     # %3 yapay yüksekti — gerçek ihtimal çok daha düşük (≈%0.5).
     # NO bot edge hesabı: PM% - ENS% = PM% - 0.01 → daha temiz pozitif edge görünümü.
+    # oracle_pct: ens_pct'nin settlement delta ile düzeltilmiş hali (WU bazlı)
     CAP_LO = 0.01
     bucket_results = []
     mode_thr = None
@@ -907,15 +950,19 @@ async def get_ens_buckets(station: str, date: str):
             continue
 
         if is_below:
-            cnt = sum(1 for m in corrected if round(m) <= thr)
+            cnt          = sum(1 for m in corrected       if round(m) <= thr)
+            oracle_cnt   = sum(1 for m in oracle_shifted   if round(m) <= thr)
         elif is_above:
-            cnt = sum(1 for m in corrected if round(m) >= thr)
+            cnt          = sum(1 for m in corrected       if round(m) >= thr)
+            oracle_cnt   = sum(1 for m in oracle_shifted   if round(m) >= thr)
         else:
-            cnt = sum(1 for m in corrected if round(m) == int(thr))
+            cnt          = sum(1 for m in corrected       if round(m) == int(thr))
+            oracle_cnt   = sum(1 for m in oracle_shifted   if round(m) == int(thr))
 
-        raw_pct = cnt / n if n else 0.0
-        ens_pct = max(CAP_LO, raw_pct)
-        capped  = raw_pct < CAP_LO
+        raw_pct    = cnt / n if n else 0.0
+        ens_pct    = max(CAP_LO, raw_pct)
+        capped     = raw_pct < CAP_LO
+        oracle_pct = round(max(CAP_LO, oracle_cnt / n) if n else CAP_LO, 4)
 
         bucket_results.append({
             "threshold":    thr,
@@ -928,6 +975,8 @@ async def get_ens_buckets(station: str, date: str):
             "ens_pct":      round(ens_pct, 4),
             "ens_count":    cnt,
             "capped":       capped,
+            "oracle_pct":   oracle_pct,     # WU-delta ile düzeltilmiş olasılık
+            "oracle_count": oracle_cnt,
         })
 
         if not is_below and not is_above and raw_pct > mode_pct:
@@ -968,6 +1017,9 @@ async def get_ens_buckets(station: str, date: str):
         "streak_delta":   streak_info["streak_delta"],
         # ENS max — bias-corrected en sicak uye (T1 guvenlik marji icin)
         "ens_max":        round(max(corrected), 2) if corrected else 0.0,
+        # Oracle delta — WU settlement kaynağının sistematik farkı
+        # oracle_pct her bucket'ta zaten var; delta NO bot'un kendi hesabı için
+        "oracle_delta":   round(oracle_delta, 2),
     }
 
 
@@ -1161,11 +1213,18 @@ def _save_preds(data: dict):
 
 
 @app.get("/api/metar-history")
-async def get_metar_history(station: str):
-    """Son 7 günün METAR maks sıcaklıkları + lineer trend."""
+async def get_metar_history(station: str, refresh: bool = False):
+    """Son 7 günün METAR maks sıcaklıkları + lineer trend.
+    Cache: 30 dakika — 14 istasyon × aviation API = 14 req/yükleme; nadir değişir.
+    """
     station = station.lower()
     if station not in STATIONS:
         raise HTTPException(status_code=404, detail="Bilinmeyen istasyon")
+
+    # Cache kontrolü
+    cached = _metar_history_cache.get(station)
+    if not refresh and cached and (time.monotonic() - cached["ts"]) < METAR_HISTORY_CACHE_TTL:
+        return cached["data"]
 
     s    = STATIONS[station]
     icao = station.upper()
@@ -1211,12 +1270,14 @@ async def get_metar_history(station: str):
         trend_slope = round(num / den, 2) if den else 0.0
         trend_dir = "↑" if trend_slope > 0.4 else "↓" if trend_slope < -0.4 else "→"
 
-    return {
+    result = {
         "station":     station,
         "daily_maxes": daily_maxes,
         "trend_slope": trend_slope,
         "trend_dir":   trend_dir,
     }
+    _metar_history_cache[station] = {"ts": time.monotonic(), "data": result}
+    return result
 
 
 class PredictionLog(BaseModel):
@@ -1256,10 +1317,19 @@ async def get_prediction_bias(station: str):
                 "actual": e["actual"],
                 "error":  round(e["blend"] - e["actual"], 1),
             })
-    recent = entries[-7:]
-    if not recent:
+    recent_all = entries[-7:]
+    if not recent_all:
         return {"station": station, "bias_7d": 0.0, "mae": 0.0, "count": 0,
                 "bias_active": False, "entries": []}
+
+    # Outlier filtresi: geçiş günü anomalilerini bias hesabından dışla (dashboard'da görünür).
+    # BIAS_OUTLIER_CAP üstündeki hatalar dahil edilmez — ters correction'ı önler.
+    recent = [x for x in recent_all if abs(x["error"]) <= BIAS_OUTLIER_CAP]
+    if not recent:
+        # Tüm günler outlier → bias yok (muhafazakâr)
+        return {"station": station, "bias_7d": 0.0, "mae": 0.0, "count": 0,
+                "bias_active": False, "entries": entries[-14:],
+                "outliers_filtered": len(recent_all)}
 
     # Üstel ağırlıklı ortalama: en yeni gün en yüksek ağırlık (2^i)
     # [eski ... yeni] → weights [1, 2, 4, 8, ...]
@@ -1275,13 +1345,15 @@ async def get_prediction_bias(station: str):
     # Streak bilgisi (model hangi yönde ve kaç gün üst üste yanılıyor?)
     streak = _compute_model_streak(station)
 
+    outliers_filtered = len(recent_all) - len(recent)
     return {
-        "station":     station,
-        "bias_7d":     bias,
-        "mae":         round(mae, 2),
-        "count":       len(recent),
-        "bias_active": len(recent) >= BIAS_MIN_DAYS,
-        "entries":     entries[-14:],
+        "station":           station,
+        "bias_7d":           bias,
+        "mae":               round(mae, 2),
+        "count":             len(recent),
+        "bias_active":       len(recent) >= BIAS_MIN_DAYS,
+        "entries":           entries[-14:],
+        "outliers_filtered": outliers_filtered,
         # Model güvenilirlik sinyalleri
         "cold_streak":  streak["cold_streak"],
         "warm_streak":  streak["warm_streak"],
