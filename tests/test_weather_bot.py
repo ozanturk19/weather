@@ -4907,46 +4907,55 @@ test("Faz A2: STATION_DELTA_PRIORS dict doğru değerlerde",
 
 
 def test_learn_station_delta_uses_prior():
-    """Faz A2: veri yoksa prior kullanılır."""
+    """Faz A2/17: veri yoksa prior + mevsim bonusu kullanılır."""
     sd = _import_settlement_delta()
-    # DB yok → compute_station_deltas {} döner → prior devreye girer
-    # eddm prior = 1.0
+    from pathlib import Path
+    # DB yok → compute_station_deltas {} döner → prior + seasonal bonus devreye girer
     prior_val = sd.STATION_DELTA_PRIORS.get("eddm", 0)
     ok(prior_val > 0, f"eddm prior mevcut: {prior_val}")
-    # learn_station_delta DB erişimi olmadan (fake path)
-    from pathlib import Path
+    season = sd._get_season(datetime.now().month)
+    bonus = sd.STATION_SEASONAL_BONUS.get("eddm", {}).get(season, 0.0)
+    expected = round(prior_val + bonus, 2)
     delta = sd.learn_station_delta("eddm", db_path=Path("/nonexistent.db"))
-    eq(delta, prior_val, f"DB yokken prior dönmeli: {delta} == {prior_val}")
+    eq(delta, expected, f"DB yokken prior+bonus dönmeli: {delta} == {expected} (prior={prior_val}, bonus={bonus}, season={season})")
 
-test("Faz A2: learn_station_delta DB yokken prior kullanır",
+test("Faz A2: learn_station_delta DB yokken prior+mevsim bonusu kullanır",
      test_learn_station_delta_uses_prior)
 
 
 def test_learn_station_delta_prior_zero_for_uncertain():
-    """Faz A2: belirsiz istasyonlar için prior=0 → delta=0."""
+    """Faz A2: belirsiz istasyonlar için prior=0 ve bonus=0 → delta=0.
+    Not: epwa Faz 17'de mevsimsel bonus aldı (prior=0 ama bonus>0 olabilir) — bu testten çıkarıldı.
+    eglc: METAR<OM (ters dinamik), hiç bonus yok.
+    efhk: karma sign, hiç bonus yok.
+    lemd: negatif eğilim, hiç bonus yok.
+    """
     sd = _import_settlement_delta()
     from pathlib import Path
-    for station in ("eglc", "epwa", "efhk"):
+    for station in ("eglc", "efhk", "lemd"):
         delta = sd.learn_station_delta(station, db_path=Path("/nonexistent.db"))
-        eq(delta, 0.0, f"{station} prior=0 → delta=0: {delta}")
+        eq(delta, 0.0, f"{station} prior=0 ve bonus=0 → delta=0: {delta}")
 
-test("Faz A2: belirsiz istasyonlar (eglc/epwa/efhk) prior=0 döner",
+test("Faz A2: belirsiz istasyonlar (eglc/efhk/lemd) her mevsim delta=0 döner",
      test_learn_station_delta_prior_zero_for_uncertain)
 
 
 def test_horizon_dampening_applied():
-    """Faz A1: D+2 dampening 0.85 uygulanır."""
+    """Faz A1/17: D+2 dampening 0.85, mevsim bonusu dahil toplam prior'a uygulanır."""
     sd = _import_settlement_delta()
     from pathlib import Path
-    # eddm prior=1.0, D+1 → 1.0, D+2 → 0.85
     d1 = sd.learn_station_delta("eddm", db_path=Path("/nonexistent.db"), horizon_days=1)
     d2 = sd.learn_station_delta("eddm", db_path=Path("/nonexistent.db"), horizon_days=2)
+    # Faz 17: raw = prior + seasonal_bonus; dampening bu toplam üstüne uygulanır
     prior = sd.STATION_DELTA_PRIORS.get("eddm", 0)
-    eq(d1, round(prior * 1.0, 2), f"D+1 tam uygula: {d1}")
-    eq(d2, round(prior * 0.85, 2), f"D+2 %85: {d2}")
+    season = sd._get_season(datetime.now().month)
+    bonus = sd.STATION_SEASONAL_BONUS.get("eddm", {}).get(season, 0.0)
+    raw_total = round(prior + bonus, 2)
+    eq(d1, round(raw_total * 1.0, 2), f"D+1 tam uygula: {d1} (raw={raw_total})")
+    eq(d2, round(raw_total * 0.85, 2), f"D+2 %85: {d2} (raw={raw_total})")
     ok(d2 < d1, f"D+2 < D+1 ({d2} < {d1})")
 
-test("Faz A1: D+2 dampening 0.85 doğru uygulanıyor",
+test("Faz A1: D+2 dampening 0.85 mevsim bonusu dahil doğru uygulanıyor",
      test_horizon_dampening_applied)
 
 
@@ -4967,6 +4976,229 @@ def test_summary_includes_priors():
 
 test("Faz A2: summary() prior istasyonları da döndürür",
      test_summary_includes_priors)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ── Faz 17: Mevsim-Duyarlı Prior Kalibrasyonu ────────────────────────────────
+# Urban heat island (UHI) etkisi mevsime göre değişir. Bu testler STATION_SEASONAL_BONUS
+# dict'ini, _get_season() helper'ı ve learn_station_delta() prior modunu doğrular.
+print("\n══════════════════════════════════════════════════════════════")
+print(" TEST 42: Faz 17 — Mevsim-Duyarlı Settlement Delta Prior")
+print("══════════════════════════════════════════════════════════════")
+
+
+def test_faz17_seasonal_bonus_struct():
+    """STATION_SEASONAL_BONUS dict mevcut ve doğru yapıda."""
+    sd = _import_settlement_delta()
+    ok(hasattr(sd, "STATION_SEASONAL_BONUS"), "STATION_SEASONAL_BONUS attr mevcut")
+    ok(isinstance(sd.STATION_SEASONAL_BONUS, dict), "dict olmalı")
+    # Güçlü UHI istasyonları var olmalı
+    for st in ("lfpg", "eddm", "limc", "eham"):
+        ok(st in sd.STATION_SEASONAL_BONUS, f"{st} STATION_SEASONAL_BONUS'ta mevcut")
+    # Her giriş 4 mevsim içermeli
+    for st, seasons in sd.STATION_SEASONAL_BONUS.items():
+        for s in ("spring", "summer", "autumn", "winter"):
+            ok(s in seasons, f"{st}: '{s}' mevsimi tanımlı")
+            ok(isinstance(seasons[s], float), f"{st}.{s} float olmalı: {seasons[s]!r}")
+            ok(seasons[s] >= 0.0, f"{st}.{s} negatif olamaz: {seasons[s]}")
+
+test("Faz 17: STATION_SEASONAL_BONUS dict yapısı doğru", test_faz17_seasonal_bonus_struct)
+
+
+def test_faz17_get_season():
+    """_get_season() ay → mevsim dönüşümü doğru."""
+    sd = _import_settlement_delta()
+    ok(hasattr(sd, "_get_season"), "_get_season helper mevcut")
+    # İlkbahar: Mart, Nisan, Mayıs
+    for m in (3, 4, 5):
+        eq(sd._get_season(m), "spring", f"Ay {m} → spring beklenir")
+    # Yaz: Haziran, Temmuz, Ağustos
+    for m in (6, 7, 8):
+        eq(sd._get_season(m), "summer", f"Ay {m} → summer beklenir")
+    # Sonbahar: Eylül, Ekim, Kasım
+    for m in (9, 10, 11):
+        eq(sd._get_season(m), "autumn", f"Ay {m} → autumn beklenir")
+    # Kış: Aralık, Ocak, Şubat
+    for m in (12, 1, 2):
+        eq(sd._get_season(m), "winter", f"Ay {m} → winter beklenir")
+
+test("Faz 17: _get_season() ay→mevsim dönüşümü doğru", test_faz17_get_season)
+
+
+def test_faz17_spring_bonus_lfpg():
+    """LFPG ilkbaharda prior + 0.30 bonus alır."""
+    sd = _import_settlement_delta()
+    from pathlib import Path
+    from unittest.mock import patch
+    prior = sd.STATION_DELTA_PRIORS.get("lfpg", 0.0)  # 0.8
+    expected_spring = round(prior + 0.30, 2)  # 1.10
+    # Ay=5 (Mayıs=spring) olarak mock
+    with patch("bot.settlement_delta.datetime") as mock_dt:
+        mock_dt.now.return_value = datetime(2026, 5, 15)
+        delta = sd.learn_station_delta("lfpg", db_path=Path("/nonexistent.db"))
+    eq(delta, expected_spring,
+       f"LFPG ilkbahar: prior={prior} + bonus=0.30 = {expected_spring}, sonuç={delta}")
+
+test("Faz 17: LFPG ilkbahar prior+bonus=1.10°C", test_faz17_spring_bonus_lfpg)
+
+
+def test_faz17_summer_bonus_eddm():
+    """EDDM yazında en yüksek bonus alır (0.65)."""
+    sd = _import_settlement_delta()
+    from pathlib import Path
+    from unittest.mock import patch
+    prior = sd.STATION_DELTA_PRIORS.get("eddm", 0.0)  # 1.0
+    expected_summer = round(prior + 0.65, 2)  # 1.65
+    with patch("bot.settlement_delta.datetime") as mock_dt:
+        mock_dt.now.return_value = datetime(2026, 7, 15)
+        delta = sd.learn_station_delta("eddm", db_path=Path("/nonexistent.db"))
+    eq(delta, expected_summer,
+       f"EDDM yaz: prior={prior} + bonus=0.65 = {expected_summer}, sonuç={delta}")
+
+test("Faz 17: EDDM yaz prior+bonus=1.65°C (en yüksek UHI)", test_faz17_summer_bonus_eddm)
+
+
+def test_faz17_winter_zero_bonus():
+    """Kış mevsiminde hiçbir istasyon için sezonsal bonus uygulanmamalı."""
+    sd = _import_settlement_delta()
+    from pathlib import Path
+    from unittest.mock import patch
+    with patch("bot.settlement_delta.datetime") as mock_dt:
+        mock_dt.now.return_value = datetime(2026, 1, 15)  # Ocak = winter
+        for st in ("lfpg", "eddm", "limc", "eham", "ltac", "ltfm", "epwa"):
+            prior = sd.STATION_DELTA_PRIORS.get(st, 0.0)
+            bonus = sd.STATION_SEASONAL_BONUS.get(st, {}).get("winter", 0.0)
+            expected = round(prior + bonus, 2)
+            delta = sd.learn_station_delta(st, db_path=Path("/nonexistent.db"))
+            eq(delta, expected,
+               f"{st} kış: prior={prior}+winter_bonus={bonus}={expected}, sonuç={delta}")
+            # Tüm Avrupa istasyonlarında kış bonusu sıfır
+            if st not in ("rjtt", "vhhh"):
+                eq(bonus, 0.0, f"{st} kış bonusu sıfır olmalı: {bonus}")
+
+test("Faz 17: Kış mevsiminde Avrupa istasyonları bonus almaz (winter=0.0)",
+     test_faz17_winter_zero_bonus)
+
+
+def test_faz17_observed_delta_bypasses_seasonal():
+    """Gözlem verileri mevcutsa mevsimsel bonus uygulanmaz."""
+    sd = _import_settlement_delta()
+    from pathlib import Path
+    import sqlite3, tempfile
+    # Geçici DB oluştur, MIN_PAIRED_SAMPLES (3) kadar metar-om çifti ekle
+    tmpdir = tempfile.mkdtemp()
+    tmp_db = Path(tmpdir) / "test_audit.db"
+    conn = sqlite3.connect(str(tmp_db))
+    conn.execute("""
+        CREATE TABLE settlement_audit (
+            station TEXT, date TEXT, source TEXT, actual_temp REAL
+        )
+    """)
+    # lfpg için son 3 günlük metar+om çifti: delta = 0.5 (mevsimsel bonustan farklı)
+    # ÖNEMLI: tarihler son 30 gün içinde olmalı (cutoff = now - 30 gün)
+    for i in range(3):
+        d = (datetime.now() - timedelta(days=i+1)).strftime("%Y-%m-%d")
+        conn.execute("INSERT INTO settlement_audit VALUES (?,?,?,?)", ("lfpg", d, "metar", 20.5))
+        conn.execute("INSERT INTO settlement_audit VALUES (?,?,?,?)", ("lfpg", d, "open-meteo", 20.0))
+    conn.commit()
+    conn.close()
+
+    # datetime'ı patch'leme — gerçek now kullanıyoruz, tarihler zaten son 30 gün içinde
+    # Yaz ayında sezonsal bonus lfpg için 0.50 eklerdi (prior 0.8 → total 1.30)
+    # Ama gözlem var → rolling medyan = 0.5°C (mevsimsel bonus bypass edilmeli)
+    delta = sd.learn_station_delta("lfpg", db_path=tmp_db)
+    # Gözlem var → rolling medyan = 0.5°C (mevsimsel bonus YOK)
+    eq(delta, 0.5,
+       f"Gözlem varken rolling medyan=0.5 kullanılmalı (sezonsal bonus bypass): {delta}")
+
+test("Faz 17: Gözlem varken sezonsal bonus bypass edilir (rolling medyan kullanılır)",
+     test_faz17_observed_delta_bypasses_seasonal)
+
+
+def test_faz17_no_bonus_stations():
+    """EGLC, EFHK, LEMD tüm mevsimlerde bonus almaz."""
+    sd = _import_settlement_delta()
+    from pathlib import Path
+    from unittest.mock import patch
+    for month, season_name in ((5, "spring"), (7, "summer"), (10, "autumn"), (1, "winter")):
+        with patch("bot.settlement_delta.datetime") as mock_dt:
+            mock_dt.now.return_value = datetime(2026, month, 15)
+            for st in ("eglc", "efhk", "lemd"):
+                delta = sd.learn_station_delta(st, db_path=Path("/nonexistent.db"))
+                eq(delta, 0.0,
+                   f"{st} {season_name}: her mevsim delta=0.0 olmalı, sonuç={delta}")
+
+test("Faz 17: EGLC/EFHK/LEMD tüm mevsimlerde delta=0 (bonus ve prior yok)",
+     test_faz17_no_bonus_stations)
+
+
+def test_faz17_eham_amsterdam_case():
+    """EHAM (Amsterdam): Mayıs case — prior 0.4 + spring 0.20 = 0.60°C.
+    Amsterdam vakası: 17°C YES settle oldu, model 17°C NO önerdi.
+    Sezonsal bonus ile oracle_delta artarak 17°C NO riskini azaltmalı.
+    """
+    sd = _import_settlement_delta()
+    from pathlib import Path
+    from unittest.mock import patch
+    prior = sd.STATION_DELTA_PRIORS.get("eham", 0.0)  # 0.4
+    with patch("bot.settlement_delta.datetime") as mock_dt:
+        mock_dt.now.return_value = datetime(2026, 5, 7)   # Mayıs = spring
+        delta_spring = sd.learn_station_delta("eham", db_path=Path("/nonexistent.db"))
+        mock_dt.now.return_value = datetime(2026, 7, 7)   # Temmuz = summer
+        delta_summer = sd.learn_station_delta("eham", db_path=Path("/nonexistent.db"))
+        mock_dt.now.return_value = datetime(2026, 1, 7)   # Ocak = winter
+        delta_winter = sd.learn_station_delta("eham", db_path=Path("/nonexistent.db"))
+    eq(delta_spring, round(prior + 0.20, 2), f"EHAM Mayıs: {delta_spring}")   # 0.60
+    eq(delta_summer, round(prior + 0.30, 2), f"EHAM Temmuz: {delta_summer}")  # 0.70
+    eq(delta_winter, round(prior + 0.0,  2), f"EHAM Ocak: {delta_winter}")    # 0.40
+    ok(delta_summer > delta_spring > delta_winter,
+       f"Yaz>İlkbahar>Kış: {delta_summer}>{delta_spring}>{delta_winter}")
+
+test("Faz 17: EHAM Amsterdam — mevsimsel sıralama yaz>ilkbahar>kış",
+     test_faz17_eham_amsterdam_case)
+
+
+def test_faz17_summary_seasonal_fields():
+    """summary() prior modda delta_base, season_bonus, season alanlarını döndürür."""
+    sd = _import_settlement_delta()
+    from pathlib import Path
+    from unittest.mock import patch
+    with patch("bot.settlement_delta.datetime") as mock_dt:
+        mock_dt.now.return_value = datetime(2026, 7, 15)  # summer
+        items = sd.summary(db_path=Path("/nonexistent.db"))
+    items_by_station = {i["station"]: i for i in items}
+    # LFPG summer: prior=0.8, bonus=0.50, total=1.30
+    lfpg = items_by_station.get("lfpg")
+    ok(lfpg is not None, "lfpg summary'de mevcut")
+    eq(lfpg.get("source"), "prior",  f"lfpg source=prior: {lfpg.get('source')}")
+    eq(lfpg.get("delta_base"), 0.8,  f"lfpg delta_base=0.8: {lfpg.get('delta_base')}")
+    eq(lfpg.get("season_bonus"), 0.50, f"lfpg summer bonus=0.50: {lfpg.get('season_bonus')}")
+    eq(lfpg.get("season"), "summer", f"lfpg season=summer: {lfpg.get('season')}")
+    eq(lfpg.get("delta"), 1.30,      f"lfpg total delta=1.30: {lfpg.get('delta')}")
+    # EGLC: prior=0, bonus=0 → summary'de YOK (total=0 → atlanır)
+    ok("eglc" not in items_by_station or items_by_station["eglc"]["delta"] == 0.0,
+       "eglc summary'de delta=0 (atlanabilir)")
+
+test("Faz 17: summary() prior modda delta_base/season_bonus/season alanları döner",
+     test_faz17_summary_seasonal_fields)
+
+
+def test_faz17_epwa_zero_prior_gets_bonus():
+    """EPWA: prior=0 ama mevsim bonusu var. Yaz 0.25°C, kış 0.0°C."""
+    sd = _import_settlement_delta()
+    from pathlib import Path
+    from unittest.mock import patch
+    prior = sd.STATION_DELTA_PRIORS.get("epwa", 0.0)
+    eq(prior, 0.0, f"epwa base prior=0: {prior}")
+    with patch("bot.settlement_delta.datetime") as mock_dt:
+        mock_dt.now.return_value = datetime(2026, 7, 15)
+        delta_summer = sd.learn_station_delta("epwa", db_path=Path("/nonexistent.db"))
+        mock_dt.now.return_value = datetime(2026, 1, 15)
+        delta_winter = sd.learn_station_delta("epwa", db_path=Path("/nonexistent.db"))
+    eq(delta_summer, 0.25, f"epwa yaz bonus=0.25: {delta_summer}")
+    eq(delta_winter, 0.0,  f"epwa kış bonus=0.0: {delta_winter}")
+
+test("Faz 17: EPWA (sıfır prior) yazda 0.25°C bonus alır, kışta 0", test_faz17_epwa_zero_prior_gets_bonus)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

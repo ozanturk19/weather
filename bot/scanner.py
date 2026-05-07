@@ -423,11 +423,26 @@ def scan_date(station: str, target_date: str, trades: list,
             top2        = counts.most_common(2)
             second_pick = top2[1][0] if len(top2) > 1 else None
             second_pct  = round(top2[1][1] / len(members) * 100) if second_pick is not None else None
+
+            # Faz 17: Dağılım skew — mean vs mode farkı
+            # Büyük pozitif skew = sıcak kuyruk dominant → adj_trade sıcak yönde
+            # Büyük negatif skew = soğuk kuyruk dominant → adj_trade soğuk yönde
+            ens_mean = sum(members) / len(members)
+            ens_skew = round(ens_mean - top_pick, 2)
+            if abs(ens_skew) >= 1.0:
+                _skew_dir = "sağa (sıcak kuyruk)" if ens_skew > 0 else "sola (soğuk kuyruk)"
+                print(
+                    f"  📊 {station.upper()} {label}  "
+                    f"dağılım skew {ens_skew:+.1f}°C {_skew_dir} "
+                    f"(mod={top_pick}°C, ortalama={ens_mean:.1f}°C)"
+                )
         else:
             top_pick    = round(blend)
             mode_pct    = None
             second_pick = None
             second_pct  = None
+            ens_mean    = blend
+            ens_skew    = 0.0
 
         # Faz 2: ensemble şekil metrikleri (API varsa)
         is_bimodal    = bool(ens_day.get("is_bimodal"))
@@ -808,13 +823,22 @@ def scan_date(station: str, target_date: str, trades: list,
             _adj_cands.append((_t, _ens, _bp))
         # Faz 10: Trend yönü tiebreaker
         # sdelta ≥ TREND_BIAS_THRESHOLD ise trend yönündeki bucket'a sanal bonus.
+        # Faz 17: ens_skew ≥ 1°C de aynı sinyal → trend_dir'i pekiştir.
         _trend_dir = 0
+        _trend_sources = []
         if abs(sdelta) >= TREND_BIAS_THRESHOLD:
             _trend_dir = 1 if sdelta > 0 else -1
+            _trend_sources.append(f"sdelta={sdelta:+.1f}°C")
+        if abs(ens_skew) >= 1.0:
+            _skew_dir = 1 if ens_skew > 0 else -1
+            if _skew_dir == _trend_dir or _trend_dir == 0:
+                _trend_dir = _skew_dir
+            _trend_sources.append(f"ens_skew={ens_skew:+.1f}°C")
+        if _trend_dir != 0:
             _trend_label = "ısınma ↑" if _trend_dir > 0 else "soğuma ↓"
             print(
                 f"  🌡️  {station.upper()} {label}  "
-                f"trend bias: {_trend_label} (δ={sdelta:+.1f}°C) "
+                f"trend bias: {_trend_label} ({' + '.join(_trend_sources)}) "
                 f"→ {'sıcak' if _trend_dir > 0 else 'soğuk'} yönlü adj öncelikli"
             )
 

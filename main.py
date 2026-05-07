@@ -1022,7 +1022,7 @@ async def get_ens_buckets(station: str, date: str):
             mode_pct = raw_pct
             mode_thr = int(thr)
 
-    # 5. Trend
+    # 5. Trend + dağılım skew analizi
     TREND_THRESH = 0.3
     corrected_mode = mode_thr or 0
     diff = corrected_mean - corrected_mode if corrected_mode else 0.0
@@ -1032,6 +1032,12 @@ async def get_ens_buckets(station: str, date: str):
         trend = "cooling"
     else:
         trend = "neutral"
+
+    # Ensemble skew: corrected_mean - corrected_mode
+    # Pozitif = sağa çarpık (sıcak kuyruk dominant) → NO trade riski yüksek bucket'larda artar
+    # |ens_skew| >= 1.0°C → skew_warning: True → NO bot ekstra dikkat
+    ens_skew = round(diff, 2)  # diff zaten corrected_mean - corrected_mode
+    skew_warning = abs(ens_skew) >= 1.0
 
     # 6. Model güvenilirlik sinyalleri (NO bot için)
     recent_actuals = _get_recent_actuals(station, n_days=3)
@@ -1048,6 +1054,12 @@ async def get_ens_buckets(station: str, date: str):
         "mode_pct":       round(mode_pct, 4),
         "trend":          trend,
         "trend_diff":     round(diff, 3),
+        # Distribüsyon skew (Faz 17):
+        # ens_skew > 0 = sağa çarpık (ısınma, üst bucket riski yüksek)
+        # ens_skew < 0 = sola çarpık (soğuma, alt bucket riski yüksek)
+        # skew_warning = |ens_skew| >= 1.0°C — NO bot ekstra dikkat etmeli
+        "ens_skew":       ens_skew,
+        "skew_warning":   skew_warning,
         "buckets":        bucket_results,
         # Yeni alanlar — model güvenilirlik sinyalleri
         "recent_actuals": recent_actuals,
@@ -1057,7 +1069,7 @@ async def get_ens_buckets(station: str, date: str):
         # ENS max — bias-corrected en sicak uye (T1 guvenlik marji icin)
         "ens_max":        round(max(corrected), 2) if corrected else 0.0,
         # Oracle delta — WU settlement kaynağının sistematik farkı (dinamik düzeltme dahil)
-        # oracle_delta_base: settlement_delta.py'dan gelen statik değer
+        # oracle_delta_base: settlement_delta.py'dan gelen statik (prior + mevsim bonusu)
         # oracle_delta: streak bazlı dinamik kalibrasyondan sonra uygulanmış değer
         "oracle_delta":      round(oracle_delta, 2),
         "oracle_delta_base": round(oracle_delta_base, 2),
