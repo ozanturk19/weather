@@ -914,15 +914,54 @@ async def get_ens_buckets(station: str, date: str):
     corrected = [m - bias_7d for m in raw_members]
     corrected_mean = round(sum(corrected) / n, 2) if n else 0.0
 
+    # Streak bilgisini ERKEN hesapla: oracle_delta'yı dinamik ayarlamak için gerekli.
+    # (Daha önce endpoint'in sonunda hesaplanırdı — oracle_pct'yi etkileyen kısım için öne alındı)
+    streak_info = _compute_model_streak(station)
+
     # oracle_delta: WU settlement kaynağının sistematik farkı (settlement_delta.py)
     # corrected = model tahmini; oracle_shifted = WU'nun göreceği değer
     # oracle_pct → NO bot için gerçek risk göstergesi (WU bazlı olasılık)
+    #
+    # Dinamik kalibasyon (Faz 15+):
+    # cold_streak ≥ 2 + streak_delta ≥ 0.5°C → model OM'a göre soğuk kalıyor.
+    # WU urban, OM'dan zaten oracle_delta kadar sıcak → model WU'ya karşı daha da soğuk.
+    # Bu durumda oracle_delta'yı hafifçe yukarı kaldır: NO botu daha gerçekçi risk görür.
+    #
+    # warm_streak ≥ 2 + streak_delta > oracle_delta + 0.3 → model OM'a göre sıcak ama
+    # WU'ya karşı da sıcak → oracle_delta'yı hafifçe aşağı çek (NO bot az risk görmesin).
     oracle_delta = 0.0
+    oracle_delta_base = 0.0
     try:
         from bot.settlement_delta import learn_station_delta
         oracle_delta = learn_station_delta(station)
+        oracle_delta_base = oracle_delta
     except Exception:
         pass
+
+    # Streak bazlı dinamik ayar
+    _cs  = streak_info.get("cold_streak", 0)
+    _ws  = streak_info.get("warm_streak", 0)
+    _sd  = streak_info.get("streak_delta", 0.0)
+
+    if _cs >= 2 and _sd >= 0.5:
+        # Model OM'a göre soğuk → WU'ya karşı daha da soğuk → oracle_delta artır
+        # boost = streak_delta × 0.3 × min(streak/3, 1) — discount for uncertainty
+        _boost = round(min(0.6, _sd * 0.3 * min(_cs, 3) / 3), 2)
+        oracle_delta = round(oracle_delta + _boost, 2)
+        print(
+            f"  🌡️  {station.upper()} cold_streak={_cs}g δ={_sd:.1f}°C → "
+            f"oracle_delta {oracle_delta_base:+.2f} → {oracle_delta:+.2f} (+{_boost})"
+        )
+    elif _ws >= 2 and _sd > oracle_delta + 0.3:
+        # Model OM'a göre sıcak VE WU'ya karşı da sıcak → oracle_delta azalt
+        _excess = _sd - oracle_delta - 0.3
+        _reduction = round(min(0.4, _excess * 0.3), 2)
+        oracle_delta = round(max(-1.0, oracle_delta - _reduction), 2)
+        print(
+            f"  ❄️  {station.upper()} warm_streak={_ws}g δ={_sd:.1f}°C → "
+            f"oracle_delta {oracle_delta_base:+.2f} → {oracle_delta:+.2f} ({-_reduction:.2f})"
+        )
+
     oracle_shifted = [m + oracle_delta for m in corrected]
 
     # 3. Polymarket buckets
@@ -996,7 +1035,7 @@ async def get_ens_buckets(station: str, date: str):
 
     # 6. Model güvenilirlik sinyalleri (NO bot için)
     recent_actuals = _get_recent_actuals(station, n_days=3)
-    streak_info    = _compute_model_streak(station)
+    # streak_info: daha önce oracle_delta hesabı için yukarıda hesaplandı — yeniden hesaplama
 
     return {
         "station":        station,
@@ -1017,9 +1056,11 @@ async def get_ens_buckets(station: str, date: str):
         "streak_delta":   streak_info["streak_delta"],
         # ENS max — bias-corrected en sicak uye (T1 guvenlik marji icin)
         "ens_max":        round(max(corrected), 2) if corrected else 0.0,
-        # Oracle delta — WU settlement kaynağının sistematik farkı
-        # oracle_pct her bucket'ta zaten var; delta NO bot'un kendi hesabı için
-        "oracle_delta":   round(oracle_delta, 2),
+        # Oracle delta — WU settlement kaynağının sistematik farkı (dinamik düzeltme dahil)
+        # oracle_delta_base: settlement_delta.py'dan gelen statik değer
+        # oracle_delta: streak bazlı dinamik kalibrasyondan sonra uygulanmış değer
+        "oracle_delta":      round(oracle_delta, 2),
+        "oracle_delta_base": round(oracle_delta_base, 2),
     }
 
 
