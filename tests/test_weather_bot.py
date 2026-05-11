@@ -4924,19 +4924,18 @@ test("Faz A2: learn_station_delta DB yokken prior+mevsim bonusu kullanır",
 
 
 def test_learn_station_delta_prior_zero_for_uncertain():
-    """Faz A2: belirsiz istasyonlar için prior=0 ve bonus=0 → delta=0.
-    Not: epwa Faz 17'de mevsimsel bonus aldı (prior=0 ama bonus>0 olabilir) — bu testten çıkarıldı.
-    eglc: METAR<OM (ters dinamik), hiç bonus yok.
-    efhk: karma sign, hiç bonus yok.
-    lemd: negatif eğilim, hiç bonus yok.
+    """Faz A2/18: Gerçek anlamda 'sıfır' istasyonlar: EGLC ve LEMD.
+    Not: epwa Faz 17'de sezonsal bonus aldı.
+         efhk Faz 18'de prior=0.5 ve sezonsal bonus aldı.
+    Sadece EGLC (METAR<OM ters dinamik) ve LEMD (negatif eğilim) sıfır kalır.
     """
     sd = _import_settlement_delta()
     from pathlib import Path
-    for station in ("eglc", "efhk", "lemd"):
+    for station in ("eglc", "lemd"):
         delta = sd.learn_station_delta(station, db_path=Path("/nonexistent.db"))
         eq(delta, 0.0, f"{station} prior=0 ve bonus=0 → delta=0: {delta}")
 
-test("Faz A2: belirsiz istasyonlar (eglc/efhk/lemd) her mevsim delta=0 döner",
+test("Faz A2: EGLC/LEMD her mevsim delta=0 (ters/negatif dinamik)",
      test_learn_station_delta_prior_zero_for_uncertain)
 
 
@@ -5116,19 +5115,21 @@ test("Faz 17: Gözlem varken sezonsal bonus bypass edilir (rolling medyan kullan
 
 
 def test_faz17_no_bonus_stations():
-    """EGLC, EFHK, LEMD tüm mevsimlerde bonus almaz."""
+    """Faz 17/18: EGLC ve LEMD tüm mevsimlerde bonus ve prior=0 → delta=0.
+    Not: EFHK Faz 18'de prior=0.5 aldı; bu testten çıkarıldı, aşağıda ayrı test var.
+    """
     sd = _import_settlement_delta()
     from pathlib import Path
     from unittest.mock import patch
     for month, season_name in ((5, "spring"), (7, "summer"), (10, "autumn"), (1, "winter")):
         with patch("bot.settlement_delta.datetime") as mock_dt:
             mock_dt.now.return_value = datetime(2026, month, 15)
-            for st in ("eglc", "efhk", "lemd"):
+            for st in ("eglc", "lemd"):
                 delta = sd.learn_station_delta(st, db_path=Path("/nonexistent.db"))
                 eq(delta, 0.0,
                    f"{st} {season_name}: her mevsim delta=0.0 olmalı, sonuç={delta}")
 
-test("Faz 17: EGLC/EFHK/LEMD tüm mevsimlerde delta=0 (bonus ve prior yok)",
+test("Faz 17: EGLC/LEMD tüm mevsimlerde delta=0 (prior/bonus yok)",
      test_faz17_no_bonus_stations)
 
 
@@ -5199,6 +5200,164 @@ def test_faz17_epwa_zero_prior_gets_bonus():
     eq(delta_winter, 0.0,  f"epwa kış bonus=0.0: {delta_winter}")
 
 test("Faz 17: EPWA (sıfır prior) yazda 0.25°C bonus alır, kışta 0", test_faz17_epwa_zero_prior_gets_bonus)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ── Faz 18: oracle_blend + Kalibrasyon Düzeltmeleri ──────────────────────────
+# RJTT/RKSI büyük kentsel gap, EFHK cold bias, LTAC/LTFM spring güncelleme.
+# oracle_blend = blend + oracle_delta → NO bot'un WU settlement tahmini.
+print("\n══════════════════════════════════════════════════════════════")
+print(" TEST 43: Faz 18 — oracle_blend + Kalibrasyon Güncelleme")
+print("══════════════════════════════════════════════════════════════")
+
+
+def test_faz18_rjtt_prior_updated():
+    """RJTT prior 0.0→2.0 (Tokyo Haneda sahil vs kentsel WU gap ~2.74°C)."""
+    sd = _import_settlement_delta()
+    from pathlib import Path
+    from unittest.mock import patch
+    prior = sd.STATION_DELTA_PRIORS.get("rjtt", 0.0)
+    eq(prior, 2.0, f"rjtt prior=2.0 beklenir (canlı gap ~2.74°C): {prior}")
+    # Spring: 2.0 + 0.25 = 2.25
+    with patch("bot.settlement_delta.datetime") as mock_dt:
+        mock_dt.now.return_value = datetime(2026, 5, 15)
+        delta_spring = sd.learn_station_delta("rjtt", db_path=Path("/nonexistent.db"))
+    eq(delta_spring, round(2.0 + 0.25, 2), f"rjtt spring delta={delta_spring}")
+    # Summer: 2.0 + 0.55 = 2.55
+    with patch("bot.settlement_delta.datetime") as mock_dt:
+        mock_dt.now.return_value = datetime(2026, 7, 15)
+        delta_summer = sd.learn_station_delta("rjtt", db_path=Path("/nonexistent.db"))
+    eq(delta_summer, round(2.0 + 0.55, 2), f"rjtt summer delta={delta_summer}")
+    ok(delta_summer > delta_spring, f"yaz>ilkbahar: {delta_summer}>{delta_spring}")
+
+test("Faz 18: RJTT prior=2.0, spring=2.25, summer=2.55 (kentsel gap düzeltmesi)",
+     test_faz18_rjtt_prior_updated)
+
+
+def test_faz18_rksi_prior_updated():
+    """RKSI prior 0.0→1.5 (Incheon ada vs kentsel WU gap ~2.31°C)."""
+    sd = _import_settlement_delta()
+    from pathlib import Path
+    from unittest.mock import patch
+    prior = sd.STATION_DELTA_PRIORS.get("rksi", 0.0)
+    eq(prior, 1.5, f"rksi prior=1.5 beklenir (canlı gap ~2.31°C): {prior}")
+    with patch("bot.settlement_delta.datetime") as mock_dt:
+        mock_dt.now.return_value = datetime(2026, 5, 15)
+        delta_spring = sd.learn_station_delta("rksi", db_path=Path("/nonexistent.db"))
+    eq(delta_spring, round(1.5 + 0.15, 2), f"rksi spring delta={delta_spring}")
+    with patch("bot.settlement_delta.datetime") as mock_dt:
+        mock_dt.now.return_value = datetime(2026, 7, 15)
+        delta_summer = sd.learn_station_delta("rksi", db_path=Path("/nonexistent.db"))
+    eq(delta_summer, round(1.5 + 0.35, 2), f"rksi summer delta={delta_summer}")
+
+test("Faz 18: RKSI prior=1.5, spring=1.65, summer=1.85 (Incheon gap düzeltmesi)",
+     test_faz18_rksi_prior_updated)
+
+
+def test_faz18_efhk_prior_added():
+    """EFHK prior 0.0→0.5 (canlı gözlem Mayıs -0.77→-1.0°C cold bias)."""
+    sd = _import_settlement_delta()
+    from pathlib import Path
+    from unittest.mock import patch
+    prior = sd.STATION_DELTA_PRIORS.get("efhk", 0.0)
+    eq(prior, 0.5, f"efhk prior=0.5 beklenir (Faz 18 eklendi): {prior}")
+    ok("efhk" in sd.STATION_SEASONAL_BONUS, "efhk STATION_SEASONAL_BONUS'ta mevcut")
+    # Spring: 0.5 + 0.20 = 0.70
+    with patch("bot.settlement_delta.datetime") as mock_dt:
+        mock_dt.now.return_value = datetime(2026, 5, 15)
+        delta_spring = sd.learn_station_delta("efhk", db_path=Path("/nonexistent.db"))
+    eq(delta_spring, round(0.5 + 0.20, 2), f"efhk spring delta={delta_spring}")
+
+test("Faz 18: EFHK prior=0.5, spring=0.70 (cold bias düzeltmesi)",
+     test_faz18_efhk_prior_added)
+
+
+def test_faz18_ltac_spring_bonus_increased():
+    """LTAC spring bonus 0.20→0.55 (Mayıs canlı avg -1.27°C)."""
+    sd = _import_settlement_delta()
+    from pathlib import Path
+    from unittest.mock import patch
+    bonus = sd.STATION_SEASONAL_BONUS.get("ltac", {}).get("spring", 0.0)
+    eq(bonus, 0.55, f"ltac spring bonus=0.55 beklenir: {bonus}")
+    prior = sd.STATION_DELTA_PRIORS.get("ltac", 0.0)
+    with patch("bot.settlement_delta.datetime") as mock_dt:
+        mock_dt.now.return_value = datetime(2026, 5, 15)
+        delta = sd.learn_station_delta("ltac", db_path=Path("/nonexistent.db"))
+    eq(delta, round(prior + 0.55, 2), f"ltac spring total={delta}")
+
+test("Faz 18: LTAC spring bonus=0.55 (Mayıs ısınması düzeltmesi)",
+     test_faz18_ltac_spring_bonus_increased)
+
+
+def test_faz18_ltfm_spring_bonus_increased():
+    """LTFM spring bonus 0.15→0.35 (Mayıs canlı avg -0.73°C)."""
+    sd = _import_settlement_delta()
+    from pathlib import Path
+    from unittest.mock import patch
+    bonus = sd.STATION_SEASONAL_BONUS.get("ltfm", {}).get("spring", 0.0)
+    eq(bonus, 0.35, f"ltfm spring bonus=0.35 beklenir: {bonus}")
+    prior = sd.STATION_DELTA_PRIORS.get("ltfm", 0.0)
+    with patch("bot.settlement_delta.datetime") as mock_dt:
+        mock_dt.now.return_value = datetime(2026, 5, 15)
+        delta = sd.learn_station_delta("ltfm", db_path=Path("/nonexistent.db"))
+    eq(delta, round(prior + 0.35, 2), f"ltfm spring total={delta}")
+
+test("Faz 18: LTFM spring bonus=0.35 (İstanbul ilkbahar düzeltmesi)",
+     test_faz18_ltfm_spring_bonus_increased)
+
+
+def test_faz18_oracle_blend_model():
+    """PredictionLog modeli oracle_blend ve oracle_delta alanlarını kabul eder."""
+    import sys, importlib
+    if "main" in sys.modules:
+        del sys.modules["main"]
+    import main as m
+    # PredictionLog alanları
+    ok(hasattr(m.PredictionLog, "model_fields"), "PredictionLog Pydantic model")
+    fields = m.PredictionLog.model_fields
+    ok("oracle_blend" in fields, "oracle_blend alanı mevcut")
+    ok("oracle_delta" in fields, "oracle_delta alanı mevcut")
+    # Opsiyonel olmalı (None varsayılan)
+    ok(fields["oracle_blend"].default is None, "oracle_blend opsiyonel (None default)")
+    ok(fields["oracle_delta"].default is None, "oracle_delta opsiyonel (None default)")
+
+test("Faz 18: PredictionLog oracle_blend/oracle_delta alanları mevcut",
+     test_faz18_oracle_blend_model)
+
+
+def test_faz18_oracle_blend_stored():
+    """log_prediction oracle_blend'i predictions.json'a yazar."""
+    import sys, importlib, json, tempfile
+    from pathlib import Path
+    from unittest.mock import patch
+    if "main" in sys.modules:
+        del sys.modules["main"]
+    import main as m
+
+    # Geçici predictions.json
+    tmpdir = tempfile.mkdtemp()
+    tmp_preds = Path(tmpdir) / "predictions.json"
+    tmp_preds.write_text("{}")
+
+    with patch.object(m, "PREDICTIONS_FILE", tmp_preds):
+        import asyncio
+        req = m.PredictionLog(
+            station="eham",
+            date="2026-05-11",
+            blend=10.5,
+            oracle_blend=11.1,
+            oracle_delta=0.6,
+        )
+        asyncio.run(m.log_prediction(req))
+
+    saved = json.loads(tmp_preds.read_text())
+    entry = saved.get("eham", {}).get("2026-05-11", {})
+    eq(entry.get("blend"), 10.5, f"blend saklandı: {entry.get('blend')}")
+    eq(entry.get("oracle_blend"), 11.1, f"oracle_blend saklandı: {entry.get('oracle_blend')}")
+    eq(entry.get("oracle_delta"), 0.6, f"oracle_delta saklandı: {entry.get('oracle_delta')}")
+
+test("Faz 18: log_prediction oracle_blend ve oracle_delta'yı predictions.json'a yazar",
+     test_faz18_oracle_blend_stored)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

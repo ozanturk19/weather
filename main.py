@@ -1339,19 +1339,30 @@ class PredictionLog(BaseModel):
     blend: Optional[float] = None
     p50:   Optional[float] = None
     actual: Optional[float] = None
+    # Faz 18: WU-düzeltmeli tahmin alanları
+    oracle_blend: Optional[float] = None   # blend + oracle_delta → WU settlement tahmini
+    oracle_delta: Optional[float] = None   # uygulanan delta (sadece bilgi amaçlı)
 
 
 @app.post("/api/log-prediction")
 async def log_prediction(req: PredictionLog):
-    """Günlük tahmin kaydını sakla (otomatik bias hesabı için)."""
+    """Günlük tahmin kaydını sakla (otomatik bias hesabı için).
+
+    Faz 18: oracle_blend (= blend + oracle_delta) artık ayrı alan olarak saklanıyor.
+    NO bot (VETO) blend yerine oracle_blend kullanmalı — WU settlement için doğru tahmin.
+    blend = raw OM tahmin (OM kalibrasyonu için saklanır).
+    oracle_blend = WU-adjusted tahmin (Polymarket settlement için).
+    """
     async with _preds_lock:
         preds = _load_preds()
         st    = req.station.lower()
         preds.setdefault(st, {})
         entry = preds[st].setdefault(req.date, {})
-        if req.blend  is not None: entry["blend"]  = req.blend
-        if req.p50    is not None: entry["p50"]    = req.p50
-        if req.actual is not None: entry["actual"] = req.actual
+        if req.blend        is not None: entry["blend"]        = req.blend
+        if req.p50          is not None: entry["p50"]          = req.p50
+        if req.actual       is not None: entry["actual"]       = req.actual
+        if req.oracle_blend is not None: entry["oracle_blend"] = req.oracle_blend
+        if req.oracle_delta is not None: entry["oracle_delta"] = req.oracle_delta
         _save_preds(preds)
     return {"ok": True}
 
@@ -1364,12 +1375,17 @@ async def get_prediction_bias(station: str):
     entries = []
     for date, e in sorted(preds.get(station, {}).items()):
         if e.get("blend") is not None and e.get("actual") is not None:
-            entries.append({
+            entry = {
                 "date":   date,
                 "blend":  e["blend"],
                 "actual": e["actual"],
                 "error":  round(e["blend"] - e["actual"], 1),
-            })
+            }
+            # Faz 18: oracle_blend varsa ekle (NO bot'un reference noktası)
+            if e.get("oracle_blend") is not None:
+                entry["oracle_blend"] = e["oracle_blend"]
+                entry["oracle_delta"] = e.get("oracle_delta", 0.0)
+            entries.append(entry)
     recent_all = entries[-7:]
     if not recent_all:
         return {"station": station, "bias_7d": 0.0, "mae": 0.0, "count": 0,

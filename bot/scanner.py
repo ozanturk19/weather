@@ -392,13 +392,36 @@ def scan_date(station: str, target_date: str, trades: list,
             print(f"  ⬜ {station.upper()} {label}  — tahmin yok")
             return None
 
-        # Faz 13: Ham blend'i predictions.json'a logla (dashboard açık olmasa da
-        # kalibrasyon verisi biriksin; raw_blend = pre-correction → doğru hata ölçer)
+        # Faz 18: sdelta'yı ERKEN hesapla — log kaydı filtrelere takılmadan yazılsın.
+        # (Kalibrasyon verisi trade edilmeyen günler için de biriksin.)
+        # top_pick düzeltmesi eskisi gibi bias correction sonrasında yapılır.
+        try:
+            from bot.settlement_delta import learn_station_delta
+            try:
+                _td_early = datetime.strptime(target_date, "%Y-%m-%d").date()
+                _today_e  = datetime.now().date()
+                _horizon_e = max(1, (_td_early - _today_e).days)
+            except Exception:
+                _horizon_e = None
+            sdelta_early = learn_station_delta(station, horizon_days=_horizon_e)
+        except Exception:
+            sdelta_early = 0.0
+
+        # Faz 18: oracle_blend = raw_blend + sdelta → WU settlement tahmini.
+        # raw_blend ayrıca saklanır: OM kalibrasyonu (actual_om ile karşılaştırılır).
+        # Log çağrısı filtrelere ÖNCE yapılır: kalibrasyon verisi her zaman biriksin.
         if raw_blend is not None:
+            _oracle_blend_early = round(raw_blend + sdelta_early, 1) if sdelta_early else raw_blend
             try:
                 httpx.post(
                     f"{WEATHER_API}/api/log-prediction",
-                    json={"station": station, "date": target_date, "blend": raw_blend},
+                    json={
+                        "station":      station,
+                        "date":         target_date,
+                        "blend":        raw_blend,                   # OM ham (kalibrasyon için)
+                        "oracle_blend": _oracle_blend_early,         # WU-düzeltmeli (NO bot kullanır)
+                        "oracle_delta": round(sdelta_early, 2) if sdelta_early else 0.0,
+                    },
                     timeout=5,
                 )
             except Exception:
@@ -513,22 +536,10 @@ def scan_date(station: str, target_date: str, trades: list,
                 f"bias düzeltme {bias:+d}°C  ({raw_top_pick}°C → {top_pick}°C)"
             )
 
-        # ── Settlement Delta Düzeltmesi (Faz 7 + Faz 8 horizon-aware) ───────
-        # WU ↔ Open-Meteo sistematik farkı öğrenilmiş medyan (proxy: METAR-OM).
-        # settlement_audit tablosundan rolling 60g medyan; yeterli veri yoksa 0.
-        # Faz 8: horizon_days geçiyoruz → D+2'de delta %70'e dampening (bias
-        # kaynaklarının çakışmasına karşı koruma).
-        try:
-            from bot.settlement_delta import learn_station_delta
-            try:
-                _td = datetime.strptime(target_date, "%Y-%m-%d").date()
-                _today = datetime.now().date()
-                _horizon = max(1, (_td - _today).days)
-            except Exception:
-                _horizon = None
-            sdelta = learn_station_delta(station, horizon_days=_horizon)
-        except Exception:
-            sdelta = 0.0
+        # ── Settlement Delta Düzeltmesi (Faz 7 + Faz 8 + Faz 18) ────────────
+        # sdelta_early daha önce hesaplandı (log için). Burada sadece top_pick'e uygula.
+        # WU ↔ Open-Meteo sistematik farkı — rolling medyan yoksa prior + mevsim bonusu.
+        sdelta = sdelta_early   # Faz 18: erken hesaplanan değeri yeniden kullan (tek kaynak)
         if sdelta:
             pre_sdelta = top_pick
             top_pick = int(round(top_pick + sdelta))

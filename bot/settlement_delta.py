@@ -60,27 +60,26 @@ HORIZON_DELTA_DAMPENING: dict[int, float] = {
     2: 0.85,   # D+2: %15 azalt (eski: %30 — çok muhafazakârdı)
 }
 
-# ── Faz A2: İstasyon prior'ları (cold-start kalibrasyonu) ──────────────────
-# Kaynak: METAR − Open-Meteo audit analizi (ilk 3 hafta, n=1-3 gözlem)
-# Sadece tutarlı pozitif bias olan istasyonlara prior uygulandı.
-# EGLC, EFHK, LEMD: METAR proxy güvenilmez (WU lokasyonu farklı) → 0.0
-# Değerler bilinçli olarak muhafazakâr (gerçek deltanın ~%70'i):
-# gerçek WU entegrasyonu tamamlandığında üzerine yazılacak.
+# ── Faz A2 / Faz 18: İstasyon prior'ları (cold-start kalibrasyonu) ─────────
+# Kaynak: METAR − Open-Meteo audit analizi + Mayıs 2026 canlı hata gözlemi.
+# Faz 18 güncellemeleri: RJTT/RKSI için gerçekçi kentsel gap prioryları;
+# EFHK için tutarlı cold-bias düzeltmesi; EGLC/LEMD 0.0 kalır (ters/karma).
+# Değerler %70 muhafazakâr — gerçek WU entegrasyonu ile üzerine yazılacak.
 STATION_DELTA_PRIORS: dict[str, float] = {
-    "eddm":  1.0,   # METAR-OM median +1.50°C (3 gün, tutarlı) → prior 1.0
+    "eddm":  1.0,   # METAR-OM median +1.50°C (3 gün, tutarlı)
     "eham":  0.4,   # METAR-OM median +0.40°C (3 gün, tutarlı)
-    "lfpg":  0.8,   # METAR-OM +1.40°C (1 gün) — muhafazakâr
-    "limc":  0.8,   # METAR-OM +1.75°C (2 gün) — muhafazakâr
+    "lfpg":  0.8,   # METAR-OM +1.40°C — muhafazakâr
+    "limc":  0.8,   # METAR-OM +1.75°C — muhafazakâr
     "ltac":  0.5,   # METAR-OM median +1.20°C ama yüksek varyasyon → dikkatli
     "ltfm":  0.4,   # METAR-OM median +0.40°C (3 gün, tutarlı)
-    "eglc":  0.0,   # METAR < OM (airport kanalı farkı); WU belirsiz
-    "efhk":  0.0,   # karma (-0.40), WU lokasyonu farklı
-    "epwa":  0.0,   # nötr (median 0.0, 3 gün)
+    "eglc":  0.0,   # METAR < OM (ters dinamik); WU belirsiz
+    "efhk":  0.5,   # Faz 18: canlı gözlem Mayıs avg -0.77→-1.0°C cold bias
+    "epwa":  0.0,   # nötr (median 0.0, 3 gün); sezonsal bonus yeterli
     "lemd":  0.0,   # negatif eğilim (-0.70), az veri
-    "rjtt":  0.0,   # 1 gün veri, nötr (-0.10)
-    "rksi":  0.0,   # yapısal soğuk bias ayrı ele alınıyor
+    "rjtt":  2.0,   # Faz 18: canlı gözlem avg -2.74°C (Haneda sahil vs kentsel WU)
+    "rksi":  1.5,   # Faz 18: canlı gözlem avg -2.31°C (Incheon ada vs kentsel WU)
     "vhhh":  0.0,   # henüz yeterli audit yok
-    "omdb":  0.0,   # çölde METAR-WU farkı farklı dinamik
+    "omdb":  0.0,   # çöl dinamiği farklı
 }
 
 # ── Faz 17: Mevsim-duyarlı prior bonusu ───────────────────────────────────────
@@ -118,38 +117,42 @@ STATION_SEASONAL_BONUS: dict[str, dict[str, float]] = {
     # AMSTERDAM VAKASI: Mayıs prior 0.4 → 0.6°C, Haziran → 0.7°C
     # Mevcut prior 0.4°C → yaz toplam ≈ 0.7°C
 
-    "ltac": {"spring": 0.20, "summer": 0.35, "autumn": 0.15, "winter": 0.0},
-    # Ankara kuru/kıta iklimi. Yaz 35-40°C, UHI belirgin.
-    # Mevcut prior 0.5°C → yaz toplam ≈ 0.85°C
+    "ltac": {"spring": 0.55, "summer": 0.35, "autumn": 0.15, "winter": 0.0},
+    # Faz 18: spring 0.20→0.55 (canlı gözlem Mayıs avg -1.27°C; prior 0.5+0.55=1.05)
+    # Ankara kuru/kıta iklimi, Mayıs sıcak geçiş. Yaz nispeten sabit.
 
-    "ltfm": {"spring": 0.15, "summer": 0.25, "autumn": 0.10, "winter": 0.0},
-    # İstanbul yeni havalimanı şehirden 35km uzak. Kıyı etkisi UHI'yı hafifletir.
-    # Mevcut prior 0.4°C → yaz toplam ≈ 0.65°C
+    "ltfm": {"spring": 0.35, "summer": 0.25, "autumn": 0.10, "winter": 0.0},
+    # Faz 18: spring 0.15→0.35 (canlı gözlem Mayıs avg -0.73°C; prior 0.4+0.35=0.75)
+    # İstanbul havalimanı şehirden 35km uzak. İlkbahar ısınması belirgin.
 
     # ── Küçük UHI / belirsiz (sıfır prior üstüne küçük sezonsal) ────────────
     "epwa": {"spring": 0.15, "summer": 0.25, "autumn": 0.10, "winter": 0.0},
     # Varşova Chopin havalimanı şehre 10km. Kıta iklimi yaz UHI'sı mevcut.
     # prior 0.0 → yaz toplam ≈ 0.25°C
 
-    # ── Asya istasyonları (muhafazakâr — az veri) ─────────────────────────────
+    # ── Helsinki (Faz 18: prior eklendi, sezonsal bonus eklendi) ─────────────
+    "efhk": {"spring": 0.20, "summer": 0.30, "autumn": 0.10, "winter": 0.0},
+    # Faz 18: canlı gözlem Mayıs -0.77→-1.0°C trend kötüleşiyor.
+    # prior 0.5 + spring 0.20 = 0.70°C. EFHK trade-dışı ama oracle_pct için önemli.
+
+    # ── Asya istasyonları ─────────────────────────────────────────────────────
     "rjtt": {"spring": 0.25, "summer": 0.55, "autumn": 0.25, "winter": 0.10},
-    # Tokyo Haneda deniz üzerine dolgu → çok serin. Şehir UHI şiddetli (Temmuz-Ağustos +2-3°C).
-    # prior 0.0 → yaz toplam ≈ 0.55°C (muhafazakâr; gerçek gap daha büyük olabilir)
+    # Faz 18: prior 0.0→2.0 (canlı gözlem avg -2.74°C, Tokyo Haneda sahil vs kentsel WU).
+    # prior 2.0 + spring 0.25 = 2.25°C, summer = 2.55°C.
 
     "rksi": {"spring": 0.15, "summer": 0.35, "autumn": 0.15, "winter": 0.0},
-    # Seoul Incheon ada havalimanı → soğuk. Seul yaz UHI yüksek.
-    # prior 0.0 → yaz toplam ≈ 0.35°C
+    # Faz 18: prior 0.0→1.5 (canlı gözlem avg -2.31°C, Incheon ada vs kentsel WU).
+    # prior 1.5 + spring 0.15 = 1.65°C, summer = 1.85°C.
 
     "vhhh": {"spring": 0.15, "summer": 0.30, "autumn": 0.20, "winter": 0.10},
-    # Hong Kong nemli tropik → yıl boyu UHI mevcut. En az mevsimsel varyasyon.
-    # prior 0.0 → yaz toplam ≈ 0.30°C
+    # Hong Kong nemli tropik → yıl boyu UHI mevcut. prior 0.0 → yaz toplam ≈ 0.30°C
 
     "omdb": {"spring": 0.15, "summer": 0.25, "autumn": 0.15, "winter": 0.0},
-    # Dubai çöl dinamiği farklı. Havalimanı çok büyük → kendi UHI'sı var.
-    # prior 0.0 → yaz toplam ≈ 0.25°C (muhafazakâr, yüksek belirsizlik)
+    # Dubai çöl dinamiği farklı. prior 0.0 → yaz toplam ≈ 0.25°C (muhafazakâr)
 
-    # EGLC, EFHK, LEMD: mevsimsel bonus YOK — STATION_DELTA_PRIORS = 0.0 yeterli.
-    # EGLC: METAR < OM (ters dinamik). EFHK: karma sign. LEMD: negatif eğilim.
+    # EGLC, LEMD: mevsimsel bonus YOK.
+    # EGLC: METAR < OM (ters dinamik). LEMD: negatif eğilim.
+    # EFHK artık bonus alıyor (yukarıda).
 }
 
 # Mevsim helper
