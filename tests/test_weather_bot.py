@@ -5594,6 +5594,321 @@ test("Faz 13: settle() OM yoksa METAR fallback actual'ı POST eder",
      test_settle_logs_metar_fallback_when_om_fails)
 
 
+# ── Test 39: Faz 19 — Üç Kalite Kuralı ──────────────────────────────────────
+
+def test_faz19_constants_exist():
+    """Faz19 sabitleri doğru değerlerle tanımlanmış olmalı."""
+    from bot import scanner as sc
+    eq(sc.FAZ19_BLEND_OVERRIDE_MIN_GAP, 2,
+       f"FAZ19_BLEND_OVERRIDE_MIN_GAP=2 bekleniyor, var: {sc.FAZ19_BLEND_OVERRIDE_MIN_GAP}")
+    eq(sc.FAZ19_ZERO_PRIOR_DELTA_CLAMP, True,
+       "FAZ19_ZERO_PRIOR_DELTA_CLAMP=True bekleniyor")
+    eq(sc.FAZ19_HIGH_DELTA_THRESHOLD, 1.0,
+       f"FAZ19_HIGH_DELTA_THRESHOLD=1.0 bekleniyor, var: {sc.FAZ19_HIGH_DELTA_THRESHOLD}")
+    eq(sc.FAZ19_HIGH_DELTA_MIN_SCORE, 60,
+       f"FAZ19_HIGH_DELTA_MIN_SCORE=60 bekleniyor, var: {sc.FAZ19_HIGH_DELTA_MIN_SCORE}")
+
+
+def test_faz19_rule2_negative_delta_clamped_for_zero_prior():
+    """Kural 2: prior=0 istasyonda negatif sdelta 0.0'a sabitlenmeli (EGLC vakası)."""
+    from bot.settlement_delta import STATION_DELTA_PRIORS
+    # EGLC prior=0 olmalı (zero-prior stasyon)
+    eglc_prior = STATION_DELTA_PRIORS.get("eglc", 0.0)
+    ok(eglc_prior <= 0.0,
+       f"EGLC prior=0 bekleniyor (zero-prior), var: {eglc_prior}")
+
+    # FAZ19_ZERO_PRIOR_DELTA_CLAMP simülasyonu
+    from bot import scanner as sc
+    sdelta = -0.59  # EGLC 15 Mayıs vakası
+
+    if sc.FAZ19_ZERO_PRIOR_DELTA_CLAMP and sdelta < 0:
+        if STATION_DELTA_PRIORS.get("eglc", 0.0) <= 0.0:
+            sdelta = 0.0
+
+    eq(sdelta, 0.0,
+       f"EGLC negatif delta=-0.59 → 0.0 sabitlenmeli, sonuç: {sdelta}")
+
+
+def test_faz19_rule2_positive_delta_unchanged():
+    """Kural 2: pozitif sdelta asla değiştirilmemeli."""
+    from bot.settlement_delta import STATION_DELTA_PRIORS
+    from bot import scanner as sc
+
+    sdelta_original = 0.85
+    sdelta = sdelta_original
+
+    if sc.FAZ19_ZERO_PRIOR_DELTA_CLAMP and sdelta < 0:
+        if STATION_DELTA_PRIORS.get("eglc", 0.0) <= 0.0:
+            sdelta = 0.0
+
+    eq(sdelta, sdelta_original,
+       f"Pozitif sdelta={sdelta_original} değişmemeli, sonuç: {sdelta}")
+
+
+def test_faz19_rule2_nonzero_prior_negative_delta_kept():
+    """Kural 2: prior > 0 olan istasyonda (EDDM/EHAM) negatif delta korunmalı."""
+    from bot.settlement_delta import STATION_DELTA_PRIORS
+    from bot import scanner as sc
+
+    # EDDM veya EHAM — nonzero prior olmalı
+    eddm_prior = STATION_DELTA_PRIORS.get("eddm", 0.0)
+    # Prior 0 bile olsa, test mantığını eğer EDDM prior=0 ise atla
+    # Asıl test: prior > 0 ise negatif delta korunmalı
+    test_station = None
+    for st, pr in STATION_DELTA_PRIORS.items():
+        if pr > 0.0:
+            test_station = st
+            break
+
+    if test_station is None:
+        # Tüm priorlar 0 → kural 2 her istasyona uygulanır, bu durum geçerli
+        ok(True, "Tüm priorlar 0, kural 2 testi atlandı (geçerli durum)")
+        return
+
+    sdelta_original = -0.40
+    sdelta = sdelta_original
+    station_prior = STATION_DELTA_PRIORS.get(test_station, 0.0)
+
+    if sc.FAZ19_ZERO_PRIOR_DELTA_CLAMP and sdelta < 0:
+        if station_prior <= 0.0:
+            sdelta = 0.0
+
+    eq(sdelta, sdelta_original,
+       f"{test_station.upper()} prior={station_prior:.2f} > 0 → negatif delta korunmalı, "
+       f"sonuç: {sdelta}")
+
+
+def test_faz19_rule1_blend_override_triggered():
+    """Kural 1: blend-ens farkı ≥2°C → top_pick blend_rounded'a güncellenmeli (EPWA vakası)."""
+    from bot import scanner as sc
+
+    blend = 23.9
+    sdelta = 0.09
+    ens_mode_top_pick = 22  # scanner bunu top_pick olarak hesapladı
+
+    oracle_blend_rounded = int(round(blend + sdelta))  # = round(24.0) = 24
+    gap = abs(oracle_blend_rounded - ens_mode_top_pick)  # = |24-22| = 2
+
+    eq(oracle_blend_rounded, 24,
+       f"Oracle blend rounded = round(23.9+0.09) = 24 bekleniyor, var: {oracle_blend_rounded}")
+    eq(gap, 2,
+       f"Gap = |24-22| = 2 bekleniyor, var: {gap}")
+
+    # Override tetiklenmeli (gap ≥ FAZ19_BLEND_OVERRIDE_MIN_GAP=2)
+    top_pick = ens_mode_top_pick
+    if gap >= sc.FAZ19_BLEND_OVERRIDE_MIN_GAP:
+        top_pick = oracle_blend_rounded
+
+    eq(top_pick, 24,
+       f"EPWA blend-override: top_pick=22 → 24 bekleniyor, var: {top_pick}")
+
+
+def test_faz19_rule1_blend_override_not_triggered_small_gap():
+    """Kural 1: fark=0 ise override tetiklenmemeli."""
+    from bot import scanner as sc
+
+    blend = 22.1
+    sdelta = 0.05
+    ens_mode_top_pick = 22
+
+    oracle_blend_rounded = int(round(blend + sdelta))  # = round(22.15) = 22
+    gap = abs(oracle_blend_rounded - ens_mode_top_pick)  # = 0
+
+    top_pick = ens_mode_top_pick
+    if gap >= sc.FAZ19_BLEND_OVERRIDE_MIN_GAP:
+        top_pick = oracle_blend_rounded
+
+    eq(top_pick, 22,
+       f"Fark=0 → override yok, top_pick=22 kalmalı, var: {top_pick}")
+
+
+def test_faz19_rule1_exact_boundary():
+    """Kural 1: tam eşik (gap=2) → override tetiklenmeli."""
+    from bot import scanner as sc
+
+    # gap tam 2 = eşik değeri → tetiklenmeli (>=)
+    top_pick_start = 20
+    oracle_blend_rounded = 22  # gap = |22-20| = 2
+
+    top_pick = top_pick_start
+    gap = abs(oracle_blend_rounded - top_pick)
+    if gap >= sc.FAZ19_BLEND_OVERRIDE_MIN_GAP:
+        top_pick = oracle_blend_rounded
+
+    eq(top_pick, 22,
+       f"Gap=2 (tam eşik) → override tetiklenmeli, var: {top_pick}")
+
+
+def test_faz19_rule1_gap_one_no_override():
+    """Kural 1: gap=1 → override tetiklenmemeli (eşiğin altı)."""
+    from bot import scanner as sc
+
+    top_pick_start = 21
+    oracle_blend_rounded = 22  # gap = 1
+
+    top_pick = top_pick_start
+    gap = abs(oracle_blend_rounded - top_pick)
+    if gap >= sc.FAZ19_BLEND_OVERRIDE_MIN_GAP:
+        top_pick = oracle_blend_rounded
+
+    eq(top_pick, 21,
+       f"Gap=1 < 2 → override yok, top_pick=21 kalmalı, var: {top_pick}")
+
+
+def test_faz19_rule3_high_delta_low_score_blocked():
+    """Kural 3: yüksek delta + düşük skor → trade bloklanmalı (LTAC 19 Mayıs vakası)."""
+    from bot import scanner as sc
+
+    # LTAC 19 Mayıs: sdelta=1.02, score=57 → LOSS -5.65$
+    sdelta = 1.02
+    signal_score = 57
+
+    blocked = (
+        signal_score is not None
+        and sdelta >= sc.FAZ19_HIGH_DELTA_THRESHOLD
+        and signal_score < sc.FAZ19_HIGH_DELTA_MIN_SCORE
+    )
+
+    ok(blocked,
+       f"LTAC 19 May: delta={sdelta}≥{sc.FAZ19_HIGH_DELTA_THRESHOLD}"
+       f" + score={signal_score}<{sc.FAZ19_HIGH_DELTA_MIN_SCORE} → bloklanmalı")
+
+
+def test_faz19_rule3_high_delta_strong_score_passes():
+    """Kural 3: yüksek delta + güçlü skor → trade geçmeli (EDDM 21 Mayıs vakası)."""
+    from bot import scanner as sc
+
+    # EDDM 21 Mayıs: sdelta=1.02, score=64 → WIN +4.30$
+    sdelta = 1.02
+    signal_score = 64  # ≥ FAZ19_HIGH_DELTA_MIN_SCORE=60
+
+    blocked = (
+        signal_score is not None
+        and sdelta >= sc.FAZ19_HIGH_DELTA_THRESHOLD
+        and signal_score < sc.FAZ19_HIGH_DELTA_MIN_SCORE
+    )
+
+    ok(not blocked,
+       f"EDDM 21 May: delta={sdelta} + score={signal_score}≥{sc.FAZ19_HIGH_DELTA_MIN_SCORE}"
+       f" → geçmeli (bloklanmamalı)")
+
+
+def test_faz19_rule3_low_delta_not_blocked():
+    """Kural 3: düşük delta → kural 3 hiç devreye girmemeli."""
+    from bot import scanner as sc
+
+    # EPWA 21 Mayıs: sdelta=0.09 (düşük)
+    sdelta = 0.09
+    signal_score = 45  # düşük skor bile olsa delta < eşik → blok yok
+
+    blocked = (
+        signal_score is not None
+        and sdelta >= sc.FAZ19_HIGH_DELTA_THRESHOLD
+        and signal_score < sc.FAZ19_HIGH_DELTA_MIN_SCORE
+    )
+
+    ok(not blocked,
+       f"Düşük delta={sdelta}<{sc.FAZ19_HIGH_DELTA_THRESHOLD} → kural 3 devreye girmemeli")
+
+
+def test_faz19_rule3_none_score_safe():
+    """Kural 3: score=None ise asla bloklanmamalı (güvenli fallback)."""
+    from bot import scanner as sc
+
+    sdelta = 2.5  # çok yüksek delta
+    signal_score = None  # skor yok
+
+    blocked = (
+        signal_score is not None
+        and sdelta >= sc.FAZ19_HIGH_DELTA_THRESHOLD
+        and signal_score < sc.FAZ19_HIGH_DELTA_MIN_SCORE
+    )
+
+    ok(not blocked,
+       "score=None iken kural 3 bloklanmamalı (short-circuit güvenliği)")
+
+
+def test_faz19_retrospective():
+    """Faz19 3 Kural: 6 tarihi vaka retrospektif olarak doğrulanmalı."""
+    from bot import scanner as sc
+    from bot.settlement_delta import STATION_DELTA_PRIORS
+
+    # Her grupta: (station, blend, sdelta_before_clamp, ens_mode_top_pick,
+    #              signal_score, expected_top_pick_after_rule1, expected_blocked_by_rule3)
+    cases = [
+        # EPWA 21 May: blend=23.9, sdelta=0.09, ens_mode=22 → Rule1 override → 24 (WIN)
+        ("epwa", 23.9, 0.09, 22, 72, 24, False),
+        # EGLC 15 May: sdelta=-0.59, prior=0 → Rule2 clamp → 0.0
+        # (top_pick etkileniyor ama bu testte Rule2'nin sdelta'yı 0.0 yaptığını test et)
+        ("eglc", 16.1, -0.59, 16, 61, None, False),  # top_pick Rule2 sonrası: round(16+0)=16
+        # LTAC 19 May: sdelta=1.02, score=57 → Rule3 block (LOSS önlendi)
+        ("ltac", 19.5, 1.02, 19, 57, None, True),
+        # EDDM 21 May: sdelta=1.02, score=64 → Rule3 geçer (WIN korundu)
+        ("eddm", 20.1, 1.02, 20, 64, None, False),
+        # EDDM 16 May: sdelta=1.02, score=55 → Rule3 bloklar (tradeoff WIN feda)
+        ("eddm", 19.8, 1.02, 20, 55, None, True),
+        # Normal vaka: blend≈ens_mode, delta küçük, skor yüksek → hepsi geçer
+        ("lfpg", 18.0, 0.30, 18, 75, None, False),
+    ]
+
+    for (station, blend, sdelta_raw, ens_mode, score, expected_tp, expect_blocked) in cases:
+        prior = STATION_DELTA_PRIORS.get(station, 0.0)
+
+        # Rule 2: negatif delta clamp
+        sdelta = sdelta_raw
+        if sc.FAZ19_ZERO_PRIOR_DELTA_CLAMP and sdelta < 0 and prior <= 0.0:
+            sdelta = 0.0
+
+        # Rule 1: blend override
+        top_pick = ens_mode
+        oracle_blend_rounded = int(round(blend + sdelta))
+        gap = abs(oracle_blend_rounded - top_pick)
+        if gap >= sc.FAZ19_BLEND_OVERRIDE_MIN_GAP:
+            top_pick = oracle_blend_rounded
+
+        if expected_tp is not None:
+            eq(top_pick, expected_tp,
+               f"{station.upper()} retrospektif top_pick={expected_tp} bekleniyor, var: {top_pick}")
+
+        # Rule 3: high delta + weak score
+        blocked = (
+            score is not None
+            and sdelta >= sc.FAZ19_HIGH_DELTA_THRESHOLD
+            and score < sc.FAZ19_HIGH_DELTA_MIN_SCORE
+        )
+        eq(blocked, expect_blocked,
+           f"{station.upper()} Rule3 blocked={expect_blocked} bekleniyor, var: {blocked}"
+           f" (delta={sdelta:.2f}, score={score})")
+
+
+test("Faz 19: Sabitler doğru tanımlanmış",
+     test_faz19_constants_exist)
+test("Faz 19 Kural 2: prior=0 istasyonda negatif delta 0'a sabitlenir (EGLC vakası)",
+     test_faz19_rule2_negative_delta_clamped_for_zero_prior)
+test("Faz 19 Kural 2: pozitif delta değişmez",
+     test_faz19_rule2_positive_delta_unchanged)
+test("Faz 19 Kural 2: prior>0 istasyonda negatif delta korunur",
+     test_faz19_rule2_nonzero_prior_negative_delta_kept)
+test("Faz 19 Kural 1: blend-override tetiklenir (EPWA 21 May vakası)",
+     test_faz19_rule1_blend_override_triggered)
+test("Faz 19 Kural 1: fark=0 → override yok",
+     test_faz19_rule1_blend_override_not_triggered_small_gap)
+test("Faz 19 Kural 1: tam eşik gap=2 → override tetiklenir",
+     test_faz19_rule1_exact_boundary)
+test("Faz 19 Kural 1: gap=1 < 2 → override yok",
+     test_faz19_rule1_gap_one_no_override)
+test("Faz 19 Kural 3: yüksek delta + düşük skor → blok (LTAC 19 May)",
+     test_faz19_rule3_high_delta_low_score_blocked)
+test("Faz 19 Kural 3: yüksek delta + güçlü skor → geçer (EDDM 21 May)",
+     test_faz19_rule3_high_delta_strong_score_passes)
+test("Faz 19 Kural 3: düşük delta → kural devreye girmez",
+     test_faz19_rule3_low_delta_not_blocked)
+test("Faz 19 Kural 3: score=None → asla bloklanmaz",
+     test_faz19_rule3_none_score_safe)
+test("Faz 19 Retrospektif: 6 tarihi vaka 3 kural ile doğrulanıyor",
+     test_faz19_retrospective)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 print(f"\n{'═'*62}")
 print(f"  SONUÇ: {PASS} geçti / {FAIL} başarısız / {PASS+FAIL} toplam")

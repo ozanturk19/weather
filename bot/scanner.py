@@ -166,6 +166,26 @@ ADJ_MAX_NEG_EDGE    = -0.08  # komşu bucket: piyasa ens'ten max 8 puan fazla
 #       blend=15.1°C, ens_mode=14°C → fark=1.1°C < 2.0°C → devam
 BLEND_ENSEMBLE_MAX_DRIFT = 2.0  # °C: bu eşiği geçen blend-ens uyumsuzluğu skip
 
+# ── Faz 19: Üç Kalite Kuralı ─────────────────────────────────────────────────
+#
+# Kural 1 — Oracle-Blend Override (EPWA 21 Mayıs dersi):
+#   ens_mode sonuçlu top_pick, oracle-düzeltmeli blend'den ≥2°C uzaktaysa
+#   blend_rounded'ı tercih et. Drift check'ten geçmiş olduğu için ikisi yeterince
+#   yakın ama oracle-sonrası uyuşmuyor → blend tahmini daha güvenilir.
+FAZ19_BLEND_OVERRIDE_MIN_GAP = 2    # °C: override tetiklenme eşiği
+
+# Kural 2 — Negatif Oracle-Delta Clamping (EGLC 15 Mayıs dersi):
+#   UHI etkisi tanımsız (prior=0) istasyonlarda negatif gözlem deltası
+#   genellikle gürültü veya kaynak uyumsuzluğu — sıfıra sabitle.
+#   Fiziksel anlam: kentsel ısı adası UHI asla negatif olmaz (rural > kentsel? yok).
+FAZ19_ZERO_PRIOR_DELTA_CLAMP = True
+
+# Kural 3 — Yüksek Delta + Zayıf Sinyal Filtresi (LTAC 19 Mayıs dersi):
+#   oracle_delta çok yüksekken sinyal skoru da zayıfsa iki belirsizlik çakışıyor:
+#   hem model hem WU-düzeltmesi güvenilmez → trade pas.
+FAZ19_HIGH_DELTA_THRESHOLD = 1.0   # °C: bu değer ve üstü "yüksek oracle_delta"
+FAZ19_HIGH_DELTA_MIN_SCORE = 60    # bu skorun altında + yüksek delta → skip
+
 # Faz 10: Isınma/soğuma trend tiebreaker (settlement_delta yönü)
 # Sistematik sıcaklık sapması ≥ TREND_BIAS_THRESHOLD ise, adj bucket sıralamasında
 # trend yönündeki bucket'a sanal TREND_PRICE_BONUS eklenir.
@@ -540,6 +560,22 @@ def scan_date(station: str, target_date: str, trades: list,
         # sdelta_early daha önce hesaplandı (log için). Burada sadece top_pick'e uygula.
         # WU ↔ Open-Meteo sistematik farkı — rolling medyan yoksa prior + mevsim bonusu.
         sdelta = sdelta_early   # Faz 18: erken hesaplanan değeri yeniden kullan (tek kaynak)
+
+        # ── Faz 19 Kural 2: Negatif Oracle-Delta Clamping ───────────────────
+        # Prior=0 istasyonlarda (EGLC, LEMD, EPWA vb.) UHI etkisi bilinmiyor;
+        # negatif gözlem deltası gürültü veya kaynak uyumsuzluğu → 0'a sabitle.
+        # Fiziksel arka plan: kentsel ısı adası WU'yu OM'un ÜSTÜNDE tutar (delta≥0).
+        # Negatif delta = "WU < OM" = rural/airport etkisi: prior olmadan güvenilmez.
+        if FAZ19_ZERO_PRIOR_DELTA_CLAMP and sdelta < 0:
+            from bot.settlement_delta import STATION_DELTA_PRIORS as _PRIORS
+            if _PRIORS.get(station, 0.0) <= 0.0:
+                print(
+                    f"  📌 {station.upper()} {label}  "
+                    f"Faz19 negatif delta clamp: {sdelta:+.2f}°C → 0.0"
+                    f" (prior=0 istasyon, UHI overcorrection önlendi)"
+                )
+                sdelta = 0.0
+
         if sdelta:
             pre_sdelta = top_pick
             top_pick = int(round(top_pick + sdelta))
@@ -565,6 +601,27 @@ def scan_date(station: str, target_date: str, trades: list,
                 f", fark={_blend_drift:.1f}°C ≥ {BLEND_ENSEMBLE_MAX_DRIFT}°C), pas"
             )
             return None
+
+        # ── Faz 19 Kural 1: Oracle-Blend Top-Pick Override ───────────────────
+        # Drift check geçti (blend ens_mode'dan < 2°C).
+        # Ama oracle-delta sonrası top_pick, oracle_blend'den ≥2°C uzaksa
+        # blend sinyali ensemble modundan daha güvenilir → blend_rounded tercih et.
+        #
+        # Örnek (EPWA 21 Mayıs vakası):
+        #   blend=23.9, ens_mode=22, sdelta=+0.09
+        #   top_pick = round(22+0.09) = 22   ← ens_mode tabanlı
+        #   oracle_blend_rounded = round(23.9+0.09) = 24   ← blend tabanlı
+        #   gap = |22-24| = 2 ≥ 2 → top_pick = 24  ✓ (actual=24 → WIN!)
+        _oracle_blend_rounded = int(round(blend + (sdelta or 0.0)))
+        _blend_override_gap   = abs(_oracle_blend_rounded - top_pick)
+        if _blend_override_gap >= FAZ19_BLEND_OVERRIDE_MIN_GAP:
+            _old_top = top_pick
+            top_pick = _oracle_blend_rounded
+            print(
+                f"  🔀 {station.upper()} {label}  "
+                f"Faz19 blend-override: ens_top={_old_top}°C → blend_top={top_pick}°C "
+                f"(blend={blend:.1f}°C + δ{sdelta:+.2f}°C = {blend+(sdelta or 0):.1f}°C)"
+            )
 
         # Faz 14: Büyük oracle düzeltmesi uyarısı (Kalman + delta toplamı)
         # Blend ve ensemble hemfikir olsa bile, corrections top_pick'i çok
@@ -711,6 +768,27 @@ def scan_date(station: str, target_date: str, trades: list,
         print(
             f"  ⛔ {station.upper()} {label}  🎯{top_pick}°C @ {pct}¢"
             f" — sinyal skoru {signal_score} < {MIN_SIGNAL_SCORE} (zayıf), pas"
+        )
+        return None
+
+    # ── Faz 19 Kural 3: Yüksek Oracle-Delta + Zayıf Sinyal Filtresi ─────────
+    # oracle_delta büyükken sinyal da zayıfsa iki belirsizlik üst üste geliyor:
+    #   - Yüksek delta → WU-OM farkı büyük, düzeltme güvensiz
+    #   - Düşük skor  → ensemble dağılımı da belirsiz
+    # Her ikisi de aynı anda tetikleniyorsa YES tarafı için yeterli kenar yok → pas.
+    #
+    # Eşik kalibrasyonu (mevcut paper verisi):
+    #   LTAC 19 May: sdelta=1.02, score=57 → LOSS -5.65$ (bloklanmalıydı) ✓
+    #   EDDM 16 May: sdelta=1.02, score=55 → WIN  +4.90$ (bloklanacak, tradeoff)
+    #   EDDM 21 May: sdelta=1.02, score=64 → WIN  +4.30$ (score≥60 → geçer) ✓
+    # Net: daha fazla veri biriktikçe threshold revize edilebilir.
+    if (signal_score is not None
+            and sdelta >= FAZ19_HIGH_DELTA_THRESHOLD
+            and signal_score < FAZ19_HIGH_DELTA_MIN_SCORE):
+        print(
+            f"  ⛔ {station.upper()} {label}  🎯{top_pick}°C @ {pct}¢"
+            f" — Faz19 yüksek-delta/zayıf-sinyal: δ={sdelta:+.2f}°C ≥ {FAZ19_HIGH_DELTA_THRESHOLD}"
+            f" + skor={signal_score} < {FAZ19_HIGH_DELTA_MIN_SCORE}, pas"
         )
         return None
 
