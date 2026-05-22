@@ -4207,9 +4207,11 @@ def test_horizon_delta_dampening():
     bot_db.init_db(tmp_db)
 
     # 6 gün için: open-meteo + metar çifti Δ = +1.0°C (paired)
+    # Tarihler datetime.now() - i gün olmalı (30 gün lookback penceresinde kalması için)
+    from datetime import datetime as _dt, timedelta as _td
     with bot_db.get_db(tmp_db) as conn:
         for i in range(6):
-            d = f"2026-04-{10+i:02d}"
+            d = (_dt.now() - _td(days=i+1)).strftime("%Y-%m-%d")
             conn.execute(
                 "INSERT INTO settlement_audit (station, date, source, actual_temp, rounded_temp) "
                 "VALUES (?, ?, ?, ?, ?)",

@@ -1226,26 +1226,55 @@ def settle():
                 except Exception:
                     pass   # sessiz başarısızlık — settle flow'unu bozmamalı
 
-            # Birincil: Open-Meteo (Polymarket WU kaynağıyla uyumlu daily max)
-            if actual_om_raw is not None:
-                actual = round(actual_om_raw)
-                print(f"  🌡️  {station.upper()} Open-Meteo: {actual_om_raw:.1f}°C → {actual}°C")
+            # ── Faz 19: Birincil kaynak → Polymarket yes_price=1.0 ──────────────
+            # Polymarket kendi kullandığı WU/oracle veriyle settle eder.
+            # yes_price=1.0 olan bucket doğrudan kazanan bucket'tır.
+            # OM/METAR ikincil kaynak olarak kalır (PM henüz resolve olmamışsa).
+            actual_pm_threshold: float | None = None
+            actual_pm_title: str = ""
+            try:
+                pm_r = httpx.get(
+                    f"{WEATHER_API}/api/polymarket?station={station}&date={yesterday}",
+                    timeout=10,
+                )
+                pm_r.raise_for_status()
+                for b in pm_r.json().get("buckets", []):
+                    if b.get("yes_price") == 1.0:
+                        actual_pm_threshold = float(b["threshold"])
+                        actual_pm_title     = b.get("title", "")
+                        break
+            except Exception:
+                pass
 
-            # Yedek: METAR (Open-Meteo yoksa)
-            if actual is None and actual_metar_raw is not None:
-                actual = round(actual_metar_raw)
-                print(f"  🌡️  {station.upper()} METAR (yedek): {actual}°C")
-
-            # Uyumsuzluk uyarısı — her iki kaynak da var ama farklılar
-            if actual_om_raw is not None and actual_metar_raw is not None:
-                diff_c      = abs(actual_om_raw - actual_metar_raw)
-                diff_bucket = abs(round(actual_om_raw) - round(actual_metar_raw))
-                if diff_bucket >= 1:
+            if actual_pm_threshold is not None:
+                actual = int(actual_pm_threshold)
+                print(f"  ✅ {station.upper()} Polymarket: {actual_pm_title} → {actual}°C (kesin)")
+                # OM/METAR uyumsuzluk bilgisini yine de logla (kalibrasyon için)
+                if actual_om_raw is not None and round(actual_om_raw) != actual:
                     print(
-                        f"  ⚠️  {station.upper()} kaynak uyumsuzluk: "
-                        f"OM={actual_om_raw:.1f} METAR={actual_metar_raw:.1f} "
-                        f"(Δ={diff_c:.1f}°C, bucket Δ={diff_bucket})"
+                        f"  ℹ️  {station.upper()} OM={actual_om_raw:.1f}°C ≠ PM={actual}°C "
+                        f"(Δ={abs(actual_om_raw - actual):.1f}°C) — PM kullanıldı"
                     )
+            else:
+                # Polymarket henüz resolve olmamış → OM / METAR fallback
+                if actual_om_raw is not None:
+                    actual = round(actual_om_raw)
+                    print(f"  🌡️  {station.upper()} Open-Meteo (fallback): {actual_om_raw:.1f}°C → {actual}°C")
+
+                if actual is None and actual_metar_raw is not None:
+                    actual = round(actual_metar_raw)
+                    print(f"  🌡️  {station.upper()} METAR (fallback): {actual}°C")
+
+                # Uyumsuzluk uyarısı — her iki kaynak da var ama farklılar
+                if actual_om_raw is not None and actual_metar_raw is not None:
+                    diff_c      = abs(actual_om_raw - actual_metar_raw)
+                    diff_bucket = abs(round(actual_om_raw) - round(actual_metar_raw))
+                    if diff_bucket >= 1:
+                        print(
+                            f"  ⚠️  {station.upper()} kaynak uyumsuzluk: "
+                            f"OM={actual_om_raw:.1f} METAR={actual_metar_raw:.1f} "
+                            f"(Δ={diff_c:.1f}°C, bucket Δ={diff_bucket})"
+                        )
 
             if actual is None:
                 print(f"  ⏳ {station.upper()} {label}  — gerçek veri henüz yok (settlement bekle)")
