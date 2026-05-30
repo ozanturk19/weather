@@ -3468,7 +3468,10 @@ def test_scanner_source_has_mid_range_gate():
     src = scanner_path.read_text(encoding="utf-8")
     # Gerçek check ifadeleri (tanımlar değil, çağrılar)
     idx_min_mode   = src.find("< MIN_MODE_PCT")
-    idx_mid_range  = src.find("if is_mid_range_mode(mode_pct):")
+    # Faz 20: gate artık station muafiyet kontrolü de içeriyor
+    idx_mid_range  = src.find("if is_mid_range_mode(mode_pct) and station not in STATION_MIDRANGE_SKIP_EXEMPT:")
+    if idx_mid_range < 0:  # eski format fallback
+        idx_mid_range = src.find("if is_mid_range_mode(mode_pct):")
     ok(idx_min_mode > 0, "mode_pct < MIN_MODE_PCT gate bulunamadı")
     ok(idx_mid_range > 0, "if is_mid_range_mode gate bulunamadı")
     ok(idx_mid_range > idx_min_mode,
@@ -5907,6 +5910,61 @@ test("Faz 19 Kural 3: score=None → asla bloklanmaz",
      test_faz19_rule3_none_score_safe)
 test("Faz 19 Retrospektif: 6 tarihi vaka 3 kural ile doğrulanıyor",
      test_faz19_retrospective)
+
+
+# ── Test 40: Faz 20 — EDDM Mid-Range Skip Muafiyeti ─────────────────────────
+
+def test_faz20_exempt_constant_exists():
+    """Faz20: STATION_MIDRANGE_SKIP_EXEMPT sabiti var ve EDDM içeriyor."""
+    from bot import scanner as sc
+    ok(hasattr(sc, "STATION_MIDRANGE_SKIP_EXEMPT"),
+       "STATION_MIDRANGE_SKIP_EXEMPT sabiti tanımlanmamış")
+    ok("eddm" in sc.STATION_MIDRANGE_SKIP_EXEMPT,
+       f"EDDM muafiyet listesinde olmalı, liste: {sc.STATION_MIDRANGE_SKIP_EXEMPT}")
+
+
+def test_faz20_eddm_not_skipped_in_midrange():
+    """Faz20: EDDM mid-range bandında (%50-79) skip uygulanmamalı."""
+    from bot import scanner as sc
+    for pct in [50, 55, 60, 65, 68, 70, 75, 79]:
+        is_mid = sc.is_mid_range_mode(pct)
+        would_skip = is_mid and "eddm" not in sc.STATION_MIDRANGE_SKIP_EXEMPT
+        ok(not would_skip,
+           f"EDDM mode_pct={pct} → mid-range skip uygulanmamalı, uygulandı")
+
+
+def test_faz20_other_stations_still_skipped():
+    """Faz20: Muaf olmayan istasyonlar mid-range bandında hâlâ skip edilmeli."""
+    from bot import scanner as sc
+    stations_to_check = ["ltac", "eham", "eglc", "lfpg", "epwa"]
+    for station in stations_to_check:
+        if station in sc.STATION_MIDRANGE_SKIP_EXEMPT:
+            continue  # muaf ise atla
+        for pct in [55, 65, 75]:
+            is_mid = sc.is_mid_range_mode(pct)
+            would_skip = is_mid and station not in sc.STATION_MIDRANGE_SKIP_EXEMPT
+            ok(would_skip,
+               f"{station.upper()} mode_pct={pct} → mid-range skip uygulanmalı, uygulanmadı")
+
+
+def test_faz20_boundary_conditions():
+    """Faz20: Eşik değerleri doğru davranmalı (49 geçer, 50 skip, 79 skip, 80 geçer)."""
+    from bot import scanner as sc
+    eq(sc.is_mid_range_mode(49), False, "49 < 50 → mid-range değil")
+    eq(sc.is_mid_range_mode(50), True,  "50 = LOW → mid-range")
+    eq(sc.is_mid_range_mode(79), True,  "79 < 80 → mid-range")
+    eq(sc.is_mid_range_mode(80), False, "80 = HIGH → mid-range değil (>= HIGH)")
+    eq(sc.is_mid_range_mode(None), False, "None → False (güvenli fallback)")
+
+
+test("Faz 20: STATION_MIDRANGE_SKIP_EXEMPT sabiti var ve EDDM içeriyor",
+     test_faz20_exempt_constant_exists)
+test("Faz 20: EDDM mid-range bandında skip edilmiyor",
+     test_faz20_eddm_not_skipped_in_midrange)
+test("Faz 20: Muaf olmayan istasyonlar mid-range bandında skip ediliyor",
+     test_faz20_other_stations_still_skipped)
+test("Faz 20: Mid-range sınır koşulları doğru (49/50/79/80/None)",
+     test_faz20_boundary_conditions)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

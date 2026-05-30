@@ -101,6 +101,11 @@ STATION_MAX_PRICE: dict[str, float] = {
 MID_RANGE_SKIP_LOW  = 50   # mode_pct bu %'den itibaren skip
 MID_RANGE_SKIP_HIGH = 80   # bu %'ye kadar skip (80+ çok az örnek, belirsiz)
 
+# Mid-range skip muafiyet listesi — bu istasyonlar [50,80) bandında karlı:
+# EDDM: 2/6 %33 WR, +$9 P&L — skip uygulanmamalı (Faz 20)
+# Platt/isotonic kalibrasyon eklenince liste boşaltılır ve global skip kaldırılır.
+STATION_MIDRANGE_SKIP_EXEMPT: frozenset = frozenset({"eddm"})
+
 # İstasyon-bazlı skill pause — live ROI analizi sonrası güncellendi (2026-04-24):
 # lfpg live: 1W/2L +64% ROI → unpause (eski backtest single-bucket bazlıydı)
 # ltac live: 2W/5L +15% ROI → unpause (pozitif ROI, kullanıcı onayı)
@@ -509,9 +514,11 @@ def scan_date(station: str, target_date: str, trades: list,
             return None
 
         # ── Faz 5: mid-range over-confidence skip ───────────────────────────
-        # [50,70) bandı canlı veride gap ≈ -0.39 (beklenen %58, gerçek %20).
+        # [50,80) bandı canlı veride gap ≈ -0.39 (beklenen %58, gerçek %20).
         # Kalibrasyon eklenene dek bu bandı komple atla.
-        if is_mid_range_mode(mode_pct):
+        # Faz 20: STATION_MIDRANGE_SKIP_EXEMPT listesindeki istasyonlar muaf
+        # (canlı P&L'e göre bu bantta karlı olduğu kanıtlanmış istasyonlar).
+        if is_mid_range_mode(mode_pct) and station not in STATION_MIDRANGE_SKIP_EXEMPT:
             print(
                 f"  ⛔ {station.upper()} {label}  🎯{top_pick}°C"
                 f" — mid-range (%{mode_pct} ∈ [{MID_RANGE_SKIP_LOW},"
