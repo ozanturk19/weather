@@ -37,6 +37,19 @@ KALMAN_P_INIT  = 4.0
 # Günlere göre zaman ayarı — iki ölçüm arası çoksa Q orantılı büyür
 KALMAN_TIME_SCALE = True
 
+# ── Faz 21: Kalman kalibrasyon kalitesi ───────────────────────────────────────
+# OUTLIER CAP: Tek anomalik günün (örn. LTAC Mayıs19: -5°C soğuk snap)
+# tüm Kalman state'ini bozmasını önler. ±2.5°C üstü değerler kırpılır.
+# Fiziksel arka plan: gerçek sistematik bias nadiren >2°C'dir;
+# ötesi hava anomalisi veya WU veri kalitesi sorunudur.
+KALMAN_OUTLIER_CAP = 2.5
+
+# ADJ TRADE FİLTRESİ: 3-bucket stratejisinde adj/hedge bucket'lar
+# intentionally off-target olarak seçilir (komşu bucket'lar).
+# Bu trade'lerin hatalarını ana tahmin bias'ı olarak kullanmak yanlış:
+# adj top_pick = main_pick ± 1-2°C → hata şişer.
+# kalman_station_biases() sadece main trade'leri (bucket_num=1 veya yok) kullanır.
+
 
 def kalman_bias_estimate(
     observations: list[tuple[float, str]],
@@ -109,7 +122,13 @@ def kalman_station_biases(
             and t.get("top_pick") is not None
             and t.get("date")
         ):
+            # Faz 21: Adj/hedge bucket trade'lerini dışla (intentionally offset bucket)
+            # trade_type="multi_bucket" ve bucket_num>1 → komşu hedge bucket'ı
+            if t.get("trade_type") == "multi_bucket" and t.get("bucket_num", 1) > 1:
+                continue
             delta = t["actual_temp"] - t["top_pick"]
+            # Faz 21: Outlier cap — tek anomalik gün tüm Kalman state'ini bozmasın
+            delta = max(-KALMAN_OUTLIER_CAP, min(KALMAN_OUTLIER_CAP, delta))
             per_station[t["station"]].append((delta, t["date"]))
 
     biases: dict[str, int] = {}

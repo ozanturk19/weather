@@ -5967,6 +5967,139 @@ test("Faz 20: Mid-range sınır koşulları doğru (49/50/79/80/None)",
      test_faz20_boundary_conditions)
 
 
+# ── Test 41: Faz 21 — Kalman Kalibrasyon Düzeltmeleri ────────────────────────
+
+def test_faz21_outlier_cap_constant():
+    """Faz21: KALMAN_OUTLIER_CAP sabiti 2.5 olmalı."""
+    from bot.kalman import KALMAN_OUTLIER_CAP
+    eq(KALMAN_OUTLIER_CAP, 2.5,
+       f"KALMAN_OUTLIER_CAP=2.5 bekleniyor, var: {KALMAN_OUTLIER_CAP}")
+
+
+def test_faz21_min_bias_trades_is_3():
+    """Faz21: MIN_BIAS_TRADES scanner'da 3 olmalı."""
+    from bot import scanner as sc
+    eq(sc.MIN_BIAS_TRADES, 3,
+       f"MIN_BIAS_TRADES=3 bekleniyor, var: {sc.MIN_BIAS_TRADES}")
+
+
+def test_faz21_adj_trades_excluded_from_kalman():
+    """Faz21: multi_bucket adj trade'ler (bucket_num>1) Kalman hesabına dahil edilmemeli."""
+    from bot.kalman import kalman_station_biases
+
+    trades = [
+        # EHAM main trade: +1°C hata
+        {"status": "closed", "station": "eham", "actual_temp": 15,
+         "top_pick": 14, "date": "2026-05-17"},
+        # EHAM adj trade: +3°C hata — DAHİL EDİLMEMELİ
+        {"status": "closed", "station": "eham", "actual_temp": 15,
+         "top_pick": 12, "date": "2026-05-17",
+         "trade_type": "multi_bucket", "bucket_num": 2},
+        # EHAM main trade 2: +1°C hata
+        {"status": "closed", "station": "eham", "actual_temp": 19,
+         "top_pick": 18, "date": "2026-06-05"},
+        # EHAM adj trade 2: +5°C hata — DAHİL EDİLMEMELİ
+        {"status": "closed", "station": "eham", "actual_temp": 19,
+         "top_pick": 14, "date": "2026-06-05",
+         "trade_type": "multi_bucket", "bucket_num": 2},
+    ]
+    biases = kalman_station_biases(trades, max_correction=2, min_trades=2)
+    # Sadece main trade'ler: (+1, +1) → Kalman ≈ +1°C
+    # Adj dahil edilseydi: (+1, +3, +1, +5) → çok daha yüksek
+    ok("eham" in biases, "EHAM bias hesaplanmalı (2 main trade, min_trades=2)")
+    eq(biases.get("eham"), 1,
+       f"EHAM main-only Kalman: +1°C bekleniyor, var: {biases.get('eham')}")
+
+
+def test_faz21_outlier_capped_ltac_scenario():
+    """Faz21: LTAC Mayıs19 anomalisi (-5°C) cap'lenerek Kalman 0°C vermeli."""
+    from bot.kalman import kalman_station_biases
+
+    trades = [
+        # LTAC Mayıs19: -5°C (15 - 20) — anomalik soğuk gün, 2.5'e kırpılmalı
+        {"status": "closed", "station": "ltac", "actual_temp": 15,
+         "top_pick": 20, "date": "2026-05-19"},
+        # LTAC Mayıs22: 0°C hata
+        {"status": "closed", "station": "ltac", "actual_temp": 20,
+         "top_pick": 20, "date": "2026-05-22"},
+        # LTAC Mayıs31: +1°C hata (yaz ısınıyor)
+        {"status": "closed", "station": "ltac", "actual_temp": 21,
+         "top_pick": 20, "date": "2026-05-31"},
+    ]
+    biases = kalman_station_biases(trades, max_correction=2, min_trades=3)
+    # Outlier cap ile: (-2.5, 0, +1) → Kalman ≈ -0.1°C → yuvarlama: 0
+    # Cap olmadan:      (-5,   0, +1) → Kalman ≈ -0.7°C → yuvarlama: -1 (YANLIŞ)
+    bias = biases.get("ltac", 0)
+    eq(bias, 0,
+       f"LTAC outlier-capped Kalman: 0°C bekleniyor (yanlış -1°C değil), var: {bias}")
+
+
+def test_faz21_non_adj_trades_still_included():
+    """Faz21: bucket_num=1 veya trade_type yok → normal trade, dahil edilmeli."""
+    from bot.kalman import kalman_station_biases
+
+    trades = [
+        # Normal trade (multi_bucket değil)
+        {"status": "closed", "station": "eddm", "actual_temp": 22,
+         "top_pick": 21, "date": "2026-05-21"},
+        # bucket_num=1 (main bucket)
+        {"status": "closed", "station": "eddm", "actual_temp": 21,
+         "top_pick": 20, "date": "2026-05-22",
+         "trade_type": "multi_bucket", "bucket_num": 1},
+        # bucket_num=1 tekrar
+        {"status": "closed", "station": "eddm", "actual_temp": 23,
+         "top_pick": 22, "date": "2026-05-25",
+         "trade_type": "multi_bucket", "bucket_num": 1},
+    ]
+    biases = kalman_station_biases(trades, max_correction=2, min_trades=3)
+    ok("eddm" in biases,
+       "EDDM 3 main trade ile bias hesaplanmalı (bucket_num=1 dahil)")
+
+
+def test_faz21_kalman_eham_calibration():
+    """Faz21: EHAM main-only Kalman + settlement delta toplamı gerçek hatayı karşılamalı."""
+    from bot.kalman import kalman_station_biases
+    from bot.settlement_delta import learn_station_delta
+
+    # EHAM gerçek main trade verileri (Mayıs17 ve Haziran5)
+    trades = [
+        {"status": "closed", "station": "eham", "actual_temp": 15,
+         "top_pick": 14, "date": "2026-05-17"},
+        {"status": "closed", "station": "eham", "actual_temp": 19,
+         "top_pick": 18, "date": "2026-06-05"},
+    ]
+    biases = kalman_station_biases(trades, max_correction=2, min_trades=2)
+    kalman_corr = biases.get("eham", 0)
+
+    # Kalman +1°C bekleniyor (her iki main trade de +1°C hata verdi)
+    eq(kalman_corr, 1,
+       f"EHAM Kalman ana düzeltme +1°C bekleniyor, var: {kalman_corr}")
+
+    # Settlement delta (prior + seasonal): yaklaşık +0.6-1.0°C aralığında
+    sdelta = learn_station_delta("eham")
+    ok(0.3 <= sdelta <= 1.2,
+       f"EHAM settlement delta 0.3-1.2°C aralığında bekleniyor, var: {sdelta}")
+
+    # Toplam düzeltme
+    total = kalman_corr + sdelta
+    ok(1.2 <= total <= 2.5,
+       f"EHAM toplam düzeltme (Kalman+delta) 1.2-2.5°C aralığında bekleniyor, var: {total:.2f}")
+
+
+test("Faz 21: KALMAN_OUTLIER_CAP=2.5 sabiti tanımlanmış",
+     test_faz21_outlier_cap_constant)
+test("Faz 21: MIN_BIAS_TRADES=3 (5'ten düşürüldü)",
+     test_faz21_min_bias_trades_is_3)
+test("Faz 21: Adj/hedge bucket trade'ler Kalman'dan dışlanıyor",
+     test_faz21_adj_trades_excluded_from_kalman)
+test("Faz 21: LTAC Mayıs19 outlier cap ile Kalman 0°C veriyor (−1°C değil)",
+     test_faz21_outlier_capped_ltac_scenario)
+test("Faz 21: bucket_num=1 ve trade_type yok → normal trade dahil ediliyor",
+     test_faz21_non_adj_trades_still_included)
+test("Faz 21: EHAM main-only Kalman+delta toplamı gerçek hatayı karşılıyor",
+     test_faz21_kalman_eham_calibration)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 print(f"\n{'═'*62}")
 print(f"  SONUÇ: {PASS} geçti / {FAIL} başarısız / {PASS+FAIL} toplam")

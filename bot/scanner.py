@@ -63,10 +63,10 @@ MAX_PRICE    = 0.40   # 40¢ üzeri pozisyonlarda edge zayıflıyor → pas
 
 # Kalite filtreleri
 SKIP_UNCERTAINTY = {"yüksek", "high", "very high"}  # bu seviyelerde hiç pozisyon açma
-MIN_BIAS_TRADES  = 5   # bias hesabı için minimum kapalı trade (8'den düşürüldü — Faz A)
-                       # 4'te Paris +3°C vakası → 8'e çıkardık; şimdi 5-7 gerçek gözlem var
-                       # Settlement delta (Faz A2) WU-OM offset'ini ayrıca ele aldığı için
-                       # Kalman bias daha az kritik → 5 güvenli eşik
+MIN_BIAS_TRADES  = 3   # bias hesabı için minimum kapalı ANA trade (Faz 21: 5→3)
+                       # Faz 21: Kalman artık sadece main trade'leri kullanıyor (adj filtresi).
+                       # Adj hariçte per-station ~2-3 main trade yeterli güvenilir sinyal verir.
+                       # 3 gözlem sonrası Kalman P ≈ 0.46 → σ ≈ 0.68°C (kabul edilebilir).
 MAX_BIAS_CORRECTION = 2  # bias tavanı: en fazla ±2°C düzeltme uygulanır
 
 # Ensemble kalite filtreleri
